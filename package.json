@@ -1,0 +1,32 @@
+{
+  "name": "workspace-v2",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "description": "乌萨奇工作平台 - 抖音/B站账号矩阵运营工具",
+  "author": "OpenClaw",
+  "scripts": {
+    "dev": "node scripts/dev.cjs",
+    "dev:front": "vite",
+    "dev:api": "node server/index.cjs",
+    "dev:style": "node scripts/style-dev.cjs",
+    "build": "vite build",
+    "check:backend": "node scripts/check-backend.cjs",
+    "smoke:api": "node scripts/smoke-api.cjs",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "busboy": "^1.6.0",
+    "global-agent": "^4.1.3",
+    "https-proxy-agent": "^9.0.0",
+    "vue": "^3.4.0",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^5.0.0",
+    "vite": "^5.4.0"
+  },
+  "optionalDependencies": {
+    "sqlite3": "^5.1.7"
+  }
+}

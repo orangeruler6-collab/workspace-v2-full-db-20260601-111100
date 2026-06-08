@@ -1,0 +1,6 @@
+[submodule "tools/douyin-downloader"]
+	path = tools/douyin-downloader
+	url = https://github.com/jiji262/douyin-downloader.git
+[submodule "tools/bilibili-cli"]
+	path = tools/bilibili-cli
+	url = https://github.com/jackwener/bilibili-cli.git

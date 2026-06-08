@@ -1,0 +1,71 @@
+# Copy this file to config.local.yml on each computer.
+# Do not commit config.local.yml because it can contain cookies.
+
+link: []
+path: ./Downloaded/
+
+music: true
+cover: true
+avatar: true
+json: true
+folderstyle: true
+
+mode:
+  - post
+
+number:
+  post: 1
+  like: 0
+  allmix: 0
+  mix: 0
+  music: 0
+  collect: 0
+  collectmix: 0
+
+increase:
+  post: false
+  like: false
+  allmix: false
+  mix: false
+  music: false
+
+thread: 5
+retry_times: 3
+rate_limit: 2
+proxy: ""
+database: true
+database_path: dy_downloader.db
+
+progress:
+  quiet_logs: true
+
+comments:
+  enabled: false
+  include_replies: false
+  max_comments: 50
+  page_size: 20
+
+transcript:
+  enabled: false
+  model: gpt-4o-mini-transcribe
+  output_dir: ""
+  response_formats:
+    - txt
+    - json
+  api_url: https://api.openai.com/v1/audio/transcriptions
+  api_key_env: OPENAI_API_KEY
+  api_key: ""
+
+browser_fallback:
+  enabled: true
+  headless: false
+  max_scrolls: 240
+  idle_rounds: 8
+  wait_timeout_seconds: 600
+
+cookies:
+  msToken: ""
+  ttwid: ""
+  odin_tt: ""
+  passport_csrf_token: ""
+  sid_guard: ""

@@ -1,0 +1,14 @@
+.DS_Store
+node_modules
+.next
+out
+dist
+coverage
+output
+tsconfig.tsbuildinfo
+.env
+.env*.local
+style-library
+*.log
+.dev-server
+.playwright-cli

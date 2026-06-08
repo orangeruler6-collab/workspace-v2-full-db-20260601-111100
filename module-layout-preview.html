@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>模块标题统一预览</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;font-family:"PingFang SC","Microsoft YaHei",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#1d1d1f;background:#f5f5f7}.app-shell{height:100vh;display:flex;flex-direction:column;background:radial-gradient(ellipse 70% 36% at 50% -12%,rgba(0,122,255,.11),transparent 68%),linear-gradient(180deg,#fbfbfd 0%,#f5f5f7 54%,#eef2f7 100%)}.topbar{height:56px;flex:0 0 56px;display:flex;align-items:center;justify-content:space-between;padding:0 28px;border-bottom:1px solid rgba(0,0,0,.08);background:rgba(251,251,253,.78);backdrop-filter:blur(22px) saturate(1.25)}.brand{display:flex;align-items:center;gap:10px}.brand-icon{font-size:28px}.brand-title{font-size:17px;font-weight:700;line-height:1.2}.brand-sub{font-size:10px;color:#6e6e73;font-family:"SF Mono",Consolas,monospace}.topbar-right{display:flex;align-items:center;gap:12px;color:#6e6e73;font-size:12px}.segment{display:flex;gap:2px;padding:2px;border:1px solid rgba(0,0,0,.08);border-radius:999px;background:rgba(255,255,255,.68);box-shadow:inset 0 1px 0 rgba(255,255,255,.72),0 8px 24px rgba(0,0,0,.06)}.segment span{height:28px;min-width:62px;display:grid;place-items:center;border-radius:999px;font-size:12px;font-weight:700;color:#6e6e73}.segment .active{background:linear-gradient(135deg,#007aff,#5ac8fa);color:#fff;box-shadow:0 6px 18px rgba(0,122,255,.22)}.body{flex:1;display:flex;min-height:0}.sidebar{width:210px;flex:0 0 210px;display:flex;flex-direction:column;border-right:1px solid rgba(0,0,0,.08);background:rgba(246,246,248,.74);backdrop-filter:blur(22px) saturate(1.25)}.nav{flex:1;padding:12px 8px;display:flex;flex-direction:column;gap:2px}.nav-item{height:40px;display:flex;align-items:center;gap:10px;padding:0 14px;border-radius:8px;color:#3f3f46;font-size:13px;font-weight:600}.nav-item.active{color:#005ecb;background:linear-gradient(135deg,rgba(0,122,255,.14),rgba(255,255,255,.64));border:1px solid rgba(0,0,0,.14)}.account{height:59px;display:flex;align-items:center;gap:10px;padding:12px 14px;border-top:1px solid rgba(0,0,0,.08)}.avatar{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:linear-gradient(135deg,#007aff,#5ac8fa);color:#fff}.main{flex:1;overflow:auto;min-width:0}.module{max-width:1800px;margin:0 auto;padding:28px 36px;height:100%}.preview-note{margin:0 0 14px;color:#6e6e73;font-size:12px;line-height:1.5}.preview-grid{display:grid;grid-template-columns:repeat(2,minmax(360px,1fr));gap:16px}.module-frame{min-height:286px;position:relative;padding:0}.module-frame:before{content:"";position:absolute;left:0;right:0;top:44px;border-top:1px dashed rgba(0,122,255,.3);pointer-events:none}.unified-head{min-height:44px;display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin:0 0 16px}.title-block{display:flex;align-items:center;gap:10px;min-width:0}.title-emoji{width:34px;height:34px;flex:0 0 34px;display:grid;place-items:center;border-radius:8px;background:rgba(0,122,255,.1);border:1px solid rgba(0,122,255,.18);font-size:18px;line-height:1}.title-copy{min-width:0;padding-top:1px}.kicker{margin-bottom:3px;font-size:10px;line-height:1;font-weight:800;letter-spacing:0;color:#6e6e73;text-transform:uppercase}h2{margin:0;font-size:20px;line-height:1.2;font-weight:750;letter-spacing:0;color:#1d1d1f}.actions{min-height:34px;display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}.pill{height:30px;display:inline-flex;align-items:center;padding:0 11px;border-radius:999px;border:1px solid rgba(0,0,0,.08);background:rgba(255,255,255,.72);font-size:12px;font-weight:700;color:#3f3f46}.btn{height:32px;padding:0 13px;border-radius:8px;border:1px solid rgba(0,122,255,.42);background:linear-gradient(135deg,#007aff,#5ac8fa);color:#fff;font-size:12px;font-weight:750}.panel-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}.panel{min-height:76px;border:1px solid rgba(0,0,0,.08);border-radius:8px;background:rgba(255,255,255,.82);box-shadow:0 10px 30px rgba(0,0,0,.06);padding:14px}.panel-title{width:42%;height:10px;border-radius:999px;background:#1d1d1f;opacity:.18;margin-bottom:14px}.line{height:8px;border-radius:999px;background:#d9dfe8;margin:9px 0}.line.wide{width:86%}.line.mid{width:68%}.line.short{width:44%}.canvas{min-height:140px;border:1px solid rgba(0,0,0,.08);border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,.84),rgba(248,250,252,.76));padding:14px}.table{display:grid;gap:8px}.table-row{height:30px;border-radius:7px;background:rgba(255,255,255,.82);border:1px solid rgba(0,0,0,.06)}@media (max-width:900px){.sidebar{display:none}.module{padding:20px}.preview-grid{grid-template-columns:1fr}.unified-head{align-items:flex-start;flex-direction:column}.actions{justify-content:flex-start}}
+</style>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand"><span class="brand-icon">🐰</span><div><div class="brand-title">乌萨奇工作平台</div><div class="brand-sub">v2.0 // chen/xue</div></div></div>
+      <div class="topbar-right"><div class="segment"><span>紫夜</span><span class="active">银白</span></div><span>🐰 乌萨奇工作中</span><span>2026/04/29 03:48</span></div>
+    </header>
+    <div class="body">
+      <aside class="sidebar">
+        <nav class="nav">
+          <div class="nav-item active"><span>✍️</span><span>文案生成</span></div>
+          <div class="nav-item"><span>🔥</span><span>每日热点</span></div>
+          <div class="nav-item"><span>📅</span><span>排期看板</span></div>
+          <div class="nav-item"><span>🎨</span><span>AI生图</span></div>
+          <div class="nav-item"><span>📦</span><span>素材库</span></div>
+          <div class="nav-item"><span>🔐</span><span>权限管理</span></div>
+        </nav>
+        <div class="account"><div class="avatar">🐰</div><div><div style="font-size:12px;font-weight:700">演示账号</div><div style="font-size:10px;color:#248a3d;margin-top:1px">管理员</div></div></div>
+      </aside>
+      <main class="main">
+        <section class="module">
+          <p class="preview-note">统一后：每个模块打开时标题和内容都从同一套坐标开始，emoji、中文标题字号、右侧操作区高度保持一致。</p>
+          <div class="preview-grid">
+            <article class="module-frame">
+              <header class="unified-head">
+                <div class="title-block"><span class="title-emoji">✍️</span><div class="title-copy"><div class="kicker">COPY STUDIO</div><h2>文案生成</h2></div></div>
+                <div class="actions"><span class="pill">3 个账号风格</span><span class="pill">未选择平台</span></div>
+              </header>
+              <div class="panel-row"><div class="panel"><div class="panel-title"></div><div class="line wide"></div><div class="line mid"></div><div class="line short"></div></div><div class="canvas"><div class="table"><div class="table-row"></div><div class="table-row"></div><div class="table-row"></div></div></div></div>
+            </article>
+            <article class="module-frame">
+              <header class="unified-head">
+                <div class="title-block"><span class="title-emoji">🔥</span><div class="title-copy"><div class="kicker">DAILY HOT</div><h2>每日热点</h2></div></div>
+                <div class="actions"><span class="pill">今日热点</span><button class="btn">更新信息</button></div>
+              </header>
+              <div class="panel-row"><div class="canvas"><div class="table"><div class="table-row"></div><div class="table-row"></div><div class="table-row"></div></div></div><div class="panel"><div class="panel-title"></div><div class="line wide"></div><div class="line mid"></div><div class="line short"></div></div></div>
+            </article>
+            <article class="module-frame">
+              <header class="unified-head">
+                <div class="title-block"><span class="title-emoji">📅</span><div class="title-copy"><div class="kicker">SCHEDULE BOARD</div><h2>排期看板</h2></div></div>
+                <div class="actions"><span class="pill">👤 按人</span><span class="pill">📆 按周</span></div>
+              </header>
+              <div class="panel-row"><div class="panel"><div class="panel-title"></div><div class="line wide"></div><div class="line mid"></div></div><div class="panel"><div class="panel-title"></div><div class="line wide"></div><div class="line mid"></div></div></div>
+            </article>
+            <article class="module-frame">
+              <header class="unified-head">
+                <div class="title-block"><span class="title-emoji">🎨</span><div class="title-copy"><div class="kicker">IMAGE STUDIO</div><h2>AI生图</h2></div></div>
+                <div class="actions"><span class="pill">READY</span></div>
+              </header>
+              <div class="panel-row"><div class="panel"><div class="panel-title"></div><div class="line wide"></div><div class="line mid"></div></div><div class="panel"><div class="panel-title"></div><div class="line wide"></div><div class="line short"></div></div></div>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>

@@ -1,0 +1,793 @@
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { loadSchedule, notifyScheduleHandoff, saveSchedule, uploadScheduleDoc } from '../../api/schedule'
+import { ALL_ACCOUNTS, GROUPS, MEMBERS } from './constants'
+import { getCurrentAuthUser } from '../../api/client'
+
+export function useScheduleBoard(showToast, options = {}) {
+  // 获取当前用户信息
+  const currentUser = computed(() => {
+    if (options.user) return options.user
+    return getCurrentAuthUser()
+  })
+
+  // 判断是否为组长/部长（可以查看所有组）
+  const canViewAllGroups = computed(() => {
+    const user = currentUser.value
+    if (!user) return false
+    const title = user.title || ''
+    return title === '部长' || title === '组长'
+  })
+
+  // 根据用户 title 获取默认组
+  const getDefaultGroupId = () => {
+    const user = currentUser.value
+    if (!user) return GROUPS[0].id
+
+    const title = user.title || ''
+    if (title === '部长' || title === '组长') {
+      return 4 // 默认显示内容四组
+    }
+
+    // 组员：根据 username 或 display_name 匹配组
+    const userName = user.display_name || user.username || ''
+    for (const group of GROUPS) {
+      if (group.members.includes(userName)) {
+        return group.id
+      }
+    }
+    return GROUPS[0].id // 默认第一个组
+  }
+
+  const activeGroup = ref(getDefaultGroupId())
+  const viewMode = ref('person')
+  const weekOffset = ref(0)
+  const allItems = ref([])
+  const celebration = ref(null)
+  const itemsByPerson = reactive(Object.fromEntries(MEMBERS.map(member => [member, []])))
+  const isPanning = ref(false)
+  const panStart = ref({ x: 0, scrollLeft: 0 })
+  const boardRef = ref(null)
+  const dragItem = ref(null)
+  const formShow = ref(false)
+  const editing = ref(false)
+  const form = reactive({ id: null, account: '', person: '', content: '', remark: '', date: '', type: '日常', status: 'pending', doc_title: '', doc_url: '', doc_kind: '', doc_dragging: false })
+  let celebrationTimer = null
+
+  // Undo stack
+  const history = ref([])
+  const maxHistory = 20
+
+  function pushHistory() {
+    history.value.push(JSON.stringify(allItems.value))
+    if (history.value.length > maxHistory) history.value.shift()
+  }
+
+  function undo() {
+    if (history.value.length === 0) { showToast('没有可撤销的操作', 'info'); return }
+    const prev = history.value.pop()
+    try {
+      const items = JSON.parse(prev)
+      rebuildItemsByPerson(items)
+      showToast('已撤销', 'success')
+      persistSchedule()
+    } catch(e) { showToast('撤销失败', 'error') }
+  }
+
+  function handleKeydown(e) {
+    if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      e.preventDefault()
+      undo()
+    }
+  }
+
+  onMounted(() => {
+    window.addEventListener('keydown', handleKeydown)
+    window.addEventListener('usagi:agent-action', handleAgentAction)
+    consumePendingAgentAction()
+  })
+  onUnmounted(() => {
+    window.removeEventListener('keydown', handleKeydown)
+    window.removeEventListener('usagi:agent-action', handleAgentAction)
+    if (celebrationTimer) window.clearTimeout(celebrationTimer)
+  })
+
+  const currentGroupMembers = computed(() => {
+    return GROUPS.find(group => group.id === activeGroup.value)?.members || []
+  })
+
+  const currentGroupAccounts = computed(() => {
+    return GROUPS.find(group => group.id === activeGroup.value)?.accounts || []
+  })
+
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+
+  const weekDays = computed(() => getWeekDays(weekOffset.value))
+
+  const weekRangeLabel = computed(() => {
+    const days = weekDays.value
+    const start = days[0]
+    const end = days[6]
+    if (start.getMonth() === end.getMonth()) {
+      return `${start.getMonth() + 1}月${start.getDate()}日 - ${end.getDate()}日`
+    }
+    return `${start.getMonth() + 1}/${start.getDate()} - ${end.getMonth() + 1}/${end.getDate()}`
+  })
+
+  function ensurePersonBucket(person) {
+    if (person && !itemsByPerson[person]) itemsByPerson[person] = []
+  }
+
+  function rebuildItemsByPerson(items) {
+    Object.keys(itemsByPerson).forEach(person => { itemsByPerson[person] = [] })
+    allItems.value = items.map(item => ({ ...item }))
+    allItems.value.forEach(item => {
+      ensurePersonBucket(item.person)
+      if (itemsByPerson[item.person]) itemsByPerson[item.person].push(item)
+    })
+  }
+
+  function findGroupByMember(person) {
+    return GROUPS.find(group => group.members.includes(person))
+  }
+
+  function currentTasks() {
+    return allItems.value.filter(item => item.person !== '__deleted__')
+  }
+
+  function pick(list) {
+    return list[Math.floor(Math.random() * list.length)]
+  }
+
+  function rand(min, max) {
+    return min + Math.random() * (max - min)
+  }
+
+  function getCelebrationAnchor(event) {
+    const el = event?.currentTarget?.closest?.('.task-card, .week-card') || event?.currentTarget
+    const rect = el?.getBoundingClientRect?.()
+    if (rect) {
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+    }
+    return { x: window.innerWidth * 0.5, y: window.innerHeight * 0.4 }
+  }
+
+  function buildCelebrationCopy(item) {
+    const content = (item.content || '').replace(/\s+/g, ' ').trim()
+    const shortContent = content ? content.slice(0, 16) : '这条任务'
+    const pools = [
+      [
+        `${shortContent}收了，打工人续命 +1`,
+        `这一单终于落地，今天的班味少了一点`,
+        `任务完成，灵魂先下班，肉身再坚持一下`,
+        `打卡完成，今日KPI先放过你`,
+        `这回合收工，工位上的你又赢了一次`
+      ],
+      [
+        `啪一下就做完了，谁看了不说一句行`,
+        `这条已经安排妥了，领导看到也得点头`,
+        `进度条终于不是摆设了，干得漂亮`,
+        `又清掉一个，桌面都跟着轻了点`,
+        `行，这一项已经从待办区毕业了`
+      ],
+      [
+        `今天的班味已经被你按住了`,
+        `辛苦值已到账，摸鱼券可以缓一缓`,
+        `这一波处理得很顺，打工人含金量上升`,
+        `做完了，脑子里终于能空出一点缓存`,
+        `完成得很体面，像是有人给你点了杯奶茶`
+      ],
+      [
+        `收工！这不是完成，是给未来的自己减负`,
+        `下班气息已泄露，建议立即保持`,
+        `今日任务已结算，明天的锅明天再说`,
+        `搞定这一条，工位的灯都亮得更顺眼了`,
+        `这项已清空，打工人的呼吸恢复正常`
+      ],
+      [
+        `叮，打工人战报：本条处理成功`,
+        `战绩更新，今天的胜利又多了一格`,
+        `这不是结束，是下一口气的开始`,
+        `任务归档成功，工位江湖再少一事`,
+        `已完成，属于今天的硬仗先翻篇`
+      ]
+    ]
+    const extras = [
+      `工位小胜一局，今天先别和自己较劲了`,
+      `这条过关，脑内进度条终于不是红的了`,
+      `打工人已成功清掉一个烦恼`,
+      `这一项已归零，人的精神状态也跟着回了一口`,
+      `可以，这条做得挺利索，像样`,
+      `这回合赢了，咖啡都显得有点多余`,
+      `任务已卸载，暂时恢复一点点自由`,
+      `你的班味正在被这条任务一点点冲淡`,
+      `这条已经处理完，下一条先等等`,
+      `干完了，至少此刻你是能喘口气的`,
+      `这项落地，摸鱼的资格又硬了一点`,
+      `完成度拉满，工位人格暂时在线`
+    ]
+    const copy = [...pick(pools), ...extras].sort(() => Math.random() - 0.5)
+    return {
+      toast: pick(copy),
+      detail: [item.person, item.account, item.type].filter(Boolean).join(' · ')
+    }
+  }
+
+  function launchCelebration(item, event) {
+    const mode = pick(['badge', 'burst', 'orbit', 'stream', 'flash', 'ripple', 'meteor', 'glitch'])
+    const anchor = getCelebrationAnchor(event)
+    const hue = pick([142, 195, 265, 38, 345, 12])
+    const particleCount = mode === 'burst' ? 20 : mode === 'orbit' ? 8 : mode === 'meteor' ? 6 : mode === 'glitch' ? 14 : 10
+    const particles = Array.from({ length: particleCount }, (_, index) => ({
+      id: `${Date.now()}-${index}`,
+      style: {
+        '--angle': `${(360 / particleCount) * index + rand(-18, 18)}deg`,
+        '--distance': `${rand(56, mode === 'meteor' ? 220 : 150)}px`,
+        '--delay': `${rand(0, mode === 'meteor' ? 120 : 180)}ms`,
+        '--size': `${rand(mode === 'glitch' ? 4 : 6, mode === 'burst' ? 16 : 14)}px`,
+        '--hue': `${hue + rand(-16, 16)}`
+      }
+    }))
+    const rings = Array.from({ length: 3 }, (_, index) => ({
+      id: `${Date.now()}-r-${index}`,
+      style: {
+        '--delay': `${index * 80}ms`,
+        '--size': `${rand(110, 220)}px`,
+        '--hue': `${hue + rand(-8, 8)}`
+      }
+    }))
+    const streakCount = mode === 'meteor' ? 8 : mode === 'glitch' ? 10 : 5
+    const streaks = Array.from({ length: streakCount }, (_, index) => ({
+      id: `${Date.now()}-s-${index}`,
+      style: {
+        '--x': `${mode === 'meteor' ? rand(-30, 30) : rand(-120, 120)}px`,
+        '--y': `${mode === 'meteor' ? rand(-180, -40) : rand(-90, 90)}px`,
+        '--rotate': `${rand(-28, 28)}deg`,
+        '--delay': `${index * (mode === 'glitch' ? 22 : 46)}ms`,
+        '--size': `${rand(mode === 'meteor' ? 120 : 84, mode === 'meteor' ? 190 : 128)}px`
+      }
+    }))
+    celebration.value = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      itemId: item.id,
+      mode,
+      x: anchor.x,
+      y: anchor.y,
+      hue,
+      toast: buildCelebrationCopy(item).toast,
+      detail: buildCelebrationCopy(item).detail,
+      particles,
+      rings,
+      streaks
+    }
+    if (celebrationTimer) window.clearTimeout(celebrationTimer)
+    celebrationTimer = window.setTimeout(() => {
+      if (celebration.value?.itemId === item.id) celebration.value = null
+    }, mode === 'flash' ? 900 : 1350)
+  }
+
+  async function loadScheduleData() {
+    try {
+      const data = await loadSchedule()
+      if (Array.isArray(data.tasks) && data.tasks.length) {
+        const { tasks, carriedCount } = carryUnfinishedTasksToCurrentWeek(data.tasks)
+        rebuildItemsByPerson(tasks)
+        if (carriedCount > 0) {
+          persistSchedule()
+          showToast(`已顺延 ${carriedCount} 个未完成任务到本周`, 'info')
+        }
+      }
+    } catch(e) {
+      showToast('排期加载失败: ' + e.message, 'error')
+    }
+  }
+
+  async function persistSchedule() {
+    try {
+      await saveSchedule(currentTasks(), MEMBERS)
+    } catch(e) {
+      showToast('排期保存失败: ' + e.message, 'error')
+    }
+  }
+
+  function sendHandoffNotification(fromPerson, toPerson, item) {
+    notifyScheduleHandoff({
+      fromPerson,
+      toPerson,
+      task: {
+        id: item?.id,
+        account: item?.account,
+        type: item?.type,
+        content: item?.content,
+        remark: item?.remark,
+        date: item?.date
+      }
+    }).catch(() => {})
+  }
+
+  function startPan(e) {
+    if (e.target.closest('.task-card') || e.target.closest('.add-btn') || e.target.closest('button')) return
+    isPanning.value = true
+    panStart.value = { x: e.clientX, scrollLeft: boardRef.value?.scrollLeft || 0 }
+  }
+
+  function doPan(e) {
+    if (!isPanning.value) return
+    const board = boardRef.value
+    if (!board) return
+    const dx = e.clientX - panStart.value.x
+    board.scrollLeft = panStart.value.scrollLeft - dx
+  }
+
+  function endPan() {
+    isPanning.value = false
+  }
+
+  function getWeekDays(offset) {
+    const d = new Date(today)
+    const dayOfWeek = d.getDay() || 7
+    d.setDate(d.getDate() - (dayOfWeek - 1) + offset * 7)
+    return Array.from({ length: 7 }, (_, i) => {
+      const dd = new Date(d)
+      dd.setDate(d.getDate() + i)
+      return dd
+    })
+  }
+
+  function fmtMd(d) {
+    return `${d.getMonth() + 1}/${d.getDate()}`
+  }
+
+  function isToday(d) {
+    return d.toDateString() === today.toDateString()
+  }
+
+  function parseLocalDate(dateStr) {
+    if (!dateStr) return null
+    const parts = String(dateStr).slice(0, 10).split('-').map(Number)
+    if (parts.length !== 3 || parts.some(Number.isNaN)) return null
+    const d = new Date(parts[0], parts[1] - 1, parts[2])
+    d.setHours(0, 0, 0, 0)
+    return d
+  }
+
+  function formatDate(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+  }
+
+  function startOfWeek(d) {
+    const start = new Date(d)
+    const dayOfWeek = start.getDay() || 7
+    start.setDate(start.getDate() - (dayOfWeek - 1))
+    start.setHours(0, 0, 0, 0)
+    return start
+  }
+
+  function carryUnfinishedTasksToCurrentWeek(tasks) {
+    const thisMonday = startOfWeek(today)
+    let carriedCount = 0
+    const carried = tasks.map(item => {
+      const taskDate = parseLocalDate(item.date)
+      if (!taskDate || taskDate >= thisMonday || item.status === 'done') return { ...item }
+
+      const nextDate = new Date(thisMonday)
+      carriedCount += 1
+      return {
+        ...item,
+        date: formatDate(nextDate),
+        type: '周事件',
+        status: item.status === 'pending' ? 'delayed' : item.status
+      }
+    })
+    return { tasks: carried, carriedCount }
+  }
+
+  function getAutoStatus(item) {
+    if (item?.status === 'done') return 'done'
+    const taskDate = parseLocalDate(item?.date)
+    if (!taskDate) return 'pending'
+    return taskDate < today ? 'delayed' : 'pending'
+  }
+
+  function statusLabel(item) {
+    return STATUS_MAP[getAutoStatus(item)] || STATUS_MAP.pending || '待处理'
+  }
+
+  function isSameDay(dateStr, day) {
+    if (!dateStr) return false
+    const d = parseLocalDate(dateStr)
+    if (!d) return false
+    return d.toDateString() === day.toDateString()
+  }
+
+  function getItemsForCell(acc, day) {
+    return allItems.value.filter(item => item.account === acc && isSameDay(item.date, day))
+  }
+
+  function isInCurrentWeek(dateStr) {
+    return weekDays.value.some(day => isSameDay(dateStr, day))
+  }
+
+  function summarizePersonWeekTodos(person, options = {}) {
+    const unfinishedOnly = options.unfinishedOnly !== false
+    const tasks = allItems.value
+      .filter(item => item.person === person)
+      .filter(item => !unfinishedOnly || item.status !== 'done')
+      .filter(item => isInCurrentWeek(item.date))
+      .sort((a, b) => String(a.date || '').localeCompare(String(b.date || '')))
+
+    const lines = tasks.slice(0, 8).map(item => {
+      const status = STATUS_MAP[getAutoStatus(item)] || STATUS_MAP[item.status] || item.status || '未完成'
+      const content = item.content || '未填写内容'
+      return '· ' + [item.date, item.account, TYPE_TAG[item.type] || item.type, content, status].filter(Boolean).join(' | ')
+    })
+
+    if (!tasks.length) {
+      return unfinishedOnly
+        ? '呀哈，我已经切到排期看板查了：' + person + ' 本周没有未完成任务。'
+        : '呀哈，我已经切到排期看板查了：' + person + ' 本周没有排期任务。'
+    }
+
+    const more = tasks.length > lines.length ? '\n还有 ' + (tasks.length - lines.length) + ' 条没展开，页面里已经切到这个负责人所在组，可以继续点卡片看详情。' : ''
+    return [
+      unfinishedOnly
+        ? '呀哈，我去排期看板查到了：' + person + ' 本周还有 ' + tasks.length + ' 条未完成/延期任务。'
+        : '呀哈，我去排期看板查到了：' + person + ' 本周一共有 ' + tasks.length + ' 条排期任务。',
+      lines.join('\n') + more,
+      unfinishedOnly
+        ? '建议先看延期和今天以前的卡片，优先催“缺确认/缺素材/待发布”的。'
+        : '建议按日期推进，先处理今天以前和状态异常的卡片。'
+    ].join('\n\n')
+  }
+
+  function emitAgentResult(id, message) {
+    if (!id) return
+    window.dispatchEvent(new CustomEvent('usagi:agent-result', {
+      detail: { id, module: 'schedule', message }
+    }))
+  }
+
+  function consumePendingAgentAction() {
+    try {
+      const raw = localStorage.getItem('usagi_pending_schedule_action')
+      if (!raw) return
+      localStorage.removeItem('usagi_pending_schedule_action')
+      handleAgentAction({ detail: JSON.parse(raw) })
+    } catch (e) {}
+  }
+
+  async function handleAgentAction(event) {
+    const detail = event.detail || {}
+    if (detail.module !== 'schedule' || detail.type !== 'schedule:person-week-todos') return
+    const person = detail.payload?.person || '陈健伊'
+    const group = findGroupByMember(person)
+    if (group) activeGroup.value = group.id
+    viewMode.value = 'person'
+    weekOffset.value = Number(detail.payload?.weekOffset || 0)
+    await loadScheduleData()
+    emitAgentResult(detail.id, summarizePersonWeekTodos(person, {
+      unfinishedOnly: detail.payload?.unfinishedOnly !== false
+    }))
+  }
+
+  function handleDragStart(event, item) {
+    event.dataTransfer.effectAllowed = 'move'
+    event.dataTransfer.setData('text/plain', String(item.id))
+    dragItem.value = item
+  }
+
+  function handleDragEnd() {
+    window.setTimeout(() => {
+      dragItem.value = null
+    }, 0)
+  }
+
+  function handleDrop(event, person) {
+    event.preventDefault()
+    if (!dragItem.value || dragItem.value.person === person) return
+    pushHistory()
+    ensurePersonBucket(person)
+    ensurePersonBucket(dragItem.value.person)
+    const fromPerson = dragItem.value.person
+    const idx = itemsByPerson[fromPerson].findIndex(item => item.id === dragItem.value.id)
+    if (idx !== -1) {
+      itemsByPerson[fromPerson].splice(idx, 1)
+      dragItem.value.person = person
+      itemsByPerson[person].push(dragItem.value)
+      showToast(`已移至 ${person}`, 'success')
+      persistSchedule()
+      sendHandoffNotification(fromPerson, person, dragItem.value)
+    }
+    dragItem.value = null
+  }
+
+  function handleWeekDrop(event, acc, day) {
+    event.preventDefault()
+    if (!dragItem.value) return
+    pushHistory()
+    dragItem.value.account = acc
+    dragItem.value.date = `${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`
+    showToast(`已移至 ${acc} ${fmtMd(day)}`, 'success')
+    persistSchedule()
+    dragItem.value = null
+  }
+
+  function moveItemByWeeks(item, weeks, event) {
+    event?.stopPropagation?.()
+    const target = allItems.value.find(x => x.id === item.id)
+    if (!target) return
+    const current = parseLocalDate(target.date) || today
+    current.setDate(current.getDate() + weeks * 7)
+    pushHistory()
+    target.date = formatDate(current)
+    if (target.status !== 'done') target.status = getAutoStatus(target)
+    if (item !== target) {
+      item.date = target.date
+      item.status = target.status
+    }
+    persistSchedule()
+    showToast(weeks > 0 ? '已移到下周' : '已移到上周', 'success')
+  }
+
+  function moveDraggedItemToAdjacentWeek(direction, event) {
+    event?.preventDefault?.()
+    event?.stopPropagation?.()
+    if (!dragItem.value) return
+    const target = allItems.value.find(x => x.id === dragItem.value.id)
+    if (!target) return
+    const days = weekDays.value
+    const nextDate = new Date(direction < 0 ? days[0] : days[6])
+    nextDate.setDate(nextDate.getDate() + (direction < 0 ? -1 : 1))
+    pushHistory()
+    target.date = formatDate(nextDate)
+    if (target.status !== 'done') target.status = getAutoStatus(target)
+    if (dragItem.value !== target) {
+      dragItem.value.date = target.date
+      dragItem.value.status = target.status
+    }
+    weekOffset.value += direction < 0 ? -1 : 1
+    persistSchedule()
+    showToast(direction > 0 ? '已移到下周周一' : '已移到上周周日', 'success')
+    dragItem.value = null
+  }
+
+  function openAdd(assign) {
+    editing.value = false
+    form.id = null
+    form.account = currentGroupAccounts.value[0] || ALL_ACCOUNTS[0]
+    form.person = typeof assign === 'string' ? assign : (currentGroupMembers.value[0] || MEMBERS[0])
+    form.content = ''
+    form.remark = ''
+    form.date = (() => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` })()
+    form.type = '日常'
+    form.status = 'pending'
+    form.doc_title = ''
+    form.doc_url = ''
+    form.doc_kind = ''
+    form.doc_dragging = false
+    formShow.value = true
+  }
+
+  function hasScheduleDoc(item) {
+    return Boolean(String(item?.doc_url || '').trim())
+  }
+
+  function openScheduleDoc(item, event) {
+    event?.preventDefault?.()
+    event?.stopPropagation?.()
+    const url = String(item?.doc_url || '').trim()
+    if (!url) return
+    if ((item?.doc_kind || '') === 'file' || url.startsWith('/uploads/')) {
+      const link = document.createElement('a')
+      link.href = url
+      link.download = item?.doc_title || ''
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      return
+    }
+    window.open(url, '_blank', 'noopener')
+  }
+
+  function clearScheduleDoc() {
+    form.doc_title = ''
+    form.doc_url = ''
+    form.doc_kind = ''
+    form.doc_dragging = false
+  }
+
+  function setScheduleDocLink(value) {
+    const url = String(value || form.doc_url || '').trim()
+    if (!url) {
+      form.doc_title = ''
+      form.doc_kind = ''
+      return
+    }
+    form.doc_url = url
+    form.doc_kind = /feishu\.cn/i.test(url) ? 'feishu' : 'link'
+    if (!form.doc_title) form.doc_title = form.doc_kind === 'feishu' ? '飞书文案' : '文案链接'
+  }
+
+  async function uploadScheduleDocFile(file) {
+    if (!file) return
+    try {
+      const data = await uploadScheduleDoc(file)
+      form.doc_title = data.title || file.name
+      form.doc_url = data.url || ''
+      form.doc_kind = data.kind || 'file'
+      showToast('文案附件已上传', 'success')
+    } catch (e) {
+      showToast('文案附件上传失败: ' + e.message, 'error')
+    }
+  }
+
+  async function handleScheduleDocFile(event) {
+    await uploadScheduleDocFile(event?.target?.files?.[0])
+    if (event?.target) event.target.value = ''
+  }
+
+  async function handleScheduleDocDrop(event) {
+    event?.preventDefault?.()
+    event?.stopPropagation?.()
+    form.doc_dragging = false
+    const file = event?.dataTransfer?.files?.[0]
+    if (file) {
+      await uploadScheduleDocFile(file)
+      return
+    }
+    const text = event?.dataTransfer?.getData?.('text/uri-list') || event?.dataTransfer?.getData?.('text/plain') || ''
+    if (text.trim()) {
+      form.doc_url = text.trim()
+      setScheduleDocLink(text.trim())
+      showToast('文案链接已保存', 'success')
+    }
+  }
+
+  function handleScheduleDocPaste(event) {
+    const text = event?.clipboardData?.getData?.('text') || ''
+    if (!/^https?:\/\//i.test(text.trim())) return
+    form.doc_url = text.trim()
+    setScheduleDocLink(text.trim())
+  }
+
+  function toggleDone(item, event) {
+    pushHistory()
+    item.status = item.status === 'done' ? 'pending' : 'done'
+    if (item.status !== 'done') item.status = getAutoStatus(item)
+    if (item.status === 'done') {
+      const copy = buildCelebrationCopy(item)
+      launchCelebration(item, event)
+      showToast(copy.toast, 'success', true)
+    } else {
+      if (celebration.value?.itemId === item.id) celebration.value = null
+      showToast('已取消完成', 'success')
+    }
+    const target = allItems.value.find(x => x.id === item.id)
+    if (target) target.status = item.status
+    persistSchedule()
+  }
+
+  function editItem(item) {
+    editing.value = true
+    form.id = item.id
+    form.account = item.account
+    form.person = item.person
+    form.content = item.content
+    form.remark = item.remark || ''
+    form.date = item.date
+    form.type = item.type || '日常'
+    form.status = item.status
+    form.doc_title = item.doc_title || ''
+    form.doc_url = item.doc_url || ''
+    form.doc_kind = item.doc_kind || ''
+    form.doc_dragging = false
+    formShow.value = true
+  }
+
+  function delItem(id) {
+    pushHistory()
+    Object.keys(itemsByPerson).forEach(person => {
+      const idx = itemsByPerson[person].findIndex(item => item.id === id)
+      if (idx !== -1) itemsByPerson[person].splice(idx, 1)
+    })
+    allItems.value = allItems.value.filter(item => item.id !== id)
+    showToast('已删除', 'error')
+    persistSchedule()
+  }
+
+  function saveItem() {
+    pushHistory()
+    if (!form.content.trim()) { showToast('内容不能为空', 'error'); return }
+    if (!form.date) { showToast('请选择日期', 'error'); return }
+    ensurePersonBucket(form.person)
+    if (editing.value) {
+      const item = allItems.value.find(x => x.id === form.id)
+      if (item) {
+        if (item.person !== form.person) {
+          const fromPerson = item.person
+          ensurePersonBucket(item.person)
+          const fromIdx = itemsByPerson[item.person].findIndex(x => x.id === form.id)
+          if (fromIdx !== -1) itemsByPerson[item.person].splice(fromIdx, 1)
+          item.person = form.person
+          itemsByPerson[item.person].push(item)
+          sendHandoffNotification(fromPerson, form.person, item)
+        }
+        item.account = form.account
+        item.content = form.content
+        item.remark = form.remark
+        item.date = form.date
+        item.type = form.type
+        item.status = form.status === 'done' ? 'done' : getAutoStatus(item)
+        item.doc_title = form.doc_title
+        item.doc_url = form.doc_url
+        item.doc_kind = form.doc_kind
+      }
+      showToast('已更新', 'success')
+    } else {
+      const newId = Math.max(0, ...allItems.value.map(item => item.id)) + 1
+      const newItem = { id: newId, account: form.account, person: form.person, content: form.content, remark: form.remark, date: form.date, type: form.type, status: 'pending', doc_title: form.doc_title, doc_url: form.doc_url, doc_kind: form.doc_kind }
+      newItem.status = getAutoStatus(newItem)
+      allItems.value.push(newItem)
+      itemsByPerson[form.person].push(newItem)
+      showToast('已添加', 'success')
+    }
+    formShow.value = false
+    persistSchedule()
+  }
+
+  rebuildItemsByPerson(allItems.value)
+  onMounted(loadScheduleData)
+
+  return {
+    ALL_ACCOUNTS,
+    GROUPS,
+    MEMBERS,
+    activeGroup,
+    allItems,
+    boardRef,
+    celebration,
+    canViewAllGroups,
+    clearScheduleDoc,
+    currentGroupAccounts,
+    currentGroupMembers,
+    currentUser,
+    delItem,
+    doPan,
+    dragItem,
+    editItem,
+    editing,
+    endPan,
+    form,
+    formShow,
+    fmtMd,
+    getItemsForCell,
+    handleDragStart,
+    handleDragEnd,
+    handleDrop,
+    handleWeekDrop,
+    handleScheduleDocDrop,
+    handleScheduleDocFile,
+    handleScheduleDocPaste,
+    getAutoStatus,
+    handleAgentAction,
+    hasScheduleDoc,
+    isPanning,
+    isSameDay,
+    isToday,
+    itemsByPerson,
+    openAdd,
+    openScheduleDoc,
+    saveItem,
+    setScheduleDocLink,
+    statusLabel,
+    startPan,
+    moveDraggedItemToAdjacentWeek,
+    moveItemByWeeks,
+    undo,
+    toggleDone,
+    viewMode,
+    weekDays,
+    weekOffset,
+    weekRangeLabel
+  }
+}

@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>流水看板布局 Demo</title>
+  <style>
+    :root {
+      --bg: #0f1020;
+      --panel: #17182b;
+      --panel-2: #20223a;
+      --line: #30324f;
+      --text: #eef0ff;
+      --muted: #8f94b8;
+      --primary: #7b2fff;
+      --cyan: #20d6c7;
+      --green: #33d17a;
+      --amber: #f5b84b;
+      --red: #f87171;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Inter, "Microsoft YaHei", system-ui, sans-serif;
+      padding: 24px;
+    }
+    .page { max-width: 1280px; margin: 0 auto; }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 14px;
+    }
+    .title-kicker {
+      font-size: 11px;
+      letter-spacing: .08em;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+    h1 { font-size: 22px; margin: 0; }
+    .ai-btn {
+      border: 1px solid var(--line);
+      background: var(--panel-2);
+      color: var(--text);
+      border-radius: 8px;
+      padding: 8px 12px;
+    }
+    .top-strip {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+    .group-tabs {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .group-tab {
+      border: 1px solid var(--line);
+      background: var(--panel);
+      color: var(--muted);
+      border-radius: 7px;
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+    .group-tab.active {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+    .filter-bar {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    .mini-label { font-size: 11px; color: var(--muted); }
+    select, input {
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      color: var(--text);
+      border-radius: 7px;
+      padding: 6px 8px;
+      font: inherit;
+      font-size: 12px;
+    }
+    .goal-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--panel-2);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 5px 8px;
+      font-size: 12px;
+    }
+    .goal-pill input {
+      width: 96px;
+      text-align: right;
+      padding: 3px 6px;
+    }
+    .delta {
+      font-size: 12px;
+      color: var(--green);
+      border: 1px solid rgba(51, 209, 122, .28);
+      background: rgba(51, 209, 122, .08);
+      border-radius: 999px;
+      padding: 5px 8px;
+    }
+    .kpis {
+      display: grid;
+      grid-template-columns: 1.15fr repeat(3, 1fr);
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 14px;
+      min-width: 0;
+    }
+    .goal-card {
+      display: grid;
+      grid-template-columns: 110px 1fr;
+      gap: 14px;
+      align-items: center;
+    }
+    .ring {
+      width: 106px;
+      height: 106px;
+      border-radius: 50%;
+      background: conic-gradient(var(--cyan) 0 68%, var(--panel-2) 68% 100%);
+      position: relative;
+    }
+    .ring::after {
+      content: "";
+      position: absolute;
+      inset: 12px;
+      background: var(--panel);
+      border-radius: 50%;
+    }
+    .ring-text {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      z-index: 1;
+      font-weight: 800;
+      font-size: 22px;
+    }
+    .metric-label { color: var(--muted); font-size: 12px; margin-bottom: 8px; }
+    .metric-value { font-size: 24px; font-weight: 800; }
+    .metric-sub { color: var(--muted); font-size: 12px; margin-top: 8px; }
+    .metric-value.green { color: var(--green); }
+    .metric-value.amber { color: var(--amber); }
+    .main-grid {
+      display: grid;
+      grid-template-columns: 1.1fr .9fr;
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+    .card-title {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #cbbdff;
+      font-size: 13px;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .bar-row {
+      display: grid;
+      grid-template-columns: 92px 1fr 76px;
+      align-items: center;
+      gap: 10px;
+      font-size: 12px;
+      margin: 10px 0;
+    }
+    .bar {
+      height: 7px;
+      border-radius: 999px;
+      background: var(--panel-2);
+      overflow: hidden;
+    }
+    .fill { height: 100%; background: linear-gradient(90deg, var(--primary), var(--cyan)); }
+    .table-card { margin-bottom: 14px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th {
+      text-align: left;
+      color: #cbbdff;
+      background: var(--panel-2);
+      padding: 9px 10px;
+      font-weight: 700;
+    }
+    td {
+      padding: 10px;
+      border-bottom: 1px solid rgba(48, 50, 79, .55);
+      color: var(--text);
+    }
+    td.money, th.money { text-align: right; }
+    td.margin { color: var(--amber); font-weight: 800; }
+    .tag {
+      display: inline-flex;
+      border-radius: 999px;
+      padding: 3px 7px;
+      background: rgba(123, 47, 255, .12);
+      color: #cbbdff;
+    }
+    .entry {
+      border-style: dashed;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+    .entry strong { font-size: 14px; }
+    .entry span { color: var(--muted); font-size: 12px; }
+    .entry button {
+      border: 0;
+      background: var(--primary);
+      color: white;
+      border-radius: 8px;
+      padding: 8px 12px;
+    }
+    @media (max-width: 900px) {
+      body { padding: 14px; }
+      .top-strip, .main-grid { grid-template-columns: 1fr; }
+      .filter-bar { justify-content: flex-start; }
+      .kpis { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <section class="header">
+      <div>
+        <div class="title-kicker">PROFIT BOARD</div>
+        <h1>流水看板</h1>
+      </div>
+      <button class="ai-btn">AI 数据分析</button>
+    </section>
+
+    <section class="top-strip">
+      <div class="group-tabs">
+        <button class="group-tab">内容一组</button>
+        <button class="group-tab">内容二组</button>
+        <button class="group-tab">内容三组</button>
+        <button class="group-tab active">内容四组</button>
+        <button class="group-tab">内容五组</button>
+        <button class="group-tab">内容六组</button>
+      </div>
+      <div class="filter-bar">
+        <span class="mini-label">周期</span>
+        <select><option>2026年</option></select>
+        <select><option>5月</option><option>全部月份</option></select>
+        <span class="goal-pill">毛利目标 <input value="100200" /></span>
+        <span class="delta">较上月 +18%</span>
+      </div>
+    </section>
+
+    <section class="kpis">
+      <article class="card goal-card">
+        <div class="ring"><div class="ring-text">68%</div></div>
+        <div>
+          <div class="metric-label">目标完成率</div>
+          <div class="metric-value green">¥68,400</div>
+          <div class="metric-sub">目标 ¥100,200，还差 ¥31,800</div>
+        </div>
+      </article>
+      <article class="card">
+        <div class="metric-label">总流水</div>
+        <div class="metric-value">¥142,600</div>
+        <div class="metric-sub">本月 18 条记录</div>
+      </article>
+      <article class="card">
+        <div class="metric-label">平均毛利率</div>
+        <div class="metric-value amber">48%</div>
+        <div class="metric-sub">毛利 / 流水</div>
+      </article>
+      <article class="card">
+        <div class="metric-label">项目数</div>
+        <div class="metric-value">18</div>
+        <div class="metric-sub">3 条待复核</div>
+      </article>
+    </section>
+
+    <section class="main-grid">
+      <article class="card">
+        <div class="card-title">账号流水榜 <span>按流水排序</span></div>
+        <div class="bar-row"><span>天机妹</span><div class="bar"><div class="fill" style="width:82%"></div></div><strong>¥42,300</strong></div>
+        <div class="bar-row"><span>麦晓花</span><div class="bar"><div class="fill" style="width:64%"></div></div><strong>¥33,100</strong></div>
+        <div class="bar-row"><span>花蛮楼</span><div class="bar"><div class="fill" style="width:49%"></div></div><strong>¥25,500</strong></div>
+        <div class="bar-row"><span>有事找学姐</span><div class="bar"><div class="fill" style="width:32%"></div></div><strong>¥16,800</strong></div>
+      </article>
+      <article class="card">
+        <div class="card-title">业务类型分布 <span>流水占比</span></div>
+        <div class="bar-row"><span>一口价</span><div class="bar"><div class="fill" style="width:46%"></div></div><strong>46%</strong></div>
+        <div class="bar-row"><span>星广</span><div class="bar"><div class="fill" style="width:24%"></div></div><strong>24%</strong></div>
+        <div class="bar-row"><span>素材代运营</span><div class="bar"><div class="fill" style="width:18%"></div></div><strong>18%</strong></div>
+        <div class="bar-row"><span>内部代做</span><div class="bar"><div class="fill" style="width:12%"></div></div><strong>12%</strong></div>
+      </article>
+    </section>
+
+    <section class="card table-card">
+      <div class="card-title">流水明细 <span>毛利降序</span></div>
+      <table>
+        <thead>
+          <tr><th>项目</th><th>账号</th><th>类型</th><th>平台</th><th class="money">流水</th><th class="money">毛利</th><th></th></tr>
+        </thead>
+        <tbody>
+          <tr><td>逆水寒推广</td><td>天机妹</td><td><span class="tag">一口价</span></td><td>抖音</td><td class="money">¥18,000</td><td class="money margin">¥9,200</td><td>编辑</td></tr>
+          <tr><td>游戏道具合集</td><td>麦晓花</td><td><span class="tag">星广</span></td><td>B站</td><td class="money">¥12,600</td><td class="money margin">¥6,300</td><td>编辑</td></tr>
+          <tr><td>新品节点投放</td><td>花蛮楼</td><td><span class="tag">素材</span></td><td>抖音</td><td class="money">¥9,800</td><td class="money margin">¥4,700</td><td>编辑</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="card entry">
+      <div>
+        <strong>录入流水 / 导入 Excel</strong>
+        <span>默认折叠，点开后再显示粘贴区、拖拽上传和解析预览。</span>
+      </div>
+      <button>展开录入</button>
+    </section>
+  </main>
+</body>
+</html>

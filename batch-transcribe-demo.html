@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>抖音批量转写 Demo</title>
+  <style>
+    /* ==================== 参考原项目样式 ==================== */
+    :root {
+      --bg: #100d20;
+      --bg-card: #110f1e;
+      --surface: #17142a;
+      --surface2: #201d38;
+      --surface3: #282448;
+      --primary: #a78bfa;
+      --primary-dark: #7c3aed;
+      --primary-light: #c4b5fd;
+      --secondary: #22c55e;
+      --accent: #00f5d4;
+      --text: #f0eef5;
+      --text-dim: #9d98b0;
+      --text-muted: #5c5775;
+      --border: rgba(124, 58, 237, 0.15);
+      --border-mid: rgba(124, 58, 237, 0.28);
+      --border-bright: rgba(124, 58, 237, 0.5);
+      --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+      --shadow-lg: 0 12px 48px rgba(0, 0, 0, 0.65);
+      --radius: 12px;
+      --radius-sm: 8px;
+      --primary-gradient: linear-gradient(135deg, #7c3aed, #6d28d9);
+      --primary-gradient-hover: linear-gradient(135deg, #8b5cf6, #7c3aed);
+      --primary-shadow: rgba(124, 58, 237, 0.25);
+      --primary-shadow-hover: rgba(124, 58, 237, 0.4);
+      --panel-bg: rgba(23, 20, 42, 0.74);
+      --panel-bg-hover: rgba(32, 29, 56, 0.74);
+      --chip-bg: rgba(255, 255, 255, 0.04);
+      --focus-ring: rgba(124, 58, 237, 0.1);
+      --accent-soft: rgba(0, 245, 212, 0.08);
+      --success-text: #68e6c2;
+      --success-bg: rgba(0, 245, 212, 0.12);
+      --success-border: rgba(0, 245, 212, 0.38);
+      --danger-text: #fecdd3;
+      --danger-bg: rgba(251, 113, 133, 0.12);
+      --danger-border: rgba(251, 113, 133, 0.45);
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    .container { max-width: 900px; margin: 0 auto; }
+
+    /* ==================== 卡片样式 ==================== */
+    .card {
+      min-width: 0;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      background: var(--panel-bg);
+      border: 1px solid var(--border);
+      border-radius: var(--radius-sm);
+      box-shadow: var(--shadow);
+      transition: border-color 0.18s, box-shadow 0.18s;
+      margin-bottom: 18px;
+    }
+
+    .card:hover {
+      border-color: var(--border-mid);
+    }
+
+    .card-hdr {
+      min-height: 58px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      background: rgba(17, 15, 30, 0.6);
+    }
+
+    .tool-icon {
+      width: 34px;
+      height: 34px;
+      flex: 0 0 34px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--chip-bg);
+      font-size: 17px;
+      line-height: 1;
+    }
+
+    .card-title-group {
+      min-width: 0;
+      display: grid;
+      gap: 5px;
+    }
+
+    .card-title {
+      min-width: 0;
+      color: var(--text);
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .card-caption {
+      min-width: 0;
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 600;
+      line-height: 1.3;
+    }
+
+    .card-body {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      padding: 14px;
+    }
+
+    /* ==================== 输入框样式 ==================== */
+    .inp {
+      width: 100%;
+      min-height: 36px;
+      padding: 8px 11px;
+      box-sizing: border-box;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--surface2);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 12px;
+      line-height: 1.35;
+      transition: border-color 0.18s, box-shadow 0.18s;
+    }
+
+    .inp:focus {
+      outline: none;
+      border-color: var(--primary);
+      box-shadow: 0 0 0 3px var(--focus-ring);
+    }
+
+    textarea.inp {
+      min-height: 0;
+      resize: vertical;
+      line-height: 1.6;
+    }
+
+    select.inp {
+      cursor: pointer;
+      appearance: none;
+      padding-right: 28px;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%239d98b0' d='M6 8L2 4h8z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 10px center;
+    }
+
+    /* ==================== 按钮样式 ==================== */
+    .btn {
+      min-height: 36px;
+      padding: 0 14px;
+      border: 0;
+      border-radius: 8px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0;
+      white-space: nowrap;
+      transition: transform 0.15s, box-shadow 0.15s, border-color 0.15s, background 0.15s;
+    }
+
+    .btn-primary {
+      background: var(--primary-gradient);
+      color: #fff;
+      box-shadow: 0 7px 18px var(--primary-shadow);
+    }
+
+    .btn-primary:hover {
+      transform: translateY(-1px);
+      background: var(--primary-gradient-hover);
+      box-shadow: 0 10px 24px var(--primary-shadow-hover);
+    }
+
+    .btn-primary:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+      box-shadow: none;
+    }
+
+    .btn-ghost {
+      background: var(--chip-bg);
+      color: var(--text-dim);
+      border: 1px solid var(--border);
+    }
+
+    .btn-ghost:hover {
+      border-color: var(--border-bright);
+      color: var(--primary);
+      background: var(--accent-soft);
+    }
+
+    .btn-sm {
+      min-height: 30px;
+      padding: 0 10px;
+      font-size: 11px;
+    }
+
+    .btn-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    /* ==================== 操作步骤样式 ==================== */
+    .operation-step {
+      min-width: 0;
+      position: relative;
+      display: grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      gap: 11px;
+      align-items: start;
+    }
+
+    .step-index {
+      width: 28px;
+      height: 28px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--chip-bg);
+      color: var(--primary-light);
+      font-size: 11px;
+      font-weight: 800;
+      line-height: 1;
+    }
+
+    .step-main {
+      min-width: 0;
+      display: grid;
+      gap: 9px;
+    }
+
+    .step-label {
+      color: var(--text-muted);
+      font-size: 11px;
+      font-weight: 900;
+      line-height: 1.2;
+    }
+
+    /* ==================== 进度条样式 ==================== */
+    .progress-panel {
+      min-width: 0;
+      padding: 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: rgba(17, 15, 30, 0.6);
+    }
+
+    .progress-panel.active {
+      border-color: var(--border-bright);
+      background: var(--accent-soft);
+    }
+
+    .progress-panel.done {
+      border-color: rgba(34, 197, 94, 0.42);
+    }
+
+    .progress-panel.failed {
+      border-color: var(--danger-border);
+      background: var(--danger-bg);
+    }
+
+    .progress-line {
+      min-width: 0;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--text-dim);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .progress-status {
+      min-width: 0;
+      flex: 1 1 auto;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .progress-line strong {
+      flex: 0 0 auto;
+      color: var(--primary-light);
+    }
+
+    .progress-track {
+      height: 7px;
+      margin-top: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--chip-bg);
+    }
+
+    .progress-fill {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--primary-gradient);
+      transition: width 0.45s ease;
+    }
+
+    .progress-fill.waiting { background: #555; }
+    .progress-fill.completed { background: linear-gradient(135deg, #22c55e, #16a34a); }
+    .progress-fill.failed { background: linear-gradient(135deg, #fecdd3, #fb7185); }
+
+    /* ==================== 任务列表样式 ==================== */
+    .task-list { display: flex; flex-direction: column; gap: 12px; }
+
+    .task-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 12px;
+    }
+
+    .task-item.completed { border-color: rgba(34, 197, 94, 0.42); }
+    .task-item.failed { border-color: var(--danger-border); }
+
+    .task-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+      gap: 10px;
+    }
+
+    .task-url {
+      font-size: 12px;
+      color: var(--text-dim);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      flex: 1;
+    }
+
+    .task-status {
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 10px;
+      border-radius: 999px;
+      white-space: nowrap;
+    }
+
+    .task-status.waiting { background: var(--chip-bg); color: var(--text-muted); border: 1px solid var(--border); }
+    .task-status.downloading { background: rgba(234, 179, 8, 0.14); color: #facc15; border: 1px solid rgba(234, 179, 8, 0.34); }
+    .task-status.processing { background: var(--accent-soft); color: var(--accent); border: 1px solid rgba(0, 245, 212, 0.38); }
+    .task-status.completed { background: var(--success-bg); color: var(--success-text); border: 1px solid var(--success-border); }
+    .task-status.failed { background: var(--danger-bg); color: var(--danger-text); border: 1px solid var(--danger-border); }
+
+    .task-info {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 6px;
+    }
+
+    .task-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    /* ==================== 文案输出样式 ==================== */
+    .transcript-output {
+      min-width: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .transcript-result {
+      margin-top: 10px;
+      padding: 12px;
+      background: rgba(5, 8, 22, 0.42);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 12px;
+      line-height: 1.6;
+      max-height: 160px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      color: var(--text-dim);
+    }
+
+    /* ==================== 统计栏样式 ==================== */
+    .stats-bar {
+      display: flex;
+      gap: 16px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: rgba(17, 15, 30, 0.4);
+    }
+
+    .stat-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+    }
+
+    .stat-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+    }
+
+    .stat-dot.waiting { background: var(--text-muted); }
+    .stat-dot.processing { background: var(--accent); animation: pulse 1.5s infinite; }
+    .stat-dot.completed { background: var(--secondary); }
+    .stat-dot.failed { background: #fb7185; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 40px;
+      color: var(--text-muted);
+      font-size: 12px;
+    }
+
+    /* ==================== 控制选项样式 ==================== */
+    .control-row {
+      display: flex;
+      align-items: stretch;
+      gap: 8px;
+    }
+
+    .control-row > .inp {
+      flex: 1;
+    }
+
+    .toggle-row {
+      min-height: 36px;
+      padding: 0 10px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--chip-bg);
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .toggle-row input {
+      width: 14px;
+      height: 14px;
+      accent-color: var(--primary);
+    }
+
+    .select-small {
+      width: auto;
+      min-width: 80px;
+    }
+
+    /* ==================== 任务卡片网格 ==================== */
+    .task-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <!-- 批量转写卡片 -->
+    <div class="card">
+      <div class="card-hdr">
+        <span class="tool-icon">🎬</span>
+        <div class="card-title-group">
+          <span class="card-title">抖音批量转写</span>
+          <span class="card-caption">支持多个视频同时转写</span>
+        </div>
+      </div>
+
+      <div class="card-body">
+        <!-- 步骤1: 输入 -->
+        <div class="operation-step">
+          <span class="step-index">1</span>
+          <div class="step-main">
+            <div class="step-label">视频链接 (支持批量，一行一个)</div>
+            <textarea id="urlsInput" class="inp" rows="4" placeholder="https://v.douyin.com/xxx
+https://v.douyin.com/yyy
+https://v.douyin.com/zzz"></textarea>
+          </div>
+        </div>
+
+        <!-- 步骤2: 选项 -->
+        <div class="operation-step">
+          <span class="step-index">2</span>
+          <div class="step-main">
+            <div class="step-label">输出选项</div>
+            <div class="control-row">
+              <label class="toggle-row">
+                <input type="checkbox" id="autoTranscript" checked>
+                <span>自动转写</span>
+              </label>
+              <label class="toggle-row">
+                <input type="checkbox" id="downloadAssets" checked>
+                <span>下载文件</span>
+              </label>
+              <select id="downloadType" class="inp select-small">
+                <option value="mp4">MP4</option>
+                <option value="mp3">MP3</option>
+                <option value="all">全部</option>
+              </select>
+              <select id="parallelLimit" class="inp select-small">
+                <option value="2">并行2</option>
+                <option value="3" selected>并行3</option>
+                <option value="5">并行5</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <!-- 步骤3: 执行 -->
+        <div class="operation-step">
+          <span class="step-index">3</span>
+          <div class="step-main">
+            <div class="step-label">执行</div>
+            <div class="btn-row">
+              <button class="btn btn-primary" id="startBtn" onclick="startBatch()">开始批量转写</button>
+              <button class="btn btn-ghost" onclick="clearAll()">清空列表</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 统计栏 -->
+    <div class="card" id="statsCard" style="display: none;">
+      <div class="stats-bar">
+        <div class="stat-item">
+          <span class="stat-dot waiting"></span>
+          <span>等待: <strong id="waitingCount">0</strong></span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-dot processing"></span>
+          <span>处理中: <strong id="processingCount">0</strong></span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-dot completed"></span>
+          <span>完成: <strong id="completedCount">0</strong></span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-dot failed"></span>
+          <span>失败: <strong id="failedCount">0</strong></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- 任务队列 -->
+    <div class="card">
+      <div class="card-hdr">
+        <span class="tool-icon">📋</span>
+        <div class="card-title-group">
+          <span class="card-title">任务队列</span>
+          <span class="card-caption" id="taskCountText">共 0 个任务</span>
+        </div>
+      </div>
+      <div class="card-body">
+        <div id="taskList" class="task-list">
+          <div class="empty-state">暂无任务，请添加链接后开始转写</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // 模拟数据
+    const mockTranscripts = [
+      "今天给大家分享一个超级好吃的家常菜做法... 首先准备食材：西红柿两个，鸡蛋三个... 这种做法简单又美味，非常适合上班族...",
+      "姐妹们这款面膜真的绝了！用完皮肤嫩嫩的... 敷15分钟后取下，轻轻按摩让精华液吸收... 坚持使用一周，皮肤状态明显变好...",
+      "周末自驾游推荐！这个景点太美了... 门票只要50块，停车也很方便... 建议早上出发，可以玩一整天..."
+    ];
+
+    let tasks = [];
+    let processingCount = 0;
+
+    function generateId() {
+      return 'task_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    }
+
+    function extractUrl(line) {
+      const pattern = /(?:https?:\/\/)?(?:[a-z0-9-]+\.)?(?:douyin|iesdouyin)\.com\/[^\s"'<>，。！？；、]+/gi;
+      const match = line.match(pattern);
+      return match ? match[0].replace(/[)]}）】》"'，。！？；、,.!?;:]+$/g, '') : null;
+    }
+
+    function parseUrls(text) {
+      return text.split('\n')
+        .map(line => line.trim())
+        .filter(line => line)
+        .map(line => extractUrl(line))
+        .filter(url => url);
+    }
+
+    function startBatch() {
+      const urlsText = document.getElementById('urlsInput').value;
+      const urls = parseUrls(urlsText);
+      const parallelLimit = parseInt(document.getElementById('parallelLimit').value);
+
+      if (urls.length === 0) {
+        alert('请输入有效的抖音链接');
+        return;
+      }
+
+      urls.forEach((url, index) => {
+        tasks.push({
+          id: generateId(),
+          url: url,
+          status: 'waiting',
+          progress: 0,
+          transcriptText: '',
+          errorMessage: ''
+        });
+      });
+
+      document.getElementById('urlsInput').value = '';
+      renderTasks();
+      updateStats();
+      processQueue(parallelLimit);
+    }
+
+    function processQueue(parallelLimit) {
+      const waitingTasks = tasks.filter(t => t.status === 'waiting');
+      const currentProcessing = tasks.filter(t => t.status === 'processing' || t.status === 'downloading');
+
+      if (currentProcessing.length >= parallelLimit) return;
+
+      const toStart = Math.min(parallelLimit - currentProcessing.length, waitingTasks.length);
+
+      for (let i = 0; i < toStart; i++) {
+        const task = waitingTasks[i];
+        processTask(task);
+      }
+    }
+
+    function processTask(task) {
+      task.status = 'downloading';
+      task.progress = 10;
+      renderTasks();
+
+      setTimeout(() => {
+        task.status = 'processing';
+        task.progress = 30;
+        renderTasks();
+        simulateTranscription(task);
+      }, 800 + Math.random() * 400);
+    }
+
+    function simulateTranscription(task) {
+      const interval = setInterval(() => {
+        if (task.status !== 'processing') {
+          clearInterval(interval);
+          return;
+        }
+
+        task.progress += Math.random() * 15;
+        if (task.progress >= 95) {
+          task.progress = 95;
+          clearInterval(interval);
+
+          setTimeout(() => {
+            if (Math.random() > 0.1) {
+              task.status = 'completed';
+              task.progress = 100;
+              task.transcriptText = mockTranscripts[Math.floor(Math.random() * mockTranscripts.length)];
+            } else {
+              task.status = 'failed';
+              task.errorMessage = '转写服务暂时不可用';
+            }
+            renderTasks();
+            updateStats();
+
+            const parallelLimit = parseInt(document.getElementById('parallelLimit').value);
+            processQueue(parallelLimit);
+          }, 500);
+        }
+        renderTasks();
+      }, 200);
+    }
+
+    function retryTask(taskId) {
+      const task = tasks.find(t => t.id === taskId);
+      if (task) {
+        task.status = 'waiting';
+        task.progress = 0;
+        task.errorMessage = '';
+        renderTasks();
+        updateStats();
+        const parallelLimit = parseInt(document.getElementById('parallelLimit').value);
+        processQueue(parallelLimit);
+      }
+    }
+
+    function removeTask(taskId) {
+      tasks = tasks.filter(t => t.id !== taskId);
+      renderTasks();
+      updateStats();
+    }
+
+    function clearAll() {
+      tasks = [];
+      renderTasks();
+      updateStats();
+    }
+
+    function updateStats() {
+      const waiting = tasks.filter(t => t.status === 'waiting').length;
+      const processing = tasks.filter(t => t.status === 'processing' || t.status === 'downloading').length;
+      const completed = tasks.filter(t => t.status === 'completed').length;
+      const failed = tasks.filter(t => t.status === 'failed').length;
+
+      document.getElementById('waitingCount').textContent = waiting;
+      document.getElementById('processingCount').textContent = processing;
+      document.getElementById('completedCount').textContent = completed;
+      document.getElementById('failedCount').textContent = failed;
+      document.getElementById('taskCountText').textContent = `共 ${tasks.length} 个任务`;
+
+      document.getElementById('statsCard').style.display = tasks.length > 0 ? 'block' : 'none';
+    }
+
+    function renderTasks() {
+      const container = document.getElementById('taskList');
+
+      if (tasks.length === 0) {
+        container.innerHTML = '<div class="empty-state">暂无任务，请添加链接后开始转写</div>';
+        return;
+      }
+
+      container.innerHTML = tasks.map(task => {
+        const statusLabels = {
+          waiting: '等待中',
+          downloading: '下载中',
+          processing: '转写中',
+          completed: '已完成',
+          failed: '已失败'
+        };
+
+        const statusTexts = {
+          waiting: '排队等待中...',
+          downloading: '正在下载视频素材...',
+          processing: '正在转写，请稍候...',
+          completed: '转写完成',
+          failed: task.errorMessage || '转写失败'
+        };
+
+        return `
+          <div class="task-item ${task.status}">
+            <div class="task-header">
+              <span class="task-url" title="${task.url}">${task.url}</span>
+              <span class="task-status ${task.status}">${statusLabels[task.status]}</span>
+            </div>
+            <div class="progress-track">
+              <span class="progress-fill ${task.status === 'waiting' ? 'waiting' : ''} ${task.status === 'completed' ? 'completed' : ''} ${task.status === 'failed' ? 'failed' : ''}" style="width: ${task.progress}%"></span>
+            </div>
+            <div class="task-info">
+              <span>${statusTexts[task.status]}</span>
+              <span>${Math.round(task.progress)}%</span>
+            </div>
+            ${task.status === 'completed' ? `
+              <div class="transcript-output">
+                <div class="transcript-result">${task.transcriptText}</div>
+                <div class="task-actions">
+                  <button class="btn btn-primary btn-sm" onclick="copyText('${task.id}')">复制文案</button>
+                  <button class="btn btn-ghost btn-sm" onclick="writeToFeishu('${task.id}')">写入飞书</button>
+                </div>
+              </div>
+            ` : ''}
+            ${task.status === 'failed' ? `
+              <div class="task-actions">
+                <button class="btn btn-ghost btn-sm" onclick="retryTask('${task.id}')">重试</button>
+                <button class="btn btn-ghost btn-sm" onclick="removeTask('${task.id}')">移除</button>
+              </div>
+            ` : ''}
+          </div>
+        `;
+      }).join('');
+    }
+
+    function copyText(taskId) {
+      const task = tasks.find(t => t.id === taskId);
+      if (task) {
+        navigator.clipboard.writeText(task.transcriptText);
+        alert('已复制到剪贴板');
+      }
+    }
+
+    function writeToFeishu(taskId) {
+      alert('写入飞书功能待实现');
+    }
+  </script>
+</body>
+</html>
