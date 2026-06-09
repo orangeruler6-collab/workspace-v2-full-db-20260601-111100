@@ -314,6 +314,7 @@
           <button class="btn btn-ghost btn-sm" :class="{ active: profitImportMode === 'total' }" @click="profitImportMode = 'total'">总表导入</button>
           <button class="btn btn-primary btn-sm" @click="openCreateModal">手动新增</button>
           <button class="btn btn-ghost btn-sm" :disabled="feishuSyncing" @click="syncCurrentProfitsToFeishu">{{ feishuSyncing ? '同步中...' : '同步飞书' }}</button>
+          <button class="btn btn-ghost btn-sm" @click="openFeishuProfitTable">打开飞书</button>
         </div>
         <button class="entry-toggle" @click="entryExpanded = !entryExpanded">
           <strong>录入流水 / 导入 Excel</strong>
@@ -1049,6 +1050,11 @@ const circumference = 52 * 2 * Math.PI // r=52, 2πr
 const donutPerimeter = 2 * Math.PI * 70 // r=70
 
 const bizColors = ['#7b2fff', '#22c55e', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899']
+const FEISHU_PROFIT_TABLE_URL = 'https://tcnnt6cxkcat.feishu.cn/base/WKOmbG4ubaqYqUsH5ErcvwqSnMh?table=tblOZXJZyQ9LCx6k'
+
+function openFeishuProfitTable() {
+  window.open(FEISHU_PROFIT_TABLE_URL, '_blank', 'noopener,noreferrer')
+}
 
 const bizBreakdown = computed(() => {
   const items = filteredItems.value
