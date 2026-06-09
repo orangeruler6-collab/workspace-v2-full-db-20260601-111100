@@ -8,7 +8,8 @@ export const MODULE_DEFINITIONS = [
     icon: '📈',
     children: [
       { id: 'accountDataDashboard', label: '数据看板', icon: '图' },
-      { id: 'accountDataAccounts', label: '账号池', icon: '库' }
+      { id: 'accountDataAccounts', label: '账号池', icon: '库' },
+      { id: 'ops', label: '流水看板', icon: '📊' }
     ]
   },
   {
@@ -27,7 +28,6 @@ export const MODULE_DEFINITIONS = [
   { id: 'projectAgent', label: '项目助手', icon: '◈' },
   { id: 'ideoboard', label: '创意看板', icon: '💡' },
   { id: 'schedule', label: '排期看板', icon: '📅' },
-  { id: 'ops', label: '运营看板', icon: '📊' },
   { id: 'imagegen', label: 'AI 生图', icon: '🎨' },
   { id: 'posttools', label: '后期工具', icon: '🎬' },
   { id: 'videopublish', label: '视频发布', icon: '📡' },
