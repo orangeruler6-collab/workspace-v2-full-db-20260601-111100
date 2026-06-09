@@ -46,7 +46,7 @@
         <div class="department-hero-main">
           <span class="dept-eyebrow">部门业绩总览</span>
           <strong>￥{{ departmentSummary.margin.toLocaleString() }}</strong>
-          <em>{{ selectedMonth ? selectedMonth + '月' : '全部月份' }}毛利，覆盖 {{ departmentSummary.groupCount }} 个组 / {{ departmentSummary.accountCount }} 个账号</em>
+          <em>{{ selectedYear }}年{{ selectedMonth ? selectedMonth + '月' : '全部月份' }}毛利，覆盖 {{ departmentSummary.groupCount }} 个组 / {{ departmentSummary.accountCount }} 个账号</em>
         </div>
         <div class="department-hero-stats">
           <div><span>总流水</span><strong>￥{{ departmentSummary.total.toLocaleString() }}</strong></div>
@@ -439,7 +439,7 @@
       <div class="modal-box ai-chat-modal">
         <div class="modal-title">🤖 AI 数据分析</div>
         <div class="ai-chat-intro">
-          当前数据：{{ currentGroupLabel }} {{ selectedMonth ? selectedMonth + '月' : '全部月份' }}，
+          当前数据：{{ currentGroupLabel }} {{ selectedYear }}年{{ selectedMonth ? selectedMonth + '月' : '全部月份' }}，
           共 {{ filteredItems.length }} 条记录，
           毛利 ￥{{ filteredItems.reduce((s,i) => s+(Number(i.毛利)||0), 0).toLocaleString() }}
         </div>
@@ -684,9 +684,9 @@ const sortedItems = computed(() => {
   return [...filteredItems.value].sort((a, b) => (Number(b.毛利) || 0) - (Number(a.毛利) || 0))
 })
 
-// Summary uses filtered items when month is selected
+// Summary follows the selected year, with optional month narrowing.
 const profitSummary = computed(() => {
-  const items = selectedMonth.value ? filteredItems.value : currentItems.value
+  const items = filteredItems.value
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const margin = items.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
   const target = currentProfitTarget()
@@ -1049,7 +1049,7 @@ const donutPerimeter = 2 * Math.PI * 70 // r=70
 const bizColors = ['#7b2fff', '#22c55e', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899']
 
 const bizBreakdown = computed(() => {
-  const items = selectedMonth.value ? filteredItems.value : currentItems.value
+  const items = filteredItems.value
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   if (total === 0) return []
 
@@ -1070,7 +1070,7 @@ const bizBreakdown = computed(() => {
 
 // 环形图扇区计算 (r=70)
 const donutSegments = computed(() => {
-  const items = selectedMonth.value ? filteredItems.value : currentItems.value
+  const items = filteredItems.value
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   if (total === 0) return []
 
@@ -1095,7 +1095,7 @@ const donutSegments = computed(() => {
 
 // 每个账号的流水
 const accountBreakdown = computed(() => {
-  const items = selectedMonth.value ? filteredItems.value : currentItems.value
+  const items = filteredItems.value
   const map = {}
   for (const item of items) {
     const acc = item.账号 || '未知'
@@ -1743,7 +1743,7 @@ function money(value) {
 
 function summarizeOpsPerformance(group) {
   const summary = profitSummary.value
-  const monthLabel = selectedMonth.value ? selectedMonth.value + '月' : '全部月份'
+  const monthLabel = selectedYear.value + '年' + (selectedMonth.value ? selectedMonth.value + '月' : '全部月份')
   const gap = Math.max(0, summary.target - summary.margin)
   const topAccounts = accountBreakdown.value.slice(0, 3)
     .map(item => item.account + ' ' + money(item.amount))
@@ -2013,7 +2013,7 @@ function openAiChat() {
   aiChat.history = []
   aiChat.input = ''
   // Auto send initial query
-  const monthStr = selectedMonth.value ? selectedMonth.value + '月' : '全部月份'
+  const monthStr = selectedYear.value + '年' + (selectedMonth.value ? selectedMonth.value + '月' : '全部月份')
   const items = filteredItems.value
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const margin = items.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
