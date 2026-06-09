@@ -55,6 +55,13 @@
           <div><span>记录数</span><strong>{{ departmentSummary.count }}</strong></div>
         </div>
       </div>
+      <div class="history-compare-strip">
+        <article v-for="card in historyComparison.cards" :key="'dept-' + card.key">
+          <span>{{ card.label }}</span>
+          <strong>{{ card.value }}</strong>
+          <em>{{ card.note }}</em>
+        </article>
+      </div>
 
       <div class="dept-import-card">
         <div class="dept-import-copy">
@@ -211,6 +218,14 @@
       </div>
     </div>
 
+    <div class="history-compare-strip">
+      <article v-for="card in historyComparison.cards" :key="'group-' + card.key">
+        <span>{{ card.label }}</span>
+        <strong>{{ card.value }}</strong>
+        <em>{{ card.note }}</em>
+      </article>
+    </div>
+
     <div class="ops-grid">
       <!-- Card 1: 环形图 - 各业务占比 -->
       <div class="ops-card">
@@ -277,6 +292,7 @@
               <span class="amount">￥{{ Math.round(Number(item.费用 || 0)).toLocaleString() }}</span>
               <span class="amount accent">￥{{ Math.round(Number(item.毛利 || 0)).toLocaleString() }}</span>
               <span class="pt-actions">
+                <button v-if="item.链接" class="btn-op btn-link" @click="openProfitLink(item.链接)">打开</button>
                 <button class="btn-op btn-edit" @click="openEditModal(item)">✏️</button>
                 <button class="btn-op btn-del" @click="deleteItem(item.id)">🗑️</button>
               </span>
@@ -296,6 +312,7 @@
         <div class="import-mode-switch">
           <button class="btn btn-ghost btn-sm" :class="{ active: profitImportMode === 'single' }" @click="profitImportMode = 'single'">当前组导入</button>
           <button class="btn btn-ghost btn-sm" :class="{ active: profitImportMode === 'total' }" @click="profitImportMode = 'total'">总表导入</button>
+          <button class="btn btn-primary btn-sm" @click="openCreateModal">手动新增</button>
         </div>
         <button class="entry-toggle" @click="entryExpanded = !entryExpanded">
           <strong>录入流水 / 导入 Excel</strong>
@@ -351,26 +368,67 @@
     <!-- 修改记录弹窗 -->
     <div v-if="editModal.show" class="modal-mask" @click.self="editModal.show=false">
       <div class="modal-box">
-        <div class="modal-title">📝 修改记录</div>
+        <div class="modal-title">📝 {{ editModal.mode === 'create' ? '新增流水记录' : '修改流水记录' }}</div>
         <div class="modal-form">
-          <div class="mf-row"><label>账号</label><input class="inp" v-model="editModal.data.账号"></div>
-          <div class="mf-row"><label>项目</label><input class="inp" v-model="editModal.data.项目"></div>
+          <div class="mf-row"><label>归属组</label>
+            <select class="inp" v-model="editModal.data.组别">
+              <option v-for="group in GROUPS" :key="group.id" :value="group.label">{{ group.label }}</option>
+            </select>
+          </div>
+          <div class="mf-row"><label>账号</label><input class="inp" v-model="editModal.data.账号" placeholder="账号 / 素材 / 平台收益"></div>
+          <div class="mf-row"><label>产品/项目</label><input class="inp" v-model="editModal.data.项目" placeholder="产品或项目名"></div>
+          <div class="mf-row"><label>业务口径</label>
+            <select class="inp" v-model="editModal.data.类型">
+              <option v-for="type in PROFIT_BUSINESS_TYPES" :key="type" :value="type">{{ type }}</option>
+            </select>
+          </div>
           <div class="mf-row"><label>平台</label>
             <select class="inp" v-model="editModal.data.平台">
-              <option value="CPM">CPM</option>
-              <option value="星广">星广</option>
-              <option value="抖音一口价">抖音一口价</option>
-              <option value="数码一口价">数码一口价</option>
-              <option value="快手一口价">快手一口价</option>
-              <option value="代做">代做</option>
+              <option v-for="platform in PROFIT_PLATFORM_OPTIONS" :key="platform" :value="platform">{{ platform }}</option>
             </select>
           </div>
           <div class="mf-row"><label>档期</label><input class="inp" v-model="editModal.data.档期"></div>
-          <div class="mf-row"><label>费用（元）</label><input class="inp" type="number" v-model.number="editModal.data.费用"></div>
+          <div class="mf-row"><label>下单金额（元）</label><input class="inp" type="number" v-model.number="editModal.data.下单金额"></div>
+          <div class="mf-row"><label>最终合作价/流水（元）</label><input class="inp" type="number" v-model.number="editModal.data.费用" @input="syncManualFinancials"></div>
+          <div class="mf-row"><label>预估毛利（元）</label><input class="inp" type="number" v-model.number="editModal.data.毛利" @input="syncManualFinancials"></div>
+          <div class="mf-row"><label>来源</label>
+            <select class="inp" v-model="editModal.data.来源">
+              <option value="manual">手动录入</option>
+              <option value="ai">AI解析</option>
+              <option value="excel">Excel导入</option>
+            </select>
+          </div>
+          <label class="mf-check">
+            <input type="checkbox" v-model="editModal.data.内部分成" @change="syncInternalSplitDefaults">
+            <span>内部代做分成</span>
+          </label>
+          <label class="mf-check">
+            <input type="checkbox" v-model="editModal.data.是否发布">
+            <span>已发布</span>
+          </label>
+          <div v-if="editModal.data.是否发布" class="mf-split-grid">
+            <label><span>发布日期</span><input class="inp" v-model="editModal.data.发布日期" placeholder="例如 2026-06-10"></label>
+            <label><span>发布链接</span><input class="inp" v-model="editModal.data.链接" placeholder="粘贴链接，表格只显示打开按钮"></label>
+          </div>
+          <div v-if="editModal.data.内部分成" class="mf-split-grid">
+            <label><span>原组</span>
+              <select class="inp" v-model="editModal.data.原组">
+                <option v-for="group in GROUPS" :key="'origin-' + group.id" :value="group.label">{{ group.label }}</option>
+              </select>
+            </label>
+            <label><span>代做组</span>
+              <select class="inp" v-model="editModal.data.代做组">
+                <option value="">请选择代做组</option>
+                <option v-for="group in GROUPS" :key="'producer-' + group.id" :value="group.label">{{ group.label }}</option>
+              </select>
+            </label>
+            <label><span>原组比例 %</span><input class="inp" type="number" min="0" max="100" v-model.number="editModal.data.原组比例"></label>
+            <label><span>代做比例 %</span><input class="inp" type="number" min="0" max="100" v-model.number="editModal.data.代做比例"></label>
+          </div>
           <div class="mf-row"><label>备注</label><input class="inp" v-model="editModal.data.备注"></div>
         </div>
         <div class="modal-actions">
-          <button class="btn btn-primary" @click="doEditRecord">保存</button>
+          <button class="btn btn-primary" @click="doEditRecord">{{ editModal.mode === 'create' ? '新增' : '保存' }}</button>
           <button class="btn btn-ghost btn-sm" @click="editModal.show=false">取消</button>
         </div>
       </div>
@@ -411,7 +469,7 @@ import {
   syncProfitRecords,
   updateProfit
 } from '../api/profit'
-import { GROUPS, GROUP_TARGETS, PROFIT_RATES, PROFIT_TYPE_LABELS } from './ops/constants'
+import { GROUPS, GROUP_TARGETS, PROFIT_BUSINESS_TYPES, PROFIT_PLATFORM_OPTIONS, PROFIT_RATES, PROFIT_TYPE_LABELS } from './ops/constants'
 import { arrayBufferToBase64, calcMargin, toProfitRow } from './ops/utils'
 import { callMiniMaxChat, getCurrentAuthUser } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
@@ -429,6 +487,13 @@ function getTypeClass(type) {
   if (t.includes('内部')) return 'type-neibu'
   if (t.includes('素材')) return 'type-sucai'
   return 'type-default'
+}
+
+function openProfitLink(rawLink) {
+  const link = String(rawLink || '').trim()
+  if (!link) return
+  const url = /^https?:\/\//i.test(link) ? link : `https://${link}`
+  window.open(url, '_blank', 'noopener,noreferrer')
 }
 
 function normalizeGroupKey(value) {
@@ -566,14 +631,52 @@ const departmentItems = ref([])
 const loadingDepartment = ref(false)
 const currentItems = computed(() => isDepartmentView.value ? departmentItems.value : (groupData[activeGroup.value] || []))
 
+function itemMonthNumber(item) {
+  const match = String(item?.档期 || '').match(/(^|[^\d])(1[0-2]|0?[1-9])\s*月/)
+  return match ? Number(match[2]) : 0
+}
+
+function itemYearNumber(item) {
+  const raw = String(item?.档期 || '')
+  const match = raw.match(/(20\d{2})\s*(?:年|-|\/|\.)/)
+  if (match) return Number(match[1])
+  const created = Number(item?.创建时间) || 0
+  if (created) return new Date(created * 1000).getFullYear()
+  return currentYear
+}
+
+function filterBySelectedPeriod(items, month = selectedMonth.value, year = selectedYear.value) {
+  return (items || [])
+    .filter(item => !year || itemYearNumber(item) === Number(year))
+    .filter(item => !month || itemMonthNumber(item) === Number(month))
+}
+
+function splitDepartmentItem(item) {
+  if (!item?.内部分成) return [item]
+  const originGroup = item.原组 || item.组别
+  const producerGroup = item.代做组 || ''
+  if (!originGroup || !producerGroup) return [item]
+  const originShare = Math.max(0, Math.min(100, Number(item.原组比例) || 30))
+  const producerShare = Math.max(0, Math.min(100, Number(item.代做比例) || (100 - originShare)))
+  const makePart = (group, share, role) => ({
+    ...item,
+    id: `${item.id || item.项目}-${role}`,
+    组别: group,
+    费用: Math.round((Number(item.费用) || 0) * share / 100),
+    毛利: Math.round((Number(item.毛利) || 0) * share / 100),
+    备注: [item.备注, role === 'origin' ? `原组${share}%` : `代做组${share}%`].filter(Boolean).join('；')
+  })
+  return [
+    makePart(originGroup, originShare, 'origin'),
+    makePart(producerGroup, producerShare, 'producer')
+  ]
+}
+
+const departmentEffectiveItems = computed(() => departmentItems.value.flatMap(splitDepartmentItem))
+
 // Year/Month filtered items
 const filteredItems = computed(() => {
-  let items = currentItems.value
-  if (selectedMonth.value) {
-    const monthStr = selectedMonth.value + '月'
-    items = items.filter(item => (item.档期 || '').includes(monthStr))
-  }
-  return items
+  return filterBySelectedPeriod(currentItems.value)
 })
 
 // Sorted items by margin descending
@@ -625,9 +728,7 @@ function inferVerticalLabel(item) {
 }
 
 function normalizeMonthFilter(items) {
-  if (!selectedMonth.value) return items
-  const monthStr = selectedMonth.value + '月'
-  return items.filter(item => (item.档期 || '').includes(monthStr))
+  return filterBySelectedPeriod(items)
 }
 
 function makeGroupMap() {
@@ -647,7 +748,7 @@ function cap(value) {
 }
 
 const departmentSummary = computed(() => {
-  const items = normalizeMonthFilter(departmentItems.value)
+  const items = normalizeMonthFilter(departmentEffectiveItems.value)
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const margin = items.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
   const projects = new Set()
@@ -675,7 +776,7 @@ const departmentSummary = computed(() => {
 })
 
 const groupPerformance = computed(() => {
-  const items = normalizeMonthFilter(departmentItems.value)
+  const items = normalizeMonthFilter(departmentEffectiveItems.value)
   const map = makeGroupMap()
   for (const item of items) {
     const label = item.组别 || normalizeProfitGroup(item.组别) || inferGroupFromAccount(item.账号) || ''
@@ -700,7 +801,7 @@ const groupPerformance = computed(() => {
 })
 
 const platformPerformance = computed(() => {
-  const items = normalizeMonthFilter(departmentItems.value)
+  const items = normalizeMonthFilter(departmentEffectiveItems.value)
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const map = new Map()
   for (const item of items) {
@@ -716,7 +817,7 @@ const platformPerformance = computed(() => {
 })
 
 const categoryPerformance = computed(() => {
-  const items = normalizeMonthFilter(departmentItems.value)
+  const items = normalizeMonthFilter(departmentEffectiveItems.value)
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const map = new Map()
   for (const item of items) {
@@ -732,7 +833,7 @@ const categoryPerformance = computed(() => {
 })
 
 const platformVerticalBoard = computed(() => {
-  const items = normalizeMonthFilter(departmentItems.value)
+  const items = normalizeMonthFilter(departmentEffectiveItems.value)
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const buckets = [
     { name: '抖音游戏', platform: '抖音', vertical: '游戏', revenue: 0, margin: 0, count: 0 },
@@ -758,7 +859,7 @@ const platformVerticalBoard = computed(() => {
 })
 
 const platformVerticalCoverage = computed(() => {
-  const items = normalizeMonthFilter(departmentItems.value)
+  const items = normalizeMonthFilter(departmentEffectiveItems.value)
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   let matchedRevenue = 0
   let matchedCount = 0
@@ -779,7 +880,7 @@ const platformVerticalCoverage = computed(() => {
 })
 
 const platformVerticalUnmatched = computed(() => {
-  const items = normalizeMonthFilter(departmentItems.value)
+  const items = normalizeMonthFilter(departmentEffectiveItems.value)
   const map = new Map()
   for (const item of items) {
     const platform = normalizePlatformLabel(item.平台) || item.平台 || '其他平台'
@@ -795,7 +896,7 @@ const platformVerticalUnmatched = computed(() => {
 })
 
 const projectRanking = computed(() => {
-  const items = normalizeMonthFilter(departmentItems.value)
+  const items = normalizeMonthFilter(departmentEffectiveItems.value)
   const candidates = items.filter(item => !isGenericProjectLabel(item.项目))
   const sourceItems = candidates.length ? candidates : items
   const map = new Map()
@@ -813,7 +914,7 @@ const projectRanking = computed(() => {
 })
 
 const accountRanking = computed(() => {
-  const items = normalizeMonthFilter(departmentItems.value)
+  const items = normalizeMonthFilter(departmentEffectiveItems.value)
   const map = new Map()
   for (const item of items) {
     const key = item.账号 || '未知账号'
@@ -870,14 +971,11 @@ const departmentRadarPoints = computed(() => {
 // Previous month comparison
 const prevMonthData = computed(() => {
   if (!selectedMonth.value) return null
-  const sourceItems = isDepartmentView.value ? departmentItems.value : currentItems.value
+  const sourceItems = isDepartmentView.value ? departmentEffectiveItems.value : currentItems.value
   let prevMonth = selectedMonth.value - 1
   if (prevMonth <= 0) { prevMonth = 12 }
-  const prevMonthStr = prevMonth + '月'
-  const prevItems = sourceItems.filter(item => {
-    const monthMatch = (item.档期 || '').includes(prevMonthStr)
-    return monthMatch
-  })
+  const prevYear = selectedMonth.value - 1 <= 0 ? Number(selectedYear.value) - 1 : Number(selectedYear.value)
+  const prevItems = filterBySelectedPeriod(sourceItems, prevMonth, prevYear)
   if (prevItems.length === 0) return null
   const total = prevItems.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const margin = prevItems.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
@@ -891,6 +989,59 @@ const prevMonthDiff = computed(() => {
   const prevMargin = prevMonthData.value.margin
   if (prevMargin === 0) return currTotal > 0 ? 100 : 0
   return Math.round((currTotal - prevMargin) / prevMargin * 100)
+})
+
+function summarizeProfitItems(items) {
+  const rows = items || []
+  const total = rows.reduce((s, i) => s + (Number(i.费用) || 0), 0)
+  const margin = rows.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
+  const projects = new Set(rows.map(item => item.项目).filter(Boolean))
+  return { total, margin, count: rows.length, projects: projects.size }
+}
+
+function compareRate(current, base) {
+  if (!base) return current ? 100 : 0
+  return Math.round((current - base) / base * 100)
+}
+
+const historyComparison = computed(() => {
+  const sourceItems = isDepartmentView.value ? departmentEffectiveItems.value : currentItems.value
+  const month = Number(selectedMonth.value) || 0
+  const year = Number(selectedYear.value) || currentYear
+  const current = summarizeProfitItems(filterBySelectedPeriod(sourceItems, month, year))
+  let prevMonth = month ? month - 1 : 0
+  let prevYear = year
+  if (month && prevMonth <= 0) {
+    prevMonth = 12
+    prevYear = year - 1
+  }
+  const previous = month ? summarizeProfitItems(filterBySelectedPeriod(sourceItems, prevMonth, prevYear)) : null
+  const lastYear = month ? summarizeProfitItems(filterBySelectedPeriod(sourceItems, month, year - 1)) : null
+  return {
+    current,
+    previous,
+    lastYear,
+    cards: [
+      {
+        key: 'mom',
+        label: '环比上月',
+        value: previous && previous.count ? `${compareRate(current.margin, previous.margin)}%` : '待补数据',
+        note: previous && previous.count ? `上月毛利 ￥${previous.margin.toLocaleString()}` : '导入上月数据后自动计算'
+      },
+      {
+        key: 'yoy',
+        label: '同比去年',
+        value: lastYear && lastYear.count ? `${compareRate(current.margin, lastYear.margin)}%` : '待补数据',
+        note: lastYear && lastYear.count ? `去年同月毛利 ￥${lastYear.margin.toLocaleString()}` : '等待补充去年同期数据'
+      },
+      {
+        key: 'projects',
+        label: '项目数对比',
+        value: previous && previous.count ? `${current.projects - previous.projects >= 0 ? '+' : ''}${current.projects - previous.projects}` : `${current.projects}`,
+        note: `当前 ${current.projects} 个项目 / ${current.count} 条记录`
+      }
+    ]
+  }
 })
 const circumference = 52 * 2 * Math.PI // r=52, 2πr
 const donutPerimeter = 2 * Math.PI * 70 // r=70
@@ -1203,12 +1354,40 @@ function normalizeProfitGroup(value) {
   return fuzzy?.label || ''
 }
 
+function inferBusinessType(record = {}, sourceText = '') {
+  const raw = [
+    record.business_type,
+    record.businessType,
+    record.category,
+    record.type,
+    record.platform,
+    record.project,
+    record.note,
+    sourceText
+  ].filter(Boolean).join(' ')
+  if (/星广联投.*非保底|非保底.*星广联投/.test(raw)) return '星广联投非保底'
+  if (/星广联投|保底/.test(raw)) return '星广联投-保底'
+  if (/内部代做|原组|代做组|分成/.test(raw)) return '内部代做'
+  if (/素材/.test(raw)) return '素材'
+  if (/内容电商|电商|带货/.test(raw)) return '内容电商'
+  if (/生态/.test(raw)) return '生态'
+  if (/流量激励|激励/.test(raw)) return '流量激励'
+  if (/其他/.test(raw)) return '其他'
+  return record.category || record.type || '一口价'
+}
+
 function normalizeProfitRecord(record, sourceText = '', options = {}) {
   const source = sourceText || record.raw || record.note || ''
   const enrichedSource = [source, record.category, record.project, record.platform].filter(Boolean).join(' ')
   const fee = Number(String(record.fee ?? record.revenue ?? record.amount ?? '').replace(/,/g, '')) || extractProfitAmount(source)
   const parsedMargin = Number(String(record.margin ?? record.profit ?? '').replace(/,/g, '')) || 0
   const platform = normalizeProfitPlatform(record, source)
+  const orderAmount = Number(String(record.order_amount ?? record.orderAmount ?? '').replace(/,/g, '')) || 0
+  const finalAmount = Number(String(record.final_amount ?? record.finalAmount ?? '').replace(/,/g, '')) || fee
+  const projectedMargin = Number(String(record.projected_margin ?? record.projectedMargin ?? '').replace(/,/g, '')) || parsedMargin || calcMargin(fee, platform)
+  const publishDate = record.publish_date || record.publishDate || ''
+  const link = record.link || record.url || ''
+  const businessType = inferBusinessType(record, source)
   const schedule = normalizeProfitSchedule(record.schedule || record.month)
   const account = normalizeProfitAccount(record.account, enrichedSource, { preserveAccount: options.preserveAccount })
   const project = normalizeProfitProject(record.project, enrichedSource, options)
@@ -1223,10 +1402,26 @@ function normalizeProfitRecord(record, sourceText = '', options = {}) {
     account,
     project,
     platform,
+    category: businessType,
+    business_type: businessType,
     fee,
     margin: parsedMargin || calcMargin(fee, platform),
     schedule,
-    note: noteParts.filter(Boolean).join('；')
+    note: noteParts.filter(Boolean).join('；'),
+    entry_source: record.entry_source || record.entrySource || (options.entrySource || 'ai'),
+    origin_group: normalizeProfitGroup(record.origin_group || record.originGroup || ''),
+    producer_group: normalizeProfitGroup(record.producer_group || record.producerGroup || ''),
+    origin_share: Number(record.origin_share ?? record.originShare ?? 30) || 30,
+    producer_share: Number(record.producer_share ?? record.producerShare ?? 70) || 70,
+    split_enabled: record.split_enabled || record.splitEnabled || businessType === '内部代做' ? 1 : 0,
+    order_amount: orderAmount,
+    final_amount: finalAmount,
+    projected_margin: projectedMargin,
+    publish_date: publishDate,
+    is_published: record.is_published || record.isPublished || record.published || publishDate ? 1 : 0,
+    product_line: record.product_line || record.productLine || '',
+    link,
+    order_no: record.order_no || record.orderNo || ''
   }
 }
 
@@ -1502,7 +1697,23 @@ async function writeParsedRecords() {
           revenue: fee,
           margin,
           month: schedule,
-          remark: r.note || ''
+          remark: r.note || '',
+          category: r.business_type || r.category || '一口价',
+          business_type: r.business_type || r.category || '一口价',
+          entry_source: r.entry_source || (profitFileName.value ? 'excel' : 'ai'),
+          origin_group: r.origin_group || '',
+          producer_group: r.producer_group || '',
+          origin_share: Number(r.origin_share) || 30,
+          producer_share: Number(r.producer_share) || 70,
+          split_enabled: r.split_enabled ? 1 : 0,
+          order_amount: Number(r.order_amount) || 0,
+          final_amount: Number(r.final_amount) || fee,
+          projected_margin: Number(r.projected_margin) || margin,
+          publish_date: r.publish_date || '',
+          is_published: r.is_published ? 1 : 0,
+          product_line: r.product_line || '',
+          link: r.link || '',
+          order_no: r.order_no || ''
         })
       }
       const month = getScheduleMonthNumber(firstSchedule)
@@ -1604,33 +1815,152 @@ onUnmounted(() => {
   window.removeEventListener('usagi:agent-action', handleAgentAction)
 })
 
-// ---- 修改/删除/清空 ----
-const editModal = reactive({ show: false, data: { id: '', 账号: '', 项目: '', 平台: '抖音', 档期: '', 费用: 0, 备注: '' }, index: -1 })
+// ---- 新增/修改/删除/清空 ----
+function currentGroupOption() {
+  return GROUPS.find(g => g.id === activeGroup.value)?.label || GROUPS[0]?.label || '内容组1'
+}
+
+function makeProfitDraft(overrides = {}) {
+  const groupLabel = overrides.组别 || currentGroupOption()
+  const platform = overrides.平台 || '抖音一口价'
+  const fee = Number(overrides.费用) || 0
+  return {
+    id: '',
+    组别: groupLabel,
+    账号: '',
+    项目: '',
+    类型: '一口价',
+    平台: platform,
+    档期: defaultProfitSchedule(),
+    费用: fee,
+    毛利: Number(overrides.毛利) || calcMargin(fee, platform),
+    下单金额: Number(overrides.下单金额) || 0,
+    最终合作价: Number(overrides.最终合作价) || fee,
+    预估毛利: Number(overrides.预估毛利) || Number(overrides.毛利) || calcMargin(fee, platform),
+    是否发布: false,
+    发布日期: '',
+    链接: '',
+    产品线: '',
+    备注: '',
+    来源: 'manual',
+    原组: groupLabel,
+    代做组: '',
+    原组比例: 30,
+    代做比例: 70,
+    内部分成: false,
+    ...overrides
+  }
+}
+
+const editModal = reactive({ show: false, mode: 'edit', data: makeProfitDraft(), index: -1 })
+
+function syncManualFinancials() {
+  if (!editModal.show) return
+  const fee = Number(editModal.data.费用) || 0
+  editModal.data.最终合作价 = fee
+  if (!Number(editModal.data.毛利)) {
+    editModal.data.毛利 = calcMargin(fee, editModal.data.平台 || '抖音一口价')
+  }
+  editModal.data.预估毛利 = Number(editModal.data.毛利) || calcMargin(fee, editModal.data.平台 || '抖音一口价')
+}
+
+function syncInternalSplitDefaults() {
+  if (!editModal.data.内部分成) return
+  editModal.data.类型 = '内部代做'
+  editModal.data.原组 = editModal.data.原组 || editModal.data.组别 || currentGroupOption()
+  editModal.data.原组比例 = Number(editModal.data.原组比例) || 30
+  editModal.data.代做比例 = Number(editModal.data.代做比例) || 70
+}
+
+function openCreateModal() {
+  editModal.mode = 'create'
+  editModal.index = -1
+  editModal.data = makeProfitDraft()
+  editModal.show = true
+}
+
 function openEditModal(item) {
   const idx = currentItems.value.findIndex(i => i.id === item.id)
-  editModal.data = { ...item }
+  editModal.mode = 'edit'
+  editModal.data = makeProfitDraft({
+    ...item,
+    组别: item.组别 || currentGroupOption(),
+    类型: item.类型 || '一口价',
+    来源: item.来源 || 'manual',
+    原组: item.原组 || item.组别 || currentGroupOption(),
+    代做组: item.代做组 || '',
+    原组比例: Number(item.原组比例) || 30,
+    代做比例: Number(item.代做比例) || 70,
+    内部分成: !!item.内部分成,
+    下单金额: Number(item.下单金额) || 0,
+    最终合作价: Number(item.最终合作价) || Number(item.费用) || 0,
+    预估毛利: Number(item.预估毛利) || Number(item.毛利) || 0,
+    是否发布: !!item.是否发布,
+    发布日期: item.发布日期 || '',
+    链接: item.链接 || '',
+    产品线: item.产品线 || ''
+  })
   editModal.index = idx
   editModal.show = true
 }
-async function doEditRecord() {
+
+function buildProfitPayloadFromModal() {
   const fee = Number(editModal.data.费用) || 0
-  const platform = editModal.data.平台 || '抖音'
+  const platform = editModal.data.平台 || '抖音一口价'
+  const businessType = editModal.data.类型 || '一口价'
+  const margin = Number(editModal.data.毛利) || calcMargin(fee, platform)
+  const splitEnabled = !!editModal.data.内部分成
+  const originShare = Math.max(0, Math.min(100, Number(editModal.data.原组比例) || 30))
+  const producerShare = Math.max(0, Math.min(100, Number(editModal.data.代做比例) || (100 - originShare)))
+  return {
+    grp: editModal.data.组别 || currentGroupOption(),
+    project: editModal.data.项目 || '',
+    platform,
+    account: editModal.data.账号 || '',
+    revenue: fee,
+    margin,
+    month: normalizeProfitSchedule(editModal.data.档期),
+    remark: editModal.data.备注 || '',
+    category: businessType,
+    business_type: businessType,
+    entry_source: editModal.data.来源 || 'manual',
+    origin_group: splitEnabled ? (editModal.data.原组 || editModal.data.组别 || currentGroupOption()) : '',
+    producer_group: splitEnabled ? (editModal.data.代做组 || '') : '',
+    origin_share: originShare,
+    producer_share: producerShare,
+    split_enabled: splitEnabled ? 1 : 0,
+    order_amount: Number(editModal.data.下单金额) || 0,
+    final_amount: Number(editModal.data.最终合作价) || fee,
+    projected_margin: Number(editModal.data.预估毛利) || margin,
+    publish_date: editModal.data.是否发布 ? (editModal.data.发布日期 || '') : '',
+    is_published: editModal.data.是否发布 ? 1 : 0,
+    link: editModal.data.是否发布 ? (editModal.data.链接 || '') : '',
+    product_line: editModal.data.产品线 || ''
+  }
+}
+
+async function doEditRecord() {
+  const payload = buildProfitPayloadFromModal()
+  if (!payload.account && !payload.project) {
+    showToast('请至少填写账号或项目', 'error')
+    return
+  }
+  if (payload.is_published && (!payload.publish_date || !payload.link)) {
+    showToast('已发布记录需要填写发布日期和发布链接', 'error')
+    return
+  }
   try {
-    await updateProfit(editModal.data.id, {
-      grp: GROUPS.find(g => g.id === activeGroup.value)?.label || '内容组1',
-      project: editModal.data.项目,
-      platform: platform,
-      account: editModal.data.账号,
-      revenue: fee,
-      margin: calcMargin(fee, platform),
-      month: editModal.data.档期,
-      remark: editModal.data.备注
-    })
+    if (editModal.mode === 'create') {
+      await addProfit(payload)
+    } else {
+      await updateProfit(editModal.data.id, payload)
+    }
     editModal.show = false
-    showToast('修改成功', 'success')
-    await loadProfitData()
+    showToast(editModal.mode === 'create' ? '新增成功' : '修改成功', 'success')
+    if (isDepartmentView.value) await loadDepartmentData()
+    else await loadProfitData()
   } catch(e) {
-    showToast('修改失败: ' + e.message, 'error')
+    showToast('保存失败: ' + e.message, 'error')
   }
 }
 async function deleteItem(id) {
@@ -1740,6 +2070,25 @@ async function sendAiChat() {
 .department-hero-stats div { padding: 7px 8px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .department-hero-stats span, .dept-panel-title, .rank-main span, .dept-chip-row em, .dept-account-row span { font-size: 11px; color: var(--text-muted); }
 .department-hero-stats strong { font-size: 16px; color: var(--text, #e0d8ff); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-compare-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.history-compare-strip article {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 8px;
+  background: var(--surface, #1a1a2e);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.history-compare-strip span { font-size: 11px; color: var(--text-muted); }
+.history-compare-strip strong { font-size: 16px; color: #67e8f9; }
+.history-compare-strip em { font-size: 11px; font-style: normal; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dept-import-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2169,8 +2518,8 @@ select.inp { cursor: pointer; }
 .profit-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary, #7b2fff), var(--success-text)); border-radius: 4px; transition: width 0.4s ease; }
 .profit-bar-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .profit-table { display: flex; flex-direction: column; background: var(--panel-bg, #12122a); border-radius: 6px; min-width: 0; }
-.pt-head { display: grid; grid-template-columns: 2fr 1fr 80px 60px 100px 100px 80px; gap: 10px; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--primary-light, #b47fff); border-bottom: 1px solid var(--border, #2a2a4a); background: var(--surface2, #1e1e3a); }
-.pt-row { display: grid; grid-template-columns: 2fr 1fr 80px 60px 100px 100px 80px; gap: 10px; padding: 10px 14px; font-size: 13px; color: var(--text, #e0d8ff); border-bottom: 1px solid rgba(42,42,74,0.4); align-items: center; }
+.pt-head { display: grid; grid-template-columns: 2fr 1fr 80px 60px 100px 100px 112px; gap: 10px; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--primary-light, #b47fff); border-bottom: 1px solid var(--border, #2a2a4a); background: var(--surface2, #1e1e3a); }
+.pt-row { display: grid; grid-template-columns: 2fr 1fr 80px 60px 100px 100px 112px; gap: 10px; padding: 10px 14px; font-size: 13px; color: var(--text, #e0d8ff); border-bottom: 1px solid rgba(42,42,74,0.4); align-items: center; }
 .pt-row:last-child { border-bottom: none; }
 .pt-row:hover { background: rgba(255,255,255,0.03); }
 .pt-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2180,6 +2529,8 @@ select.inp { cursor: pointer; }
 .btn-edit:hover { background: var(--accent-soft); color: var(--primary, #7b2fff); }
 .btn-del { background: transparent; color: var(--text-muted); }
 .btn-del:hover { background: rgba(239,68,68,0.2); color: #f87171; }
+.btn-link { background: rgba(59,130,246,0.14); color: #60a5fa; border: 1px solid rgba(96,165,250,0.28); }
+.btn-link:hover { background: rgba(59,130,246,0.24); color: #93c5fd; }
 .pt-row .amount { color: var(--success-text); font-weight: 600; text-align: right; }
 .pt-row .amount.accent { color: #fbbf24; font-weight: 700; }
 .loading-text { font-size: 13px; color: var(--text-muted); padding: 16px 0; text-align: center; }
@@ -2248,11 +2599,31 @@ select.inp { cursor: pointer; }
 .btn-ghost:hover { border-color: var(--primary, #7b2fff); color: var(--primary-light, #b47fff); }
 .btn-sm { padding: 5px 14px; font-size: 11px; }
 .modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 1000; display: flex; align-items: center; justify-content: center; }
-.modal-box { background: var(--surface, #1a1a2e); border: 1px solid var(--border, #2a2a4a); border-radius: 16px; padding: 24px; width: 420px; max-width: 90vw; }
+.modal-box { background: var(--surface, #1a1a2e); border: 1px solid var(--border, #2a2a4a); border-radius: 16px; padding: 24px; width: 520px; max-width: 92vw; max-height: 88vh; overflow-y: auto; }
 .modal-title { font-size: 16px; font-weight: 700; color: var(--primary-light, #b47fff); margin-bottom: 20px; }
 .modal-form { display: flex; flex-direction: column; gap: 12px; }
 .mf-row { display: flex; flex-direction: column; gap: 4px; }
 .mf-row label { font-size: 12px; font-weight: 600; color: var(--primary-light, #b47fff); }
+.mf-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text, #e0d8ff);
+  font-size: 12px;
+  font-weight: 600;
+}
+.mf-check input { width: 15px; height: 15px; accent-color: var(--primary, #7b2fff); }
+.mf-split-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(123,47,255,0.22);
+  border-radius: 8px;
+  background: var(--bg-card, #12122a);
+}
+.mf-split-grid label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.mf-split-grid span { font-size: 11px; font-weight: 600; color: var(--primary-light, #b47fff); }
 .modal-actions { display: flex; gap: 10px; margin-top: 20px; }
 
 /* 环形图 */

@@ -23,4 +23,29 @@ export const PROFIT_TYPE_LABELS = {
   kuaishou_yikoujia: '快手一口价',
   daizuo: '代做'
 }
+export const PROFIT_BUSINESS_TYPES = [
+  '一口价',
+  '星广联投-保底',
+  '星广联投非保底',
+  '素材',
+  '内部代做',
+  '内容电商',
+  '生态',
+  '流量激励',
+  '其他'
+]
+export const PROFIT_PLATFORM_OPTIONS = [
+  '抖音一口价',
+  '数码一口价',
+  '快手一口价',
+  'B站',
+  '星广',
+  '星广联投',
+  '素材',
+  '代做',
+  '内容电商',
+  '生态',
+  '流量激励',
+  '其他'
+]
 export const GROUP_TARGETS = { 4: 100200 }

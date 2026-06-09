@@ -187,7 +187,7 @@ function findPlatformHeaderIndex(headers) {
 }
 
 function findPreferredAmountHeaderIndex(headers) {
-  var exactAliases = ['最终合作价格', '实际金额', '税后执行金额', '执行金额', '成交金额'];
+  var exactAliases = ['税后集团流水', '最终合作价格', '实际金额', '税后执行金额', '执行金额', '成交金额', '集团流水'];
   for (var i = 0; i < exactAliases.length; i += 1) {
     var alias = exactAliases[i];
     var index = headers.findIndex(function(header) {
@@ -195,7 +195,7 @@ function findPreferredAmountHeaderIndex(headers) {
     });
     if (index >= 0) return index;
   }
-  return findHeaderIndex(headers, ['最终合作价格', '实际金额', '税后执行金额', '执行金额']);
+  return findHeaderIndex(headers, ['税后集团流水', '最终合作价格', '实际金额', '税后执行金额', '执行金额', '集团流水']);
 }
 
 function amountFromCell(value) {
@@ -210,15 +210,29 @@ function amountFromCell(value) {
 function makeWorkbookColumnIndex(headers) {
   return {
     group: findHeaderIndex(headers, ['部门', '组别', '小组']),
+    currentGroup: findHeaderIndex(headers, ['现账号归属']),
     account: findHeaderIndex(headers, ['账号名称', '账号昵称', '账号', '达人', '博主']),
     project: findProjectHeaderIndex(headers),
     category: findCategoryHeaderIndex(headers),
     platform: findPlatformHeaderIndex(headers),
-    fee: findHeaderIndex(headers, ['税后执行金额', '最终合作价格', '下单金额', '折后价格', '折扣后价格', '营收', '流水', '收入', '费用', '金额']),
     fee: findPreferredAmountHeaderIndex(headers),
     margin: findHeaderIndex(headers, ['部门毛利', '集团毛利值', '毛利']),
     schedule: findHeaderIndex(headers, ['实际发布日期', '锁定档期', '月份', '档期', '月']),
-    note: findHeaderIndex(headers, ['说明', '备注', '链接'])
+    note: findHeaderIndex(headers, ['说明', '备注', '链接']),
+    groupRevenue: findExactHeaderIndex(headers, ['集团流水']),
+    taxRevenue: findExactHeaderIndex(headers, ['税后集团流水']),
+    groupMargin: findExactHeaderIndex(headers, ['集团毛利']),
+    departmentMargin: findExactHeaderIndex(headers, ['部门毛利']),
+    orderAmount: findExactHeaderIndex(headers, ['下单金额']),
+    rebateAmount: findExactHeaderIndex(headers, ['返点金额']),
+    finalAmount: findExactHeaderIndex(headers, ['最终合作价格', '实际金额']),
+    costTotal: findHeaderIndex(headers, ['成本合计']),
+    projectedMargin: findHeaderIndex(headers, ['毛利预估']),
+    lockDate: findHeaderIndex(headers, ['锁档日期', '锁定档期']),
+    publishDate: findHeaderIndex(headers, ['实际发布日期']),
+    productLine: findHeaderIndex(headers, ['游戏/非游']),
+    link: findHeaderIndex(headers, ['链接', '发布链接']),
+    orderNo: findHeaderIndex(headers, ['单号'])
   };
 }
 
@@ -271,26 +285,67 @@ function normalizeWorkbookGroup(value) {
   return aliases[text] || text;
 }
 
+function cellText(row, index) {
+  return index >= 0 ? String(row[index] || '').trim() : '';
+}
+
+function cellAmount(row, index) {
+  return index >= 0 ? amountFromCell(row[index]) : 0;
+}
+
+function normalizePublishFlag(value, publishDate) {
+  var text = String(value == null ? '' : value).trim();
+  if (/^(1|true|yes|y|已|是|发布|已发布)$/i.test(text)) return 1;
+  if (/^(0|false|no|n|否|未|未发布)$/i.test(text)) return 0;
+  return publishDate ? 1 : 0;
+}
+
 function parseWorkbookRow(row, idx, fallbackMonth, fallbackProject, fallbackPlatform) {
   if (!row || row.every(function(value) { return String(value || '').trim() === ''; })) return null;
+  var groupRevenue = cellAmount(row, idx.groupRevenue);
+  var taxRevenue = cellAmount(row, idx.taxRevenue);
+  var orderAmount = cellAmount(row, idx.orderAmount);
+  var finalAmount = cellAmount(row, idx.finalAmount);
   var fee = idx.fee >= 0 ? amountFromCell(row[idx.fee]) : 0;
+  if (!fee) fee = taxRevenue || finalAmount || groupRevenue || orderAmount;
   if (!fee) return null;
 
   var platform = normalizePlatform(idx.platform >= 0 ? row[idx.platform] : (fallbackPlatform || row.join(' ')));
+  var groupMargin = cellAmount(row, idx.groupMargin);
+  var departmentMargin = cellAmount(row, idx.departmentMargin);
+  var projectedMargin = cellAmount(row, idx.projectedMargin);
   var margin = idx.margin >= 0 ? amountFromCell(row[idx.margin]) : 0;
+  if (!margin) margin = departmentMargin || groupMargin || projectedMargin;
   var category = idx.category >= 0 ? String(row[idx.category] || '').trim() : '';
   var project = idx.project >= 0 ? String(row[idx.project] || '').trim() : '';
   if (!project) project = category || fallbackProject || '';
+  var publishDate = cellText(row, idx.publishDate);
   return {
-    grp: idx.group >= 0 ? normalizeWorkbookGroup(row[idx.group]) : '',
+    grp: idx.currentGroup >= 0 ? normalizeWorkbookGroup(row[idx.currentGroup]) : (idx.group >= 0 ? normalizeWorkbookGroup(row[idx.group]) : ''),
     account: idx.account >= 0 ? String(row[idx.account] || '').trim() : '',
     project: project,
     category: category,
+    business_type: category,
     platform: platform,
     fee: fee,
     margin: margin || calcMargin(fee, platform),
     schedule: fallbackMonth || (idx.schedule >= 0 ? String(row[idx.schedule] || '').trim() : ''),
-    note: idx.note >= 0 ? String(row[idx.note] || '').trim() : ''
+    note: idx.note >= 0 ? String(row[idx.note] || '').trim() : '',
+    group_revenue: groupRevenue,
+    tax_revenue: taxRevenue,
+    group_margin: groupMargin,
+    department_margin: departmentMargin,
+    order_amount: orderAmount,
+    rebate_amount: cellAmount(row, idx.rebateAmount),
+    final_amount: finalAmount,
+    cost_total: cellAmount(row, idx.costTotal),
+    projected_margin: projectedMargin,
+    lock_date: cellText(row, idx.lockDate),
+    publish_date: publishDate,
+    is_published: normalizePublishFlag(null, publishDate),
+    product_line: cellText(row, idx.productLine),
+    link: cellText(row, idx.link),
+    order_no: cellText(row, idx.orderNo)
   };
 }
 
@@ -400,6 +455,28 @@ function initProfitDb(db, cb) {
       created_at INTEGER
     )`);
     db.run('ALTER TABLE profits ADD COLUMN category TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN business_type TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN entry_source TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN origin_group TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN producer_group TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN origin_share INTEGER DEFAULT 30', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN producer_share INTEGER DEFAULT 70', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN split_enabled INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN group_revenue INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN tax_revenue INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN group_margin INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN department_margin INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN order_amount INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN rebate_amount INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN final_amount INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN cost_total INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN projected_margin INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN lock_date TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN publish_date TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN is_published INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN product_line TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN link TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN order_no TEXT', function() {});
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_grp ON profits(grp)');
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_month ON profits(month)');
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_created ON profits(created_at)', cb);
@@ -440,9 +517,38 @@ function isPreservedSyncRecord(record) {
     record.platform,
     record.account,
     record.remark,
-    record.category
+    record.category,
+    record.business_type
   ].filter(Boolean).join(' ');
   return /平台收益|代做|素材代做/.test(text);
+}
+
+function normalizeProfitMeta(record) {
+  var publishDate = String(record.publish_date || record.publishDate || '').trim();
+  return {
+    business_type: String(record.business_type || record.businessType || record.category || '').trim(),
+    entry_source: String(record.entry_source || record.entrySource || '').trim(),
+    origin_group: normalizeGroup(record.origin_group || record.originGroup),
+    producer_group: normalizeGroup(record.producer_group || record.producerGroup),
+    origin_share: Math.max(0, Math.min(100, Math.round(Number(record.origin_share ?? record.originShare ?? 30) || 0))),
+    producer_share: Math.max(0, Math.min(100, Math.round(Number(record.producer_share ?? record.producerShare ?? 70) || 0))),
+    split_enabled: record.split_enabled || record.splitEnabled ? 1 : 0,
+    group_revenue: Math.round(Number(record.group_revenue ?? record.groupRevenue ?? 0) || 0),
+    tax_revenue: Math.round(Number(record.tax_revenue ?? record.taxRevenue ?? 0) || 0),
+    group_margin: Math.round(Number(record.group_margin ?? record.groupMargin ?? 0) || 0),
+    department_margin: Math.round(Number(record.department_margin ?? record.departmentMargin ?? 0) || 0),
+    order_amount: Math.round(Number(record.order_amount ?? record.orderAmount ?? 0) || 0),
+    rebate_amount: Math.round(Number(record.rebate_amount ?? record.rebateAmount ?? 0) || 0),
+    final_amount: Math.round(Number(record.final_amount ?? record.finalAmount ?? 0) || 0),
+    cost_total: Math.round(Number(record.cost_total ?? record.costTotal ?? 0) || 0),
+    projected_margin: Math.round(Number(record.projected_margin ?? record.projectedMargin ?? 0) || 0),
+    lock_date: String(record.lock_date || record.lockDate || '').trim(),
+    publish_date: publishDate,
+    is_published: normalizePublishFlag(record.is_published ?? record.isPublished ?? record.published, publishDate),
+    product_line: String(record.product_line || record.productLine || '').trim(),
+    link: String(record.link || record.url || '').trim(),
+    order_no: String(record.order_no || record.orderNo || '').trim()
+  };
 }
 
 function normalizeSyncRecord(record) {
@@ -454,6 +560,7 @@ function normalizeSyncRecord(record) {
   var account = String(record.account || '').trim();
   if (!account && /平台收益/.test(source)) account = '平台收益';
   if (!account && /代做|素材代做|素材/.test(source)) account = '素材';
+  var meta = normalizeProfitMeta(record);
   return {
     grp: grp,
     project: String(record.project || '').trim(),
@@ -463,7 +570,29 @@ function normalizeSyncRecord(record) {
     margin: Math.round(margin),
     month: month,
     remark: String(record.remark || record.note || '').trim(),
-    category: record.category == null ? null : String(record.category).trim()
+    category: record.category == null ? meta.business_type : String(record.category).trim(),
+    business_type: meta.business_type,
+    entry_source: meta.entry_source,
+    origin_group: meta.origin_group,
+    producer_group: meta.producer_group,
+    origin_share: meta.origin_share,
+    producer_share: meta.producer_share,
+    split_enabled: meta.split_enabled,
+    group_revenue: meta.group_revenue,
+    tax_revenue: meta.tax_revenue,
+    group_margin: meta.group_margin,
+    department_margin: meta.department_margin,
+    order_amount: meta.order_amount,
+    rebate_amount: meta.rebate_amount,
+    final_amount: meta.final_amount,
+    cost_total: meta.cost_total,
+    projected_margin: meta.projected_margin,
+    lock_date: meta.lock_date,
+    publish_date: meta.publish_date,
+    is_published: meta.is_published,
+    product_line: meta.product_line,
+    link: meta.link,
+    order_no: meta.order_no
   };
 }
 
@@ -474,7 +603,10 @@ function syncRecordKey(record) {
     normalizeSyncText(record.account),
     normalizeSyncText(record.project),
     normalizeSyncText(record.platform),
-    normalizeSyncText(record.category)
+    normalizeSyncText(record.category),
+    normalizeSyncText(record.business_type),
+    normalizeSyncText(record.origin_group),
+    normalizeSyncText(record.producer_group)
   ].join('|');
 }
 
@@ -518,9 +650,14 @@ module.exports = function createProfitRoutes(deps) {
   function add(body, cb) {
     withProfitDb(function(err, db) {
       if (err) { cb({ error: err.message }); return; }
+      var meta = normalizeProfitMeta(body);
       db.run(
-        `INSERT INTO profits (grp,project,platform,account,revenue,margin,month,remark,created_at)
-         VALUES (?,?,?,?,?,?,?,?,?)`,
+        `INSERT INTO profits (
+          grp,project,platform,account,revenue,margin,month,remark,created_at,category,
+          business_type,entry_source,origin_group,producer_group,origin_share,producer_share,split_enabled,
+          group_revenue,tax_revenue,group_margin,department_margin,order_amount,rebate_amount,final_amount,
+          cost_total,projected_margin,lock_date,publish_date,is_published,product_line,link,order_no
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
         [
           body.grp || '',
           body.project || '',
@@ -530,7 +667,30 @@ module.exports = function createProfitRoutes(deps) {
           Number(body.margin) || 0,
           body.month || '',
           body.remark || '',
-          Math.floor(Date.now() / 1000)
+          Math.floor(Date.now() / 1000),
+          body.category == null ? meta.business_type : String(body.category).trim(),
+          meta.business_type,
+          meta.entry_source,
+          meta.origin_group,
+          meta.producer_group,
+          meta.origin_share,
+          meta.producer_share,
+          meta.split_enabled,
+          meta.group_revenue,
+          meta.tax_revenue,
+          meta.group_margin,
+          meta.department_margin,
+          meta.order_amount,
+          meta.rebate_amount,
+          meta.final_amount,
+          meta.cost_total,
+          meta.projected_margin,
+          meta.lock_date,
+          meta.publish_date,
+          meta.is_published,
+          meta.product_line,
+          meta.link,
+          meta.order_no
         ],
         function(insertErr) {
           db.close();
@@ -546,8 +706,13 @@ module.exports = function createProfitRoutes(deps) {
     if (!id) { cb({ error: 'id required' }); return; }
     withProfitDb(function(err, db) {
       if (err) { cb({ error: err.message }); return; }
+      var meta = normalizeProfitMeta(body);
       db.run(
-        `UPDATE profits SET grp=?,project=?,platform=?,account=?,revenue=?,margin=?,month=?,remark=?
+        `UPDATE profits SET
+          grp=?,project=?,platform=?,account=?,revenue=?,margin=?,month=?,remark=?,category=?,
+          business_type=?,entry_source=?,origin_group=?,producer_group=?,origin_share=?,producer_share=?,split_enabled=?,
+          group_revenue=?,tax_revenue=?,group_margin=?,department_margin=?,order_amount=?,rebate_amount=?,final_amount=?,
+          cost_total=?,projected_margin=?,lock_date=?,publish_date=?,is_published=?,product_line=?,link=?,order_no=?
          WHERE id=?`,
         [
           body.grp || '',
@@ -558,6 +723,29 @@ module.exports = function createProfitRoutes(deps) {
           Number(body.margin) || 0,
           body.month || '',
           body.remark || '',
+          body.category == null ? meta.business_type : String(body.category).trim(),
+          meta.business_type,
+          meta.entry_source,
+          meta.origin_group,
+          meta.producer_group,
+          meta.origin_share,
+          meta.producer_share,
+          meta.split_enabled,
+          meta.group_revenue,
+          meta.tax_revenue,
+          meta.group_margin,
+          meta.department_margin,
+          meta.order_amount,
+          meta.rebate_amount,
+          meta.final_amount,
+          meta.cost_total,
+          meta.projected_margin,
+          meta.lock_date,
+          meta.publish_date,
+          meta.is_published,
+          meta.product_line,
+          meta.link,
+          meta.order_no,
           id
         ],
         function(updateErr) {
@@ -746,7 +934,12 @@ module.exports = function createProfitRoutes(deps) {
                   continue;
                 }
                 await run(
-                  'UPDATE profits SET grp=?, project=?, platform=?, account=?, revenue=?, margin=?, month=?, remark=?, category=? WHERE id=?',
+                  `UPDATE profits SET
+                    grp=?, project=?, platform=?, account=?, revenue=?, margin=?, month=?, remark=?, category=?,
+                    business_type=?, entry_source=?, origin_group=?, producer_group=?, origin_share=?, producer_share=?, split_enabled=?,
+                    group_revenue=?, tax_revenue=?, group_margin=?, department_margin=?, order_amount=?, rebate_amount=?, final_amount=?,
+                    cost_total=?, projected_margin=?, lock_date=?, publish_date=?, is_published=?, product_line=?, link=?, order_no=?
+                   WHERE id=?`,
                   [
                     record.grp,
                     record.project,
@@ -757,6 +950,28 @@ module.exports = function createProfitRoutes(deps) {
                     record.month,
                     record.remark,
                     record.category,
+                    record.business_type,
+                    record.entry_source,
+                    record.origin_group,
+                    record.producer_group,
+                    record.origin_share,
+                    record.producer_share,
+                    record.split_enabled,
+                    record.group_revenue,
+                    record.tax_revenue,
+                    record.group_margin,
+                    record.department_margin,
+                    record.order_amount,
+                    record.rebate_amount,
+                    record.final_amount,
+                    record.cost_total,
+                    record.projected_margin,
+                    record.lock_date,
+                    record.publish_date,
+                    record.is_published,
+                    record.product_line,
+                    record.link,
+                    record.order_no,
                     matched.id
                   ]
                 );
@@ -764,7 +979,12 @@ module.exports = function createProfitRoutes(deps) {
                 continue;
               }
               await run(
-                'INSERT INTO profits (grp, project, platform, account, revenue, margin, month, remark, created_at, category) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+                `INSERT INTO profits (
+                  grp, project, platform, account, revenue, margin, month, remark, created_at, category,
+                  business_type, entry_source, origin_group, producer_group, origin_share, producer_share, split_enabled,
+                  group_revenue, tax_revenue, group_margin, department_margin, order_amount, rebate_amount, final_amount,
+                  cost_total, projected_margin, lock_date, publish_date, is_published, product_line, link, order_no
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                   record.grp,
                   record.project,
@@ -775,7 +995,29 @@ module.exports = function createProfitRoutes(deps) {
                   record.month,
                   record.remark,
                   Math.floor(Date.now() / 1000),
-                  record.category
+                  record.category,
+                  record.business_type,
+                  record.entry_source,
+                  record.origin_group,
+                  record.producer_group,
+                  record.origin_share,
+                  record.producer_share,
+                  record.split_enabled,
+                  record.group_revenue,
+                  record.tax_revenue,
+                  record.group_margin,
+                  record.department_margin,
+                  record.order_amount,
+                  record.rebate_amount,
+                  record.final_amount,
+                  record.cost_total,
+                  record.projected_margin,
+                  record.lock_date,
+                  record.publish_date,
+                  record.is_published,
+                  record.product_line,
+                  record.link,
+                  record.order_no
                 ]
               );
               stats.inserted += 1;
