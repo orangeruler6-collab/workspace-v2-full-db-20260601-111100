@@ -477,6 +477,10 @@ function initProfitDb(db, cb) {
     db.run('ALTER TABLE profits ADD COLUMN product_line TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN link TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN order_no TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN feishu_record_id TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN feishu_sync_status TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN feishu_synced_at INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN feishu_sync_error TEXT', function() {});
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_grp ON profits(grp)');
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_month ON profits(month)');
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_created ON profits(created_at)', cb);
@@ -613,6 +617,11 @@ function syncRecordKey(record) {
 module.exports = function createProfitRoutes(deps) {
   var runPython = deps.runPython;
 
+  function triggerFeishuProfitSync(id) {
+    if (!id || !runPython) return;
+    runPython('feishu_profit.py', 'upsert_profit', { id: id }, 90).catch(function() {});
+  }
+
   function list(body, cb) {
     var grp = normalizeGroup(body.grp);
     withProfitDb(function(err, db) {
@@ -693,9 +702,11 @@ module.exports = function createProfitRoutes(deps) {
           meta.order_no
         ],
         function(insertErr) {
+          var insertedId = this && this.lastID;
           db.close();
           if (insertErr) { cb({ error: insertErr.message }); return; }
-          cb({ id: this.lastID });
+          triggerFeishuProfitSync(insertedId);
+          cb({ id: insertedId });
         }
       );
     });
@@ -751,6 +762,7 @@ module.exports = function createProfitRoutes(deps) {
         function(updateErr) {
           db.close();
           if (updateErr) { cb({ error: updateErr.message }); return; }
+          triggerFeishuProfitSync(id);
           cb({ success: true });
         }
       );
@@ -1061,6 +1073,16 @@ module.exports = function createProfitRoutes(deps) {
     cb({ error: 'method not allowed' });
   }
 
+  function syncFeishu(body, cb) {
+    if (!runPython) { cb({ error: 'python runtime not available' }); return; }
+    runPython('feishu_profit.py', 'sync_all_profit', {
+      limit: Number(body.limit) || 0,
+      force: body.force !== false
+    }, 10 * 60).then(cb).catch(function(err) {
+      cb({ error: err && err.message || String(err) });
+    });
+  }
+
   return {
     '/api/feishu/profit': function(body, cb) {
       runPython('feishu_profit.py', 'read', {}, 60).then(cb);
@@ -1080,6 +1102,7 @@ module.exports = function createProfitRoutes(deps) {
     '/api/profits/:id': item,
     '/api/profits/stats': stats,
     '/api/profits/parse': parse,
-    '/api/profits/sync': sync
+    '/api/profits/sync': sync,
+    '/api/profits/sync-feishu': syncFeishu
   };
 };

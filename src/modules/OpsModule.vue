@@ -313,6 +313,7 @@
           <button class="btn btn-ghost btn-sm" :class="{ active: profitImportMode === 'single' }" @click="profitImportMode = 'single'">当前组导入</button>
           <button class="btn btn-ghost btn-sm" :class="{ active: profitImportMode === 'total' }" @click="profitImportMode = 'total'">总表导入</button>
           <button class="btn btn-primary btn-sm" @click="openCreateModal">手动新增</button>
+          <button class="btn btn-ghost btn-sm" :disabled="feishuSyncing" @click="syncCurrentProfitsToFeishu">{{ feishuSyncing ? '同步中...' : '同步飞书' }}</button>
         </div>
         <button class="entry-toggle" @click="entryExpanded = !entryExpanded">
           <strong>录入流水 / 导入 Excel</strong>
@@ -467,6 +468,7 @@ import {
   parseProfitFile,
   parseProfitText as parseProfitInput,
   syncProfitRecords,
+  syncProfitsToFeishu,
   updateProfit
 } from '../api/profit'
 import { GROUPS, GROUP_TARGETS, PROFIT_BUSINESS_TYPES, PROFIT_PLATFORM_OPTIONS, PROFIT_RATES, PROFIT_TYPE_LABELS } from './ops/constants'
@@ -1162,6 +1164,7 @@ async function importFromFeishu() {
 const profitText = ref('')
 const profitParsing = ref(false)
 const profitWriting = ref(false)
+const feishuSyncing = ref(false)
 const profitDragOver = ref(false)
 const profitFileName = ref('')
 const parsedRecords = ref([])
@@ -1729,6 +1732,32 @@ async function writeParsedRecords() {
   }
   profitWriting.value = false
 }
+
+async function syncCurrentProfitsToFeishu() {
+  if (feishuSyncing.value) return
+  const ok = await confirmAction({
+    title: '同步流水到飞书',
+    message: '将把本地流水数据库全量同步到飞书表格。已同步过的记录会更新，不会按按钮重复新增。',
+    confirmText: '开始同步',
+    type: 'info'
+  })
+  if (!ok) return
+  feishuSyncing.value = true
+  try {
+    const result = await syncProfitsToFeishu({ force: true })
+    if (result.error || result.code) {
+      throw new Error(result.error || result.msg || '飞书同步失败')
+    }
+    const written = Number(result.created || 0) + Number(result.updated || 0)
+    showToast(`飞书同步完成：${written} 条，失败 ${Number(result.failed || 0)} 条`, result.failed ? 'warning' : 'success')
+    if (isDepartmentView.value) await loadDepartmentData()
+    else await loadProfitData()
+  } catch (e) {
+    showToast('飞书同步失败: ' + e.message, 'error')
+  }
+  feishuSyncing.value = false
+}
+
 const handledAgentActionIds = new Set()
 
 function replyAgentAction(id, ok, message) {

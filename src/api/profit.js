@@ -39,6 +39,16 @@ export function syncProfitRecords(records, options = {}) {
   })
 }
 
+export function syncProfitsToFeishu(options = {}) {
+  return request('/api/profits/sync-feishu', {
+    method: 'POST',
+    body: {
+      limit: options.limit || 0,
+      force: options.force !== false
+    }
+  })
+}
+
 export function addProfit(record) {
   return request('/api/profits', {
     method: 'POST',
