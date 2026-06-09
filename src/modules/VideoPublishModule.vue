@@ -61,14 +61,17 @@
 
           <div v-if="videoItems.length > 1" class="video-strip">
             <button
-              v-for="item in videoItems"
+              v-for="(item, index) in videoItems"
               :key="queueId(item)"
               type="button"
               class="video-chip"
               :class="{ active: queueId(item) === activeVideoId }"
               @click="activeVideoId = queueId(item)">
-              <span>{{ item.source === 'library' ? '库' : '本' }}</span>
-              <em>{{ materialTitle(item) }}</em>
+              <span>#{{ index + 1 }}</span>
+              <em>
+                <small>{{ item.source === 'library' ? '素材库' : '本地' }}</small>
+                {{ materialTitle(item) }}
+              </em>
             </button>
           </div>
         </section>
@@ -111,6 +114,34 @@
             </button>
           </div>
 
+          <section class="copy-source-card">
+            <div class="copy-source-head">
+              <strong>批量发布文案</strong>
+              <span>当前视频按上传顺序发布，手动文案也按 #1、#2 依次匹配。</span>
+            </div>
+            <div class="copy-source-options" role="group" aria-label="选择发布文案来源">
+              <label :class="{ active: publishForm.copyMode === 'auto' }">
+                <input v-model="publishForm.copyMode" type="radio" value="auto" />
+                <span>使用上方文案 / AI 推荐</span>
+              </label>
+              <label :class="{ active: publishForm.copyMode === 'manual' }">
+                <input v-model="publishForm.copyMode" type="radio" value="manual" />
+                <span>手动批量文案</span>
+              </label>
+            </div>
+            <label v-if="publishForm.copyMode === 'manual'" class="field manual-copy-field">
+              <span>手动发布文案</span>
+              <textarea
+                v-model="publishForm.manualCopyText"
+                class="inp manual-copy-input"
+                rows="8"
+                placeholder="每条文案之间空一行，例如：&#10;第一条视频标题/文案&#10;可以多行描述&#10;&#10;第二条视频标题/文案&#10;继续写完整发布文案"></textarea>
+              <small :class="{ warn: manualCopyBlocks.length < videoItems.length }">
+                已识别 {{ manualCopyBlocks.length }} 条文案；当前 {{ videoItems.length }} 个视频。发布时按上传顺序逐条套用。
+              </small>
+            </label>
+          </section>
+
           <div v-if="publishForm.commerceEnabled" class="commerce-panel">
             <div class="commerce-panel-head">
               <div>
@@ -131,14 +162,20 @@
               </select>
             </label>
 
-            <label class="field">
-              <span>参考文案池</span>
-              <textarea
-                v-model="publishForm.commerceCopyPool"
-                class="inp commerce-copy-input"
-                rows="7"
-                placeholder="一行一条，批量发布时可轮换使用"></textarea>
-            </label>
+            <details class="commerce-reference-details">
+              <summary>
+                <span>AI 参考词 / 自动文案池</span>
+                <em>{{ commerceCopyLines().length }} 条，可展开编辑</em>
+              </summary>
+              <label class="field">
+                <span>参考文案池</span>
+                <textarea
+                  v-model="publishForm.commerceCopyPool"
+                  class="inp commerce-copy-input"
+                  rows="7"
+                  placeholder="一行一条，批量发布时可轮换使用"></textarea>
+              </label>
+            </details>
 
             <div class="commerce-action-row">
               <button type="button" class="btn btn-primary btn-sm" @click="fillDescriptionFromCommercePool">随机填入作品描述</button>
@@ -161,11 +198,6 @@
             <label class="field">
               <span>商品文案</span>
               <input v-model.trim="publishForm.commerceProductText" class="inp" placeholder="商品挂车文案" />
-            </label>
-
-            <label class="commerce-test-toggle">
-              <input v-model="publishForm.commerceTestOnly" type="checkbox" />
-              <span>测试模式：挂车完成后停在发布前</span>
             </label>
           </div>
 
@@ -297,31 +329,6 @@
           </label>
         </section>
 
-        <section class="side-card material-card">
-          <div class="section-title compact">
-            <strong>素材库导入</strong>
-            <span>辅助入口，不抢发布主流程。</span>
-          </div>
-          <div class="material-search">
-            <input v-model.trim="materialSearch" class="inp" placeholder="搜素材" @keyup.enter="loadMaterials" />
-            <button type="button" class="btn btn-ghost btn-sm" :disabled="materialLoading" @click="loadMaterials">刷新</button>
-          </div>
-          <div v-if="materialLoading" class="mini-empty">读取中</div>
-          <div v-else-if="!materials.length" class="mini-empty">暂无视频素材</div>
-          <div v-else class="material-mini-list">
-            <button
-              v-for="item in materials.slice(0, 5)"
-              :key="item.id"
-              type="button"
-              class="material-mini"
-              :class="{ active: isQueued(queueId(item)) }"
-              @click="toggleQueue(item)">
-              <span>{{ isQueued(queueId(item)) ? '✓' : '+' }}</span>
-              <em>{{ materialTitle(item) }}</em>
-            </button>
-          </div>
-        </section>
-
         <section class="side-card submit-card">
           <div class="submit-summary">
             <strong>{{ taskCount }}</strong>
@@ -364,6 +371,18 @@
             <strong>发布历史</strong>
             <span>这里保留每个平台的发布结果；失败记录可直接重试。</span>
           </div>
+          <div class="queue-status-bar" :class="{ paused: queueStatus.paused }">
+            <div>
+              <strong>{{ queueStatus.paused ? '定时队列已暂停' : '定时队列运行中' }}</strong>
+              <small>
+                待执行 {{ queueStatus.scheduled_count }} 条
+                <template v-if="queueStatus.next_scheduled_at"> · 下次 {{ formatJobTime(queueStatus.next_scheduled_at) }}</template>
+              </small>
+            </div>
+            <button type="button" class="btn btn-ghost btn-xs" :disabled="queueStatusBusy" @click="toggleQueuePaused">
+              {{ queueStatusBusy ? '处理中' : (queueStatus.paused ? '恢复' : '暂停') }}
+            </button>
+          </div>
           <div v-if="!recentJobs.length" class="mini-empty">暂无发布历史</div>
           <div v-else class="job-mini-list">
             <div v-for="job in recentJobs.slice(0, 12)" :key="job.id" class="job-mini">
@@ -401,10 +420,12 @@ import {
   checkVideoPublishLogin,
   checkVideoPublishJob,
   createVideoPublishJobs,
+  getVideoPublishQueueStatus,
   launchVideoPublishProfile,
   listVideoPublishAccounts,
   listVideoPublishJobs,
   openVideoPublishLogin,
+  pauseVideoPublishQueue,
   runVideoPublishJob,
   saveVideoPublishAccount,
   transcribeVideoPublishVideo,
@@ -479,28 +500,30 @@ const fashionCommerceDefaults = {
   productText: '逆水寒时装穿搭',
   productUrl: 'https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html?id=3771945132543312023&origin_type=pc_buyin_selection_decision',
   descriptionPool: [
-    '\u8fd9\u5957\u771f\u7684\u4ed9\u54c1',
-    '\u8c01\u770b\u4e86\u4e0d\u5fc3\u52a8',
-    '\u8fd9\u8eab\u7a7f\u642d\u7edd\u4e86',
-    '\u5343\u4e07\u522b\u7728\u773c',
-    '\u76f4\u63a5\u7f8e\u5230\u53d1\u5149'
+    '这套真的仙品',
+    '谁看了不心动',
+    '这身穿搭绝了',
+    '千万别眨眼',
+    '直接美到发光'
   ].join('\n'),
   copyPool: [
     '买不了吃亏买不了上当',
     '这谁忍得住！',
     '这套衣服简直仙品来的',
-    '千万别眨眼！'
+    '千万别眨眼！',
+    '美哉美哉',
+    '换个风格飒气拉满',
+    '新时装简直细节怪',
+    '这个动作模板太帅了',
+    '仙气直接拉满',
+    '一眼就心动了',
+    '这套安排上',
+    '穿搭灵感来了',
+    '今天换套仙的',
+    '这身直接封神',
+    '这波衣品在线'
   ].join('\n')
 }
-
-fashionCommerceDefaults.copyPool += '\n' + [
-  '美哉美哉',
-  '换个风格飒气拉满',
-  '新时装简直细节怪',
-  '这个动作模板太帅了',
-  '千万别眨眼'
-].join('\n')
-
 const commercePresets = {
   chisel: chiselCommerceDefaults,
   fashion: fashionCommerceDefaults
@@ -619,6 +642,14 @@ const activePublishJobId = ref(0)
 const checkingJobId = ref(0)
 const cancellingJobId = ref(0)
 const publishStopRequested = ref(false)
+const queueStatus = reactive({
+  paused: false,
+  running: false,
+  scheduled_count: 0,
+  next_scheduled_at: 0,
+  publishing_count: 0
+})
+const queueStatusBusy = ref(false)
 let recentJobsTimer = 0
 const publishActivity = reactive({
   title: '待开始',
@@ -636,12 +667,13 @@ const publishForm = reactive({
   title: '',
   description: '',
   tags: '',
+  copyMode: 'auto',
+  manualCopyText: '',
   commerceEnabled: false,
   commercePreset: chiselCommerceDefaults.id,
   commerceCopyPool: chiselCommerceDefaults.copyPool,
   commerceProductUrl: chiselCommerceDefaults.productUrl,
   commerceProductText: chiselCommerceDefaults.productText,
-  commerceTestOnly: false,
   coverMode: 'auto',
   visibility: 'public',
   publishTime: 'now',
@@ -672,6 +704,7 @@ const selectedPlatformLabels = computed(() => selectedPlatforms.value.map(platfo
 const activeVideo = computed(() => videoItems.value.find(item => queueId(item) === activeVideoId.value) || videoItems.value[0] || null)
 const activeCommercePreset = computed(() => commercePresets[publishForm.commercePreset] || chiselCommerceDefaults)
 const commerceCopyQueueRemaining = computed(() => commerceQueueForPreset(activeCommercePreset.value.id).length)
+const manualCopyBlocks = computed(() => parseManualCopyBlocks(publishForm.manualCopyText))
 const taskCount = computed(() => videoItems.value.length * selectedPlatformIds.value.length)
 const taskCountLabel = computed(() => {
   if (publishForm.queueEnabled) return '本次将加入定时队列的记录'
@@ -718,10 +751,14 @@ function commerceQueueForPreset(presetId) {
   return Array.isArray(commerceCopyQueue.value[presetId]) ? commerceCopyQueue.value[presetId] : []
 }
 
+function isCorruptedCommerceCopy(value) {
+  return /^\?+$/.test(String(value || '').trim())
+}
+
 function saveCommerceQueue(presetId, queue) {
   const cleaned = Array.from(new Set((Array.isArray(queue) ? queue : [])
     .map(item => cleanCommerceCopy(item))
-    .filter(Boolean)))
+    .filter(item => item && !isCorruptedCommerceCopy(item))))
   commerceCopyQueue.value = { ...commerceCopyQueue.value, [presetId]: cleaned }
   try {
     window.localStorage.setItem(commerceQueueStorageKey(presetId), JSON.stringify(cleaned))
@@ -751,8 +788,13 @@ function commerceManualLinesForPreset(presetId) {
 }
 
 function commerceGeneratedCopyCandidates(presetId) {
-  if (presetId === 'fashion') {
-    return [
+  const preset = commercePresets[presetId] || chiselCommerceDefaults
+  const base = String(preset.copyPool || '')
+    .split(/\r?\n/)
+    .map(item => item.trim())
+    .filter(Boolean)
+  const extras = presetId === 'fashion'
+    ? [
       '这套谁能忍住',
       '仙品穿搭来了',
       '千万别眨眼',
@@ -769,51 +811,20 @@ function commerceGeneratedCopyCandidates(presetId) {
       '一眼就心动了',
       '这套安排上'
     ]
-  }
-  return [
-    '10块试试欧气',
-    '今天凿子开抽',
-    '这发能不能出',
-    '祥瑞给我出来',
-    '凿子欧气实测',
-    '一发入魂看看',
-    '这波搏一手',
-    '抽卡道具开测',
-    '欧气今天在吗',
-    '凿子真香时刻',
-    '十块快乐来了',
-    '主包要出货了',
-    '祥瑞别躲了',
-    '这凿子有说法',
-    '开凿子看脸',
-    '今天就赌欧气',
-    '十块搏个惊喜',
-    '凿子安排上',
-    '出货现场来了',
-    '这次有点玄学',
-    '快把欧气给我',
-    '来接凿子欧气',
-    '小小祥瑞拿下',
-    '这波手气来了',
-    '凿子黑不黑实测',
-    '今晚欧气开张',
-    '抽祥瑞就现在',
-    '这凿子能出吗',
-    '十块开个惊喜',
-    '欧气别跑',
-    '凿子出货挑战',
-    '今天看脸开抽',
-    '祥瑞让我看看',
-    '十块欧气局',
-    '开抽前先许愿',
-    '这波有点期待',
-    '凿子玄学来了',
-    '欧气测试开始',
-    '祥瑞来不来',
-    '十块快乐实测'
-  ]
+    : [
+      '凿子出货挑战',
+      '今天看脸开抽',
+      '祥瑞让我看看',
+      '十块欧气局',
+      '开抽前先许愿',
+      '这波有点期待',
+      '凿子玄学来了',
+      '欧气测试开始',
+      '祥瑞来不来',
+      '十块快乐实测'
+    ]
+  return Array.from(new Set([...base, ...extras]))
 }
-
 function shuffledCommerceCopies(presetId, batchSize = 20) {
   const queue = commerceQueueForPreset(presetId)
   const candidates = [...commerceManualLinesForPreset(presetId), ...commerceGeneratedCopyCandidates(presetId)]
@@ -899,13 +910,59 @@ function commerceDescriptionLines() {
     .filter(Boolean)
 }
 
+function parseManualCopyBlocks(value) {
+  return String(value || '')
+    .split(/\r?\n\s*\r?\n+/)
+    .map(block => block.trim())
+    .filter(Boolean)
+}
+
+function manualCopyTitle(block) {
+  const firstLine = String(block || '').split(/\r?\n/).map(line => line.trim()).find(Boolean) || ''
+  return Array.from(firstLine.replace(/^标题[:：]\s*/, '')).slice(0, 30).join('')
+}
+
+function applyManualCopiesToVideos(items, startIndex = 0) {
+  if (publishForm.copyMode !== 'manual') return items
+  const blocks = manualCopyBlocks.value
+  const nextItems = items.map((item, index) => {
+    const block = blocks[startIndex + index]
+    if (!block) return item
+    return {
+      ...item,
+      title: manualCopyTitle(block) || item.title || materialTitle(item),
+      description: block
+    }
+  })
+  const first = nextItems[0]
+  if (first?.title) publishForm.title = first.title
+  if (first?.description) publishForm.description = first.description
+  aiSource.value = 'fallback'
+  aiHint.value = `已按上传顺序匹配 ${Math.min(blocks.length, videoItems.value.length)} 条手动文案。`
+  return nextItems
+}
+
+function validateManualCopyForm() {
+  if (publishForm.copyMode !== 'manual') return true
+  const count = manualCopyBlocks.value.length
+  if (!count) {
+    showToast('请填写手动发布文案，文案之间用空行分隔', 'warning')
+    return false
+  }
+  if (count < videoItems.value.length) {
+    showToast(`手动文案只有 ${count} 条，当前有 ${videoItems.value.length} 个视频，请补齐后再发布`, 'warning')
+    return false
+  }
+  return true
+}
+
 function pickCommerceCopy() {
   const lines = commerceCopyLines()
   if (!lines.length) return ''
   return lines[Math.floor(Math.random() * lines.length)]
 }
 
-function cleanCommerceCopy(value, max = 15) {
+function cleanCommerceCopy(value, max = 20) {
   return Array.from(String(value || '').trim().replace(/\s+/g, ' ')).slice(0, max).join('')
 }
 
@@ -954,11 +1011,15 @@ function applyCommerceCopiesToVideos(items) {
   let firstTitle = ''
   let firstDescription = ''
   const withCopy = items.map((item, index) => {
-    const generated = takeCommerceQueuedCopy(activeCommercePreset.value.id)
-      || commerceCopyForIndex(index)
-      || cleanCommerceCopy(activeCommercePreset.value.copyPool.split(/\r?\n/)[0])
-    const title = manualTitle || generated
-    const description = manualDescription || commerceDescriptionForIndex(index, title)
+    const itemTitle = String(item.title || '').trim()
+    const itemDescription = String(item.description || '').trim()
+    const generated = itemTitle && itemDescription
+      ? ''
+      : takeCommerceQueuedCopy(activeCommercePreset.value.id)
+        || commerceCopyForIndex(index)
+        || cleanCommerceCopy(activeCommercePreset.value.copyPool.split(/\r?\n/)[0])
+    const title = itemTitle || manualTitle || generated
+    const description = itemDescription || manualDescription || commerceDescriptionForIndex(index, title)
     if (!firstTitle) firstTitle = title
     if (!firstDescription) firstDescription = description
     return { ...item, title, description }
@@ -1026,8 +1087,7 @@ function commerceOptionsForJob() {
     productUrl: publishForm.commerceProductUrl,
     productText: publishForm.commerceProductText,
     tagsRaw: publishForm.tags,
-    copyPool: commerceCopyLines(),
-    skipFinalPublish: Boolean(publishForm.commerceTestOnly)
+    copyPool: commerceCopyLines()
   }
 }
 
@@ -1573,9 +1633,40 @@ async function loadRecentJobs() {
   try {
     const data = await listVideoPublishJobs({ limit: 20 })
     recentJobs.value = data.jobs || []
+    loadQueueStatus()
     syncPublishingStateFromJobs()
   } catch (e) {
     recentJobs.value = []
+  }
+}
+
+async function loadQueueStatus() {
+  try {
+    const data = await getVideoPublishQueueStatus()
+    if (data && data.ok !== false) {
+      queueStatus.paused = Boolean(data.paused)
+      queueStatus.running = Boolean(data.running)
+      queueStatus.scheduled_count = Number(data.scheduled_count) || 0
+      queueStatus.next_scheduled_at = Number(data.next_scheduled_at) || 0
+      queueStatus.publishing_count = Number(data.publishing_count) || 0
+    }
+  } catch {
+    // Queue status is auxiliary; recent jobs remain the source of truth.
+  }
+}
+
+async function toggleQueuePaused() {
+  queueStatusBusy.value = true
+  try {
+    const nextPaused = !queueStatus.paused
+    const data = await pauseVideoPublishQueue(nextPaused)
+    queueStatus.paused = Boolean(data.paused)
+    await loadRecentJobs()
+    showToast(queueStatus.paused ? '定时队列已暂停' : '定时队列已恢复', queueStatus.paused ? 'warning' : 'success')
+  } catch (e) {
+    showToast('定时队列状态更新失败：' + (e.message || '未知错误'), 'error')
+  } finally {
+    queueStatusBusy.value = false
   }
 }
 
@@ -1848,6 +1939,7 @@ async function publishNow() {
   }
   if (!validateCommerceForm()) return
   if (!validateQueueForm()) return
+  if (!validateManualCopyForm()) return
   const queueMode = Boolean(publishForm.queueEnabled)
   publishingNow.value = true
   publishStopRequested.value = false
@@ -1856,7 +1948,7 @@ async function publishNow() {
   setPublishActivity(queueMode ? '准备入队' : '准备发布', '正在整理视频、账号和平台信息', 10, 'active')
   pushPublishEvent(`${queueMode ? '开始入队' : '开始发布'}：${selectedPlatforms.value.map(item => item.name).join(' / ')}`)
   try {
-    if (!publishForm.title && !publishForm.description && !publishForm.tags) {
+    if (publishForm.copyMode !== 'manual' && !publishForm.title && !publishForm.description && !publishForm.tags) {
       await recommendPublishCopy()
     }
     if (!queueMode) {
@@ -1873,7 +1965,7 @@ async function publishNow() {
       for (let i = 0; i < total; i += 1) {
         if (publishStopRequested.value) break
         await waitWhilePublishPaused(i, total)
-        const preparedVideo = applyCommerceCopiesToVideos([await prepareOneVideoForJob(videoItems.value[i], i, total)])[0]
+        const preparedVideo = applyCommerceCopiesToVideos(applyManualCopiesToVideos([await prepareOneVideoForJob(videoItems.value[i], i, total)], i))[0]
         if (publishStopRequested.value) break
         publishingText.value = `创建任务 ${i + 1}/${total}`
         setPublishActivity('创建发布任务', `正在写入第 ${i + 1}/${total} 条发布记录`, 45, 'active')
@@ -1916,7 +2008,7 @@ async function publishNow() {
       })
       return
     }
-    const preparedVideos = applyCommerceCopiesToVideos(await prepareVideosForJobs())
+    const preparedVideos = applyCommerceCopiesToVideos(applyManualCopiesToVideos(await prepareVideosForJobs()))
     publishingText.value = '确认账号'
     setPublishActivity('确认账号', '正在确认已选平台 Profile 绑定', 35, 'active')
     await ensureSelectedBindings()
@@ -2047,7 +2139,6 @@ async function publishNow() {
 onMounted(() => {
   Object.keys(commercePresets).forEach(id => loadCommerceQueue(id))
   ensureCommerceCopyQueue(publishForm.commercePreset, 3, 20)
-  loadMaterials()
   loadRecentJobs()
   loadPublishAccounts()
   recentJobsTimer = window.setInterval(loadRecentJobs, 3000)
@@ -2330,6 +2421,14 @@ watch(() => props.trafficContext, payload => {
   font-size: 12px;
 }
 
+.video-chip em small {
+  display: block;
+  margin-bottom: 1px;
+  color: var(--text-muted);
+  font-size: 10px;
+  font-style: normal;
+}
+
 .field {
   display: grid;
   gap: 6px;
@@ -2362,6 +2461,74 @@ watch(() => props.trafficContext, payload => {
   margin-bottom: 12px;
   height: 36px;
   white-space: nowrap;
+}
+
+.copy-source-card {
+  display: grid;
+  gap: 10px;
+  margin: 0 0 14px;
+  padding: 12px;
+  border: 1px solid var(--chip-border, var(--border));
+  border-radius: 10px;
+  background: var(--panel-bg-soft);
+}
+
+.copy-source-head {
+  display: grid;
+  gap: 3px;
+}
+
+.copy-source-head strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.copy-source-head span,
+.manual-copy-field small {
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.manual-copy-field small.warn {
+  color: var(--warning-text, #a16207);
+}
+
+.copy-source-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.copy-source-options label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 8px 10px;
+  border: 1px solid var(--chip-border, var(--border));
+  border-radius: 8px;
+  background: var(--card-bg);
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.copy-source-options label.active {
+  border-color: var(--success-border);
+  color: var(--success-text);
+  background: var(--success-bg);
+}
+
+.manual-copy-field {
+  margin-bottom: 0;
+}
+
+.manual-copy-input {
+  min-height: 176px;
+  resize: vertical;
+  line-height: 1.55;
 }
 
 .commerce-mode-bar {
@@ -2408,6 +2575,35 @@ watch(() => props.trafficContext, payload => {
 
 .commerce-panel .field {
   margin-bottom: 0;
+}
+
+.commerce-reference-details {
+  border: 1px solid var(--chip-border, var(--border));
+  border-radius: 8px;
+  background: var(--card-bg);
+}
+
+.commerce-reference-details summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.commerce-reference-details summary em {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 650;
+}
+
+.commerce-reference-details .field {
+  padding: 0 12px 12px;
 }
 
 .commerce-panel-head,
@@ -3040,6 +3236,38 @@ watch(() => props.trafficContext, payload => {
 .job-status.bad {
   color: var(--danger-text, #b91c1c);
   background: var(--danger-bg, #fee2e2);
+}
+
+.queue-status-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-soft, rgba(15, 23, 42, 0.04));
+}
+
+.queue-status-bar div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.queue-status-bar strong {
+  font-size: 12px;
+}
+
+.queue-status-bar small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.queue-status-bar.paused {
+  border-color: rgba(185, 28, 28, 0.26);
+  background: rgba(185, 28, 28, 0.06);
 }
 
 .btn-xs {

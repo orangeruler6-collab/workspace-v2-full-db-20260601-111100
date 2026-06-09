@@ -29,6 +29,27 @@ export function editGptImage(payload, signal) {
   })
 }
 
+export function createGptImageTask(payload) {
+  return request('/api/gpt-image2/tasks', {
+    method: 'POST',
+    body: payload
+  })
+}
+
+export function listGptImageTasks(limit = 20) {
+  return request('/api/gpt-image2/tasks', {
+    method: 'POST',
+    body: { action: 'list', limit }
+  })
+}
+
+export function getGptImageTaskStatus(ids = []) {
+  return request('/api/gpt-image2/tasks/status', {
+    method: 'POST',
+    body: { ids }
+  })
+}
+
 export function generateGptImageFast(payload) {
   return request('/api/gpt-image2/text2image', {
     method: 'POST',

@@ -68,24 +68,6 @@
   white-space: nowrap;
 }
 
-.writer-account-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
-}
-
-.custom-account-modal {
-  width: min(720px, calc(100vw - 32px));
-}
-
-.custom-account-form textarea {
-  resize: vertical;
-}
-
 .writer-content-grid {
   display: grid;
   grid-template-columns: minmax(340px, 0.95fr) minmax(420px, 1.05fr);

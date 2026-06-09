@@ -5,8 +5,10 @@ import json
 import mimetypes
 import os
 import ssl
+import subprocess
 import sys
 import time
+import tempfile
 import urllib.error
 import urllib.request
 
@@ -15,6 +17,8 @@ from env import load_env
 load_env()
 
 ctx = ssl.create_default_context()
+if hasattr(ssl, "OP_IGNORE_UNEXPECTED_EOF"):
+    ctx.options |= ssl.OP_IGNORE_UNEXPECTED_EOF
 BASE_URL = (
     os.environ.get("SUB2API_BASE_URL")
     or os.environ.get("GPT_IMAGE2_BASE_URL")
@@ -155,6 +159,34 @@ def build_generation_request(base_url, prompt, size, headers, quality, backgroun
     )
 
 
+def parse_image_response(raw, base_url, proxy, ssl_verify):
+    result = json.loads(raw)
+    images_out = [item.get("b64_json", "") for item in result.get("data", []) if item.get("b64_json")]
+    if images_out:
+        return {
+            "url": "data:image/png;base64," + images_out[0],
+            "count": len(images_out),
+            "created": result.get("created"),
+            "usage": result.get("usage"),
+            "revised_prompt": (result.get("data") or [{}])[0].get("revised_prompt", ""),
+            "provider_base_url": base_url,
+            "provider_proxy": bool(proxy),
+            "ssl_verify": ssl_verify,
+        }
+    urls = [item.get("url", "") for item in result.get("data", []) if item.get("url")]
+    if urls:
+        return {
+            "url": urls[0],
+            "count": len(urls),
+            "created": result.get("created"),
+            "usage": result.get("usage"),
+            "provider_base_url": base_url,
+            "provider_proxy": bool(proxy),
+            "ssl_verify": ssl_verify,
+        }
+    return {"error": "no image in response", "raw": raw[:800]}
+
+
 def open_request(req, timeout, proxy="", ssl_verify=True):
     proxy = str(proxy or "").strip()
     context = ctx if ssl_verify else ssl._create_unverified_context()
@@ -169,6 +201,89 @@ def open_request(req, timeout, proxy="", ssl_verify=True):
     return opener.open(req, timeout=timeout)
 
 
+def request_with_curl(base_url, key, prompt, images, size, quality, background, output_format, timeout, proxy, ssl_verify):
+    temp_files = []
+    out_file = None
+    try:
+        args = [
+            "curl.exe",
+            "-sS",
+            "--connect-timeout",
+            "30",
+            "--max-time",
+            str(max(60, int(timeout))),
+            "-X",
+            "POST",
+            base_url + ("/images/edits" if images else "/images/generations"),
+            "-H",
+            "Authorization: Bearer " + key,
+        ]
+        if proxy:
+            args.extend(["-x", proxy])
+        if not ssl_verify:
+            args.append("-k")
+        out_fd, out_file = tempfile.mkstemp(prefix="gpt_image2_curl_", suffix=".json")
+        os.close(out_fd)
+        args.extend(["-o", out_file])
+
+        if images:
+            args.extend([
+                "-F", "model=" + MODEL,
+                "-F", "prompt=" + prompt,
+                "-F", "size=" + size,
+                "-F", "quality=" + quality,
+                "-F", "response_format=b64_json",
+            ])
+            if background:
+                args.extend(["-F", "background=" + str(background)])
+            if output_format:
+                args.extend(["-F", "output_format=" + str(output_format)])
+            for index, image in enumerate(images):
+                suffix = mimetypes.guess_extension(image.get("mime") or "image/png") or ".png"
+                fd, image_path = tempfile.mkstemp(prefix="gpt_image2_ref_", suffix=suffix)
+                os.close(fd)
+                with open(image_path, "wb") as f:
+                    f.write(base64.b64decode(image["base64"], validate=False))
+                temp_files.append(image_path)
+                args.extend(["-F", f"image=@{image_path};type={image.get('mime') or 'image/png'}"])
+        else:
+            payload = {
+                "model": MODEL,
+                "prompt": prompt,
+                "size": size,
+                "quality": quality,
+                "n": 1,
+                "response_format": "b64_json",
+            }
+            if background:
+                payload["background"] = background
+            if output_format:
+                payload["output_format"] = output_format
+            args.extend(["-H", "Content-Type: application/json", "-d", json.dumps(payload, ensure_ascii=True)])
+
+        completed = subprocess.run(args, capture_output=True, text=True, timeout=max(90, int(timeout) + 20))
+        raw = ""
+        if out_file and os.path.exists(out_file):
+            with open(out_file, "r", encoding="utf-8", errors="replace") as f:
+                raw = f.read()
+        parsed = parse_image_response(raw, base_url, proxy, ssl_verify) if raw else {"error": ""}
+        if completed.returncode != 0 and not parsed.get("url"):
+            detail = (completed.stderr or completed.stdout or raw or "").strip()
+            return {"error": detail[:800] or ("curl exited with code " + str(completed.returncode))}
+        return parsed
+    finally:
+        for file_path in temp_files:
+            try:
+                os.unlink(file_path)
+            except Exception:
+                pass
+        if out_file:
+            try:
+                os.unlink(out_file)
+            except Exception:
+                pass
+
+
 def generate(prompt, image_base64=None, size="1024x1024", api_key=None, max_retries=None, options=None):
     key = api_key or os.environ.get("GPT_IMAGE2_KEY") or os.environ.get("IMAGE_API_KEY") or ""
     if not key:
@@ -178,7 +293,10 @@ def generate(prompt, image_base64=None, size="1024x1024", api_key=None, max_retr
     options = options or {}
     headers = {"Authorization": "Bearer " + key}
     base_url = str(options.get("base_url") or BASE_URL).rstrip("/")
-    proxy = str(options.get("proxy") or os.environ.get("GPT_IMAGE2_PROXY") or "").strip()
+    if "proxy" in options and options.get("proxy") is not None:
+        proxy = str(options.get("proxy") or "").strip()
+    else:
+        proxy = str(os.environ.get("GPT_IMAGE2_PROXY") or "").strip()
     ssl_verify = str(options.get("ssl_verify") if options.get("ssl_verify") is not None else os.environ.get("GPT_IMAGE2_SSL_VERIFY", "true")).lower() not in {"0", "false", "no", "off"}
     quality = str(options.get("quality") or os.environ.get("GPT_IMAGE2_QUALITY") or "auto")
     background = options.get("background") or ""
@@ -192,33 +310,19 @@ def generate(prompt, image_base64=None, size="1024x1024", api_key=None, max_retr
     for attempt in range(max_retries):
         try:
             if images:
+                if proxy:
+                    result = request_with_curl(base_url, key, prompt, images, size, quality, background, output_format, REQUEST_TIMEOUT, proxy, ssl_verify)
+                    if result.get("error"):
+                        raise RuntimeError(result.get("error"))
+                    emit(result)
+                    return
                 req = build_edit_request(base_url, prompt, images, size, headers, quality, background, output_format)
             else:
                 req = build_generation_request(base_url, prompt, size, headers, quality, background, output_format)
 
             with open_request(req, REQUEST_TIMEOUT, proxy, ssl_verify) as resp:
                 raw = resp.read().decode("utf-8")
-                result = json.loads(raw)
-                images_out = [item.get("b64_json", "") for item in result.get("data", []) if item.get("b64_json")]
-                if images_out:
-                    emit(
-                        {
-                            "url": "data:image/png;base64," + images_out[0],
-                            "count": len(images_out),
-                            "created": result.get("created"),
-                            "usage": result.get("usage"),
-                            "revised_prompt": (result.get("data") or [{}])[0].get("revised_prompt", ""),
-                            "provider_base_url": base_url,
-                            "provider_proxy": bool(proxy),
-                            "ssl_verify": ssl_verify,
-                        }
-                    )
-                    return
-                urls = [item.get("url", "") for item in result.get("data", []) if item.get("url")]
-                if urls:
-                    emit({"url": urls[0], "count": len(urls), "created": result.get("created"), "usage": result.get("usage"), "provider_base_url": base_url, "provider_proxy": bool(proxy), "ssl_verify": ssl_verify})
-                    return
-                emit({"error": "no image in response", "raw": raw[:800]})
+                emit(parse_image_response(raw, base_url, proxy, ssl_verify))
                 return
 
         except urllib.error.HTTPError as error:
@@ -253,7 +357,7 @@ if __name__ == "__main__":
         emit({"error": "no params file"})
         sys.exit(0)
     try:
-        with open(sys.argv[1], "r", encoding="utf-8") as f:
+        with open(sys.argv[1], "r", encoding="utf-8-sig") as f:
             wrapper = json.load(f)
         params = wrapper.get("params", wrapper)
         prompt = params.get("prompt", "")

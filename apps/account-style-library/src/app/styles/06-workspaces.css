@@ -87,6 +87,19 @@
   background: color-mix(in oklch, var(--blue-soft) 58%, var(--panel));
 }
 
+.library-quick-actions .library-custom-account-trigger {
+  min-height: 36px;
+  white-space: nowrap;
+}
+
+.custom-account-modal {
+  width: min(720px, calc(100vw - 32px));
+}
+
+.custom-account-form textarea {
+  resize: vertical;
+}
+
 .environment-modal {
   width: min(620px, 100%);
 }

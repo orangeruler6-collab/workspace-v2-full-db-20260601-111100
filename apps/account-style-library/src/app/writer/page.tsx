@@ -3,7 +3,6 @@
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BookOpen, Copy, Eye, FileUp, Globe2, MessageSquarePlus, Plus, RotateCcw, Send, Trash2 } from "lucide-react";
-import { CustomAccountModal } from "./_components/CustomAccountModal";
 import { FeishuResultModal } from "./_components/FeishuResultModal";
 import { WriterHistoryPanel } from "./_components/WriterHistoryPanel";
 import { WriterGuideModal } from "./_components/WriterGuideModal";
@@ -17,7 +16,7 @@ import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import { createCustomAccount, deleteAccounts, getDrafts } from "@/lib/client";
+import { getDrafts } from "@/lib/client";
 import { buildWriterDraftHref } from "@/lib/draft-links";
 import { extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
 import type { Draft } from "@/lib/types";
@@ -55,7 +54,6 @@ function WriterPageContent() {
   const [notice, setNotice] = useState("");
   const [guideOpen, setGuideOpen] = useState(false);
   const [styleOpen, setStyleOpen] = useState(false);
-  const [customAccountOpen, setCustomAccountOpen] = useState(false);
   const [fullDrafts, setFullDrafts] = useState<Draft[] | null>(null);
   const [revisionPreview, setRevisionPreview] = useState<RevisionPreviewSegment[]>([]);
   const [selectionRewrite, setSelectionRewrite] = useState<{
@@ -238,43 +236,6 @@ function WriterPageContent() {
     router.replace("/writer", { scroll: false });
   }, [resetDraftState, router, setFeishuResult]);
 
-  const handleCreateCustomAccount = useCallback(
-    async (input: { platform: "bilibili" | "douyin"; name: string; customLinks: string[]; styleText?: string }) => {
-      setBusy("custom-account");
-      try {
-        const account = await createCustomAccount(input);
-        setAccountId(account.id);
-        setTargetType("account");
-        setCustomAccountOpen(false);
-        await refresh();
-        setNotice(`已创建自定义账号：${account.name}`);
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : "自定义账号保存失败");
-      } finally {
-        setBusy("");
-      }
-    },
-    [refresh]
-  );
-
-  const handleDeleteSelectedAccount = useCallback(async () => {
-    if (!selectedAccount || busy) return;
-    const ok = window.confirm(`确定删除账号“${selectedAccount.name}”吗？会删除它的本地风格、链接样本和草稿。`);
-    if (!ok) return;
-    setBusy("account-delete");
-    try {
-      await deleteAccounts([selectedAccount.id]);
-      const nextAccount = library?.accounts.find((account) => account.id !== selectedAccount.id) || null;
-      setAccountId(nextAccount?.id || "");
-      await refresh();
-      setNotice(`已删除账号：${selectedAccount.name}`);
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "账号删除失败");
-    } finally {
-      setBusy("");
-    }
-  }, [busy, library?.accounts, refresh, selectedAccount]);
-
   const insertMentionAtQuery = useCallback(
     (label: string) => {
       const mention = `@${label}`;
@@ -395,17 +356,6 @@ function WriterPageContent() {
             <button className="btn writer-style-trigger" disabled={!activeStyle} onClick={() => setStyleOpen(true)} type="button">
               <Eye aria-hidden="true" size={16} />
               查看风格卡
-            </button>
-          </div>
-
-          <div className="writer-account-actions">
-            <button className="btn" onClick={() => setCustomAccountOpen(true)} type="button">
-              <Plus aria-hidden="true" size={16} />
-              自定义账号
-            </button>
-            <button className="btn" disabled={!selectedAccount || busy === "account-delete"} onClick={handleDeleteSelectedAccount} type="button">
-              <Trash2 aria-hidden="true" size={16} />
-              删除账号
             </button>
           </div>
 
@@ -647,14 +597,6 @@ function WriterPageContent() {
       ) : null}
 
       {guideOpen ? <WriterGuideModal onClose={() => setGuideOpen(false)} /> : null}
-
-      {customAccountOpen ? (
-        <CustomAccountModal
-          busy={busy === "custom-account"}
-          onClose={() => setCustomAccountOpen(false)}
-          onSubmit={handleCreateCustomAccount}
-        />
-      ) : null}
 
       {feishuResult ? (
         <FeishuResultModal result={feishuResult} onClose={() => setFeishuResult(null)} />

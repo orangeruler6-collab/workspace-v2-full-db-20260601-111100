@@ -3,6 +3,15 @@ export const MODULE_DEFINITIONS = [
   { id: 'trafficPlan', label: '投流计划', icon: '◆' },
   { id: 'dailyhot', label: '每日热点', icon: '🔥' },
   {
+    id: 'accountDataWorkbench',
+    label: '账号数据看板',
+    icon: '📈',
+    children: [
+      { id: 'accountDataDashboard', label: '数据看板', icon: '图' },
+      { id: 'accountDataAccounts', label: '账号池', icon: '库' }
+    ]
+  },
+  {
     id: 'copyWorkbench',
     label: '文案工作台',
     icon: '✍️',

@@ -282,6 +282,8 @@ import usagiLoginImage from './assets/usagi-ai-pet.png'
 // 懒加载模块 - 减少首屏加载体积
 const ImagegenModule = defineAsyncComponent(() => import('./modules/ImagegenModule.vue'))
 const AccountMonitorModule = defineAsyncComponent(() => import('./modules/AccountMonitorModule.vue'))
+const AccountDataDashboardModule = defineAsyncComponent(() => import('./modules/AccountDataDashboardModule.vue'))
+const AccountDataAccountsModule = defineAsyncComponent(() => import('./modules/AccountDataAccountsModule.vue'))
 const IdeaBoardModule = defineAsyncComponent(() => import('./modules/IdeaBoardModule.vue'))
 const SmartCollectModule = defineAsyncComponent(() => import('./modules/SmartCollectModule.vue'))
 const MaterialModule = defineAsyncComponent(() => import('./modules/MaterialModule.vue'))
@@ -310,35 +312,36 @@ const AUTH_DISABLED_USER = {
 }
 
 const DEFAULT_MODULE = 'accountmonitor'
-const UPDATE_ANNOUNCEMENT_VERSION = '2026-05-27-video-publish-public-beta'
+const UPDATE_ANNOUNCEMENT_VERSION = '2026-06-09-imagegen-recovered'
 const UPDATE_ANNOUNCEMENT_KEY = 'usagi_update_announcement_seen_version'
 const updateAnnouncement = {
-  versionLabel: '发布模块公测',
-  title: '发布模块已完成公测',
-  subtitle: '目前发布模块已完成公测，除视频号外，其余平台均可完成发布；视频号仍在适配登录态和平台校验。',
+  versionLabel: 'AI 生图恢复',
+  title: 'AI 生图图生图能力已恢复',
+  subtitle: '本次主要修复 GPT-Image2 图生图链路的稳定性问题。当前主线路已恢复可用，图生图任务会自动排队串行执行，刷新页面后仍可在历史记录中查看结果。',
   items: [
     {
       icon: '✅',
-      title: '已支持正常发布',
-      desc: 'B站、抖音、快手、小红书已完成发布链路公测，选择账号和平台后可以直接执行发布。'
+      title: '主线路图生图已恢复',
+      desc: '主线路已完成图生图实测，成功结果会自动落盘并写入历史记录。遇到偶发上游超时，可重新提交。'
     },
     {
       icon: '⏳',
-      title: '视频号继续适配',
-      desc: '视频号登录态和平台校验更严格，目前仍在适配中，暂不作为稳定发布平台。'
+      title: '生成任务改为稳定排队',
+      desc: '图生图上游不适合并发请求，因此系统现在会自动串行处理任务，避免同时提交两张导致 504 或超时。'
     },
     {
-      icon: '👤',
-      title: '新增账号联系很聪明',
-      desc: '如需添加新的发布账号，请联系很聪明处理账号资料和发布 Profile 绑定。'
+      icon: '🛠️',
+      title: '修复历史不落盘与后端掉线',
+      desc: '参考图数据不再直接写入数据库，改为任务文件保存，降低大图请求导致后端掉线的风险。'
     },
     {
       icon: '📌',
-      title: '当前账号范围',
-      desc: '当前已接入天机妹、麦晓花两套发布账号，其他未绑定 Profile 的占位账号已清理。'
+      title: '原线路仍建议备用',
+      desc: '原线路当前仍存在连接中止问题，建议优先使用主线路；需要排查时再手动切换。'
     }
   ],
   history: [
+    { version: 'AI 生图恢复', title: '主线路图生图恢复，任务改为串行队列' },
     { version: '发布模块公测', title: 'B站、抖音、快手、小红书发布链路可用' },
     { version: 'V3', title: '维护测算、分期拆量、申请文本生成' },
     { version: 'V2', title: '数据维护入口与账号标准查询' }
@@ -368,6 +371,8 @@ const { getActiveModuleComponent, getActiveModuleKey, getStyleWorkbenchPath, isV
   WorkflowModule,
   DailyHotModule,
   AccountMonitorModule,
+  AccountDataDashboardModule,
+  AccountDataAccountsModule,
   StyleWorkbenchFrame,
   AccountStyleModule,
   OpsModule,

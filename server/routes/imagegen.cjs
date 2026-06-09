@@ -7,6 +7,7 @@ const createLogger = require('../lib/logger.cjs');
 const createSqliteAdapter = require('../lib/sqlite.cjs');
 
 const logger = createLogger('routes:imagegen');
+const TASK_TERMINAL_STATUSES = new Set(['succeeded', 'failed', 'canceled']);
 
 module.exports = function createImagegenRoutes(deps) {
   const runPython = deps.runPython;
@@ -17,17 +18,31 @@ module.exports = function createImagegenRoutes(deps) {
   const defaultGptImageBaseUrl = (process.env.GPT_IMAGE2_BASE_URL || process.env.SUB2API_BASE_URL || 'https://geekai.live/v1').replace(/\/+$/, '');
   const primaryGptImageKey = process.env.GPT_IMAGE2_PRIMARY_KEY || process.env.GPT_IMAGE2_KEY || defaultGptImageKey;
   const primaryGptImageBaseUrl = (process.env.GPT_IMAGE2_PRIMARY_BASE_URL || defaultGptImageBaseUrl).replace(/\/+$/, '');
-  const primaryGptImageProxy = process.env.GPT_IMAGE2_PRIMARY_PROXY || process.env.GPT_IMAGE2_PROXY || process.env.FHL_PROXY_URL || process.env.MODEL_PROXY_URL || '';
+  function explicitEnv(name) {
+    return Object.prototype.hasOwnProperty.call(process.env, name) ? process.env[name] : undefined;
+  }
+
+  function explicitProxyEnv(names) {
+    for (const name of names) {
+      const value = explicitEnv(name);
+      if (value !== undefined) return value || '';
+    }
+    return '';
+  }
+
+  const primaryGptImageProxy = explicitProxyEnv(['GPT_IMAGE2_PRIMARY_PROXY', 'GPT_IMAGE2_PROXY']);
   const primaryGptImageSslVerify = process.env.GPT_IMAGE2_PRIMARY_SSL_VERIFY || process.env.GPT_IMAGE2_SSL_VERIFY || 'true';
   const fallbackGptImageKey = process.env.GPT_IMAGE2_FALLBACK_KEY || defaultGptImageKey;
   const fallbackGptImageBaseUrl = (process.env.GPT_IMAGE2_FALLBACK_BASE_URL || defaultGptImageBaseUrl).replace(/\/+$/, '');
-  const fallbackGptImageProxy = process.env.GPT_IMAGE2_FALLBACK_PROXY || process.env.GPT_IMAGE2_PROXY || process.env.FHL_PROXY_URL || process.env.MODEL_PROXY_URL || '';
+  const fallbackGptImageProxy = explicitProxyEnv(['GPT_IMAGE2_FALLBACK_PROXY', 'GPT_IMAGE2_PROXY']);
   const fallbackGptImageSslVerify = process.env.GPT_IMAGE2_FALLBACK_SSL_VERIFY || process.env.GPT_IMAGE2_SSL_VERIFY || 'true';
   const gptImageOutageMs = Math.max(0, Number(process.env.GPT_IMAGE2_PROVIDER_OUTAGE_MS || 10 * 60 * 1000));
   const gptImageProviderOutage = { primary: { until: 0, error: '' } };
 
   // DB instance closure
   let dbInstance = null;
+  let dbRecovered = false;
+  let imagegenTaskRunnerActive = false;
 
   function getDb() {
     if (dbInstance) return dbInstance;
@@ -51,12 +66,47 @@ module.exports = function createImagegenRoutes(deps) {
       created_at INTEGER DEFAULT (strftime('%s','now'))
     )`);
     dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_history_user ON imagegen_history(user_id, created_at DESC)`);
+    dbInstance.run(`CREATE TABLE IF NOT EXISTS imagegen_tasks (
+      id TEXT PRIMARY KEY,
+      user_id INTEGER DEFAULT 0,
+      username TEXT DEFAULT '',
+      model TEXT NOT NULL DEFAULT 'gpt-image2',
+      type TEXT NOT NULL,
+      provider TEXT DEFAULT 'primary',
+      prompt TEXT NOT NULL,
+      request_json TEXT DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'queued',
+      error TEXT DEFAULT '',
+      result_url TEXT DEFAULT '',
+      history_id INTEGER DEFAULT 0,
+      created_at INTEGER DEFAULT (strftime('%s','now')),
+      updated_at INTEGER DEFAULT (strftime('%s','now')),
+      started_at INTEGER DEFAULT 0,
+      finished_at INTEGER DEFAULT 0
+    )`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_imagegen_tasks_status ON imagegen_tasks(status, created_at DESC)`);
+    dbInstance.run(`CREATE INDEX IF NOT EXISTS idx_imagegen_tasks_created ON imagegen_tasks(created_at DESC)`);
+    recoverImagegenTasks(dbInstance);
     return dbInstance;
+  }
+
+  function recoverImagegenTasks(db) {
+    if (dbRecovered) return;
+    dbRecovered = true;
+    db.run(`UPDATE imagegen_tasks SET status='queued', updated_at=strftime('%s','now') WHERE status='running'`);
+    db.all(`SELECT id FROM imagegen_tasks WHERE status='queued' ORDER BY created_at ASC LIMIT 3`, [], function(err, rows) {
+      if (err) {
+        logger.warn('recover imagegen tasks failed', err.message);
+        return;
+      }
+      (rows || []).forEach(function(row, index) {
+        setTimeout(kickImagegenTaskQueue, 1000 + index * 1000);
+      });
+    });
   }
 
   function saveHistory(db, userId, username, model, type, prompt, imageData, ratio, resolution, resultUrl) {
     try {
-      // 使用同步方式确保插入完成后再发响应
       const sql = `INSERT INTO imagegen_history (user_id, username, model, type, prompt, image_data, ratio, resolution, result_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
       const values = [userId, username, model, type, prompt, imageData || '', ratio, resolution, resultUrl];
       db.run(sql, values);
@@ -65,8 +115,27 @@ module.exports = function createImagegenRoutes(deps) {
     }
   }
 
+  function saveHistoryAndGetId(db, userId, username, model, type, prompt, imageData, ratio, resolution, resultUrl, cb) {
+    const sql = `INSERT INTO imagegen_history (user_id, username, model, type, prompt, image_data, ratio, resolution, result_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+    const values = [userId, username, model, type, prompt, imageData || '', ratio, resolution, resultUrl];
+    db.run(sql, values, function(err) {
+      if (err) {
+        logger.warn('saveHistoryAndGetId error', err.message);
+        cb(err);
+        return;
+      }
+      cb(null, this.lastID || 0);
+    });
+  }
+
   function imagegenUploadDir() {
     const dir = path.join(path.dirname(serverDir), 'public', 'uploads', 'imagegen');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    return dir;
+  }
+
+  function imagegenTaskDir() {
+    const dir = path.join(serverDir, 'data', 'imagegen_tasks');
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     return dir;
   }
@@ -168,6 +237,38 @@ module.exports = function createImagegenRoutes(deps) {
     saveHistory(db, userId, username, model, type, prompt, imageData, ratio, resolution, rawUrl);
   }
 
+  function saveHistoryWithLocalImageAsync(db, userId, username, model, type, prompt, imageData, ratio, resolution, resultUrl, cb) {
+    const rawUrl = String(resultUrl || '');
+    cb = typeof cb === 'function' ? cb : function() {};
+    if (!rawUrl) {
+      cb(new Error('empty result url'));
+      return;
+    }
+    function insert(localUrl) {
+      saveHistoryAndGetId(db, userId, username, model, type, prompt, imageData, ratio, resolution, localUrl || rawUrl, function(err, historyId) {
+        cb(err, localUrl || rawUrl, historyId || 0);
+      });
+    }
+    if (rawUrl.indexOf('/uploads/imagegen/') === 0) {
+      insert(rawUrl);
+      return;
+    }
+    if (rawUrl.indexOf('data:image/') === 0) {
+      let localUrl = '';
+      try { localUrl = saveDataImage(rawUrl, model); } catch(e) { logger.warn('saveDataImage error', e.message); }
+      insert(localUrl || rawUrl);
+      return;
+    }
+    if (/^https?:\/\//i.test(rawUrl)) {
+      downloadImageToLocal(rawUrl, model, function(err, localUrl) {
+        if (err) logger.warn('download imagegen history image failed', err.message);
+        insert(localUrl || rawUrl);
+      });
+      return;
+    }
+    insert(rawUrl);
+  }
+
   function normalizeGptReferenceImages(body) {
     var inputs = [];
     if (Array.isArray(body.image_base64_list)) inputs = body.image_base64_list;
@@ -203,6 +304,138 @@ module.exports = function createImagegenRoutes(deps) {
         size: String(item.base64 || '').length
       };
     }));
+  }
+
+  function makeTaskId() {
+    return 'ig_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 10);
+  }
+
+  function publicTaskRow(row) {
+    if (!row) return null;
+    return {
+      id: row.id,
+      user_id: row.user_id || 0,
+      username: row.username || '',
+      model: row.model || 'gpt-image2',
+      type: row.type || 't2i',
+      provider: row.provider || 'primary',
+      prompt: row.prompt || '',
+      status: row.status || 'queued',
+      error: row.error || '',
+      result_url: row.result_url || '',
+      history_id: row.history_id || 0,
+      created_at: row.created_at || 0,
+      updated_at: row.updated_at || 0,
+      started_at: row.started_at || 0,
+      finished_at: row.finished_at || 0
+    };
+  }
+
+  function updateTask(db, id, fields, cb) {
+    const keys = Object.keys(fields || {});
+    if (!id || !keys.length) {
+      if (cb) cb(null);
+      return;
+    }
+    const sql = `UPDATE imagegen_tasks SET ${keys.map(k => `${k}=?`).join(', ')}, updated_at=strftime('%s','now') WHERE id=?`;
+    const values = keys.map(k => fields[k]).concat(id);
+    db.run(sql, values, function(err) {
+      if (err) logger.warn('update imagegen task failed', err.message);
+      if (cb) cb(err || null);
+    });
+  }
+
+  function kickImagegenTaskQueue() {
+    if (imagegenTaskRunnerActive) return;
+    const db = getDb();
+    db.get(`SELECT * FROM imagegen_tasks WHERE status='queued' ORDER BY created_at ASC LIMIT 1`, [], function(err, task) {
+      if (err) {
+        logger.warn('select imagegen task failed', err.message);
+        return;
+      }
+      if (!task) return;
+      imagegenTaskRunnerActive = true;
+      runImagegenTask(task.id, function() {
+        imagegenTaskRunnerActive = false;
+        setTimeout(kickImagegenTaskQueue, 500);
+      });
+    });
+  }
+
+  function runImagegenTask(taskId, done) {
+    done = typeof done === 'function' ? done : function() {};
+    const db = getDb();
+    db.get(`SELECT * FROM imagegen_tasks WHERE id=?`, [taskId], function(err, task) {
+      if (err || !task || TASK_TERMINAL_STATUSES.has(task.status)) { done(); return; }
+      let request = {};
+      try { request = JSON.parse(task.request_json || '{}'); } catch(e) {}
+      if (request._request_file) {
+        try {
+          const fileRequest = JSON.parse(fs.readFileSync(request._request_file, 'utf8'));
+          request = Object.assign({}, request, fileRequest);
+        } catch(e) {
+          updateTask(db, taskId, { status: 'failed', error: 'request file read failed: ' + e.message, finished_at: Math.floor(Date.now() / 1000) }, done);
+          return;
+        }
+      }
+      updateTask(db, taskId, { status: 'running', error: '', started_at: Math.floor(Date.now() / 1000) });
+      const type = task.type === 'i2i' ? 'i2i' : 't2i';
+      const prompt = task.prompt || request.prompt || '';
+      const ratio = request.ratio || '1:1';
+      const size = type === 'i2i'
+        ? gptImageEditSize(ratio, request.size)
+        : gptImageSize(ratio, request.resolution || request.resolution_type, request.size);
+      const params = {
+        key: request.key || '',
+        base_url: request.base_url || request.baseUrl || '',
+        proxy: request.proxy || '',
+        provider: request.provider || request.route || task.provider || 'primary',
+        prompt: prompt,
+        size: size,
+        quality: request.quality || 'auto',
+        background: request.background || '',
+        output_format: request.output_format || '',
+        transport: type === 'i2i' ? (request.transport || 'images') : (request.transport || '')
+      };
+      let imageData = '';
+      if (type === 'i2i') {
+        const images = normalizeGptReferenceImages(request);
+        if (!images.length) {
+          updateTask(db, taskId, { status: 'failed', error: 'reference image required', finished_at: Math.floor(Date.now() / 1000) }, done);
+          return;
+        }
+        params.image_base64_list = images;
+        params.max_retries = request.max_retries || Number(process.env.GPT_IMAGE2_I2I_MAX_RETRIES || 3);
+        imageData = summarizeReferenceImages(images);
+      }
+      runSelectedGptImageFast(params, 'gpt-image2 task ' + taskId, function(result) {
+        if (result && result.error) {
+          updateTask(db, taskId, {
+            status: 'failed',
+            error: String(result.error || 'failed').slice(0, 1000),
+            finished_at: Math.floor(Date.now() / 1000)
+          }, done);
+          return;
+        }
+        if (!result || !result.url) {
+          updateTask(db, taskId, {
+            status: 'failed',
+            error: 'no image in response',
+            finished_at: Math.floor(Date.now() / 1000)
+          }, done);
+          return;
+        }
+        saveHistoryWithLocalImageAsync(db, task.user_id || 0, task.username || '', 'gpt-image2', type, prompt, imageData, ratio, size, result.url, function(saveErr, localUrl, historyId) {
+          updateTask(db, taskId, {
+            status: saveErr ? 'failed' : 'succeeded',
+            error: saveErr ? String(saveErr.message || saveErr).slice(0, 1000) : '',
+            result_url: localUrl || result.url,
+            history_id: historyId || 0,
+            finished_at: Math.floor(Date.now() / 1000)
+          }, done);
+        });
+      });
+    });
   }
 
   function gptImageTimeoutMs(envName) {
@@ -435,7 +668,7 @@ module.exports = function createImagegenRoutes(deps) {
   function runSelectedGptImage(params, logLabel, cb) {
     const provider = gptImageProviderConfig(params.provider);
     const selected = provider.provider;
-    const hasProxyOverride = Object.prototype.hasOwnProperty.call(params, 'proxy');
+    const hasProxyOverride = Object.prototype.hasOwnProperty.call(params, 'proxy') && String(params.proxy || '').trim();
     const requestParams = Object.assign({}, params, {
       key: params.key || provider.key,
       base_url: params.base_url || provider.base_url,
@@ -465,7 +698,7 @@ module.exports = function createImagegenRoutes(deps) {
     const provider = gptImageProviderConfig(params.provider);
     const selected = provider.provider;
     const bypassedPrimaryError = '';
-    const hasProxyOverride = Object.prototype.hasOwnProperty.call(params, 'proxy');
+    const hasProxyOverride = Object.prototype.hasOwnProperty.call(params, 'proxy') && String(params.proxy || '').trim();
     const requestParams = Object.assign({}, params, {
       key: params.key || provider.key,
       base_url: params.base_url || provider.base_url,
@@ -538,11 +771,8 @@ module.exports = function createImagegenRoutes(deps) {
   }
 
   function gptImageEditSize(ratio, fallback) {
-    if (/^(1024x1024|1536x1024|1024x1536|auto)$/i.test(String(fallback || ''))) return fallback;
-    const key = String(ratio || '1:1');
-    if (key === '1:1') return '1024x1024';
-    if (key === '9:16' || key === '3:4' || key === '2:3') return '1024x1536';
-    return '1536x1024';
+    if (/^\d+x\d+$/i.test(String(fallback || ''))) return fallback;
+    return gptImageSize(ratio, '2K', fallback);
   }
 
   return {
@@ -567,6 +797,93 @@ module.exports = function createImagegenRoutes(deps) {
       db.run(`DELETE FROM imagegen_history WHERE id=?`, [id], function(err) {
         if (err) { cb({ error: err.message }); return; }
         cb({ ok: this.changes > 0 });
+      });
+    },
+
+    '/api/gpt-image2/tasks': function(body, cb) {
+      const action = String(body.action || 'create');
+      const db = getDb();
+      if (action === 'list') {
+        const limit = Math.min(50, Math.max(1, parseInt(body.limit) || 20));
+        db.all(`SELECT * FROM imagegen_tasks ORDER BY created_at DESC LIMIT ?`, [limit], function(err, rows) {
+          if (err) { cb({ error: err.message }); return; }
+          cb({ list: (rows || []).map(publicTaskRow) });
+        });
+        return;
+      }
+      const prompt = String(body.prompt || '').trim();
+      if (!prompt) { cb({ error: 'prompt required' }); return; }
+      const type = body.image_base64 || body.image_base64_list || body.images || body.reference_images ? 'i2i' : 't2i';
+      if (type === 'i2i' && !normalizeGptReferenceImages(body).length) {
+        cb({ error: 'reference image required' });
+        return;
+      }
+      const id = makeTaskId();
+      const userId = body._auth?.id || 0;
+      const username = body._auth?.username || body._auth?.display_name || '';
+      const provider = String(body.provider || body.route || 'primary');
+      const requestPayload = {
+        prompt: prompt,
+        provider: provider,
+        route: body.route || '',
+        ratio: body.ratio || '1:1',
+        resolution: body.resolution || body.resolution_type || '2K',
+        size: body.size || '',
+        quality: body.quality || 'auto',
+        background: body.background || '',
+        output_format: body.output_format || '',
+        transport: body.transport || '',
+        image_base64: body.image_base64 || '',
+        image_base64_list: body.image_base64_list || body.images || body.reference_images || null,
+        max_retries: body.max_retries || ''
+      };
+      let requestJson = '';
+      try {
+        const requestFile = path.join(imagegenTaskDir(), id + '.json');
+        fs.writeFileSync(requestFile, JSON.stringify(requestPayload), 'utf8');
+        requestJson = JSON.stringify({
+          prompt: prompt,
+          provider: provider,
+          ratio: requestPayload.ratio,
+          resolution: requestPayload.resolution,
+          size: requestPayload.size,
+          quality: requestPayload.quality,
+          transport: requestPayload.transport,
+          _request_file: requestFile
+        });
+      } catch(e) {
+        cb({ error: 'write request file failed: ' + e.message });
+        return;
+      }
+      db.run(
+        `INSERT INTO imagegen_tasks (id, user_id, username, model, type, provider, prompt, request_json, status) VALUES (?, ?, ?, 'gpt-image2', ?, ?, ?, ?, 'queued')`,
+        [id, userId, username, type, provider, prompt, requestJson],
+        function(err) {
+          if (err) { cb({ error: err.message }); return; }
+          db.get(`SELECT * FROM imagegen_tasks WHERE id=?`, [id], function(getErr, row) {
+            if (getErr) { cb({ error: getErr.message }); return; }
+            setTimeout(kickImagegenTaskQueue, 20);
+            cb({ task: publicTaskRow(row) });
+          });
+        }
+      );
+    },
+
+    '/api/gpt-image2/tasks/status': function(body, cb) {
+      const ids = Array.isArray(body.ids) ? body.ids.map(String).filter(Boolean).slice(0, 50) : [];
+      const db = getDb();
+      if (!ids.length) {
+        const limit = Math.min(50, Math.max(1, parseInt(body.limit) || 20));
+        db.all(`SELECT * FROM imagegen_tasks ORDER BY created_at DESC LIMIT ?`, [limit], function(err, rows) {
+          if (err) { cb({ error: err.message }); return; }
+          cb({ list: (rows || []).map(publicTaskRow) });
+        });
+        return;
+      }
+      const placeholders = ids.map(() => '?').join(',');
+      db.all(`SELECT * FROM imagegen_tasks WHERE id IN (${placeholders}) ORDER BY created_at DESC`, ids, function(err, rows) {
+        if (err) { cb({ error: err.message }); return; }
+        cb({ list: (rows || []).map(publicTaskRow) });
       });
     },
 
@@ -648,7 +965,7 @@ module.exports = function createImagegenRoutes(deps) {
         quality: body.quality || 'auto',
         background: body.background || '',
         output_format: body.output_format || '',
-        max_retries: body.max_retries || 1,
+        max_retries: body.max_retries || Number(process.env.GPT_IMAGE2_I2I_MAX_RETRIES || 3),
         // 图生图走 /images/edits 更稳定；Responses edit 在部分中转会长时间无结果导致前端断连。
         transport: body.transport || 'images'
       }, 'gpt-image2 i2i err', result => {

@@ -66,6 +66,8 @@ export function useModuleMap(imports) {
     workflow:   imports.WorkflowModule,
     dailyhot:   imports.DailyHotModule,
     accountmonitor: imports.AccountMonitorModule,
+    accountDataDashboard: imports.AccountDataDashboardModule,
+    accountDataAccounts: imports.AccountDataAccountsModule,
     accountStyle: imports.AccountStyleModule,
     ops:        imports.OpsModule,
     trafficPlan: imports.TrafficPlanModule,

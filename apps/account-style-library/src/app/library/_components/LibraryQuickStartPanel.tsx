@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { CheckCircle2, CircleAlert, Play, RefreshCw, Settings2, X } from "lucide-react";
+import { CheckCircle2, CircleAlert, Play, Plus, RefreshCw, Settings2, X } from "lucide-react";
 import type { getHealth } from "@/lib/client";
 import type { CollectOrder, Platform } from "@/lib/types";
 import { LibraryEditorModal } from "./LibraryEditorModal";
@@ -30,6 +30,7 @@ type LibraryQuickStartPanelProps = {
   stats: LibraryStats;
   timeRange: TimeRange;
   onCollect: () => void;
+  onCreateCustomAccount: () => void;
   onCustomFromDateChange: (value: string) => void;
   onCustomToDateChange: (value: string) => void;
   onHealthCheck: () => void;
@@ -54,6 +55,7 @@ export function LibraryQuickStartPanel({
   stats,
   timeRange,
   onCollect,
+  onCreateCustomAccount,
   onCustomFromDateChange,
   onCustomToDateChange,
   onHealthCheck,
@@ -105,6 +107,10 @@ export function LibraryQuickStartPanel({
             <button className="btn primary library-collect-submit" disabled={!canSubmit} onClick={onCollect} type="button">
               <Play aria-hidden="true" size={16} />
               {busy === "collect" ? "正在采集" : "开始采集"}
+            </button>
+            <button className="btn library-custom-account-trigger" disabled={busy === "collect"} onClick={onCreateCustomAccount} type="button">
+              <Plus aria-hidden="true" size={16} />
+              自定义账号
             </button>
             <button
               aria-label="检查运行环境"

@@ -84,6 +84,20 @@ export function runVideoPublishJobs(ids = []) {
   })
 }
 
+export function getVideoPublishQueueStatus() {
+  return request('/api/video-publish/queue/status', {
+    method: 'POST',
+    body: {}
+  })
+}
+
+export function pauseVideoPublishQueue(paused = true) {
+  return request('/api/video-publish/queue/pause', {
+    method: 'POST',
+    body: { paused }
+  })
+}
+
 export function listVideoPublishJobLogs(payload = {}) {
   return request('/api/video-publish/jobs/logs', {
     method: 'POST',

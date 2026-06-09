@@ -2555,11 +2555,11 @@ function normalizeMetricRaw(service, rawValue) {
 }
 
 function rawMetricToInput(service, rawValue) {
-  const raw = normalizeMetricRaw(service, rawValue)
+  const raw = service === 'like' ? Math.max(0, toNumber(rawValue)) : normalizeMetricRaw(service, rawValue)
   const unit = selectedQuantityUnit(service)
   if (unit === '万') return stripZeros(String(raw / 10000))
   if (unit === '千') return stripZeros(String(raw / 1000))
-  return raw ? String(Math.round(raw)) : ''
+  return raw ? (service === 'like' ? stripZeros(String(Number(raw.toFixed(6)))) : String(Math.round(raw))) : ''
 }
 
 function resetSettingsEditor() {

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { AccountSidebar } from "./_components/AccountSidebar";
 import { AccountStyleEditorModal } from "./_components/AccountStyleEditorModal";
+import { CustomAccountModal } from "./_components/CustomAccountModal";
 import { LibraryDetailPane } from "./_components/LibraryDetailPane";
 import { LibraryQuickStartPanel, type LibraryStats } from "./_components/LibraryQuickStartPanel";
 import { TranscriptEditorModal } from "./_components/TranscriptEditorModal";
@@ -23,7 +24,7 @@ import { EmptyState } from "@/components/EmptyState";
 import { useFeedback } from "@/components/FeedbackProvider";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
-import { collectAccount, getHealth } from "@/lib/client";
+import { collectAccount, createCustomAccount, getHealth } from "@/lib/client";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
 import type { CollectOrder, Platform } from "@/lib/types";
 
@@ -38,6 +39,7 @@ export default function LibraryPage() {
   const [message, setMessage] = useState("");
   const batchLimit = "all" as const;
   const [openModal, setOpenModal] = useState<"" | "transcript" | "style">("");
+  const [customAccountOpen, setCustomAccountOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<"" | "accounts" | "videos">("");
   const [collectPlatform, setCollectPlatform] = useState<Platform>("bilibili");
   const [collectName, setCollectName] = useState("");
@@ -335,6 +337,25 @@ export default function LibraryPage() {
     setBusy
   ]);
 
+  const handleCreateCustomAccount = useCallback(
+    async (input: { platform: Platform; name: string; customLinks: string[]; styleText?: string }) => {
+      setBusy("custom-account");
+      setMessage("");
+      try {
+        const account = await createCustomAccount(input);
+        setSelectedAccountId(account.id);
+        setCustomAccountOpen(false);
+        await refresh();
+        setMessage(`已创建自定义账号：${account.name}`);
+      } catch (error) {
+        setMessage(error instanceof Error ? error.message : "自定义账号保存失败");
+      } finally {
+        setBusy("");
+      }
+    },
+    [refresh, setBusy]
+  );
+
   if (!loading && !library?.accounts.length) {
     return (
       <div className="page library-page">
@@ -362,6 +383,7 @@ export default function LibraryPage() {
           stats={stats}
           timeRange={collectTimeRange}
           onCollect={handleCollect}
+          onCreateCustomAccount={() => setCustomAccountOpen(true)}
           onCustomFromDateChange={setCustomFromDate}
           onCustomToDateChange={setCustomToDate}
           onHealthCheck={handleHealthCheck}
@@ -372,6 +394,13 @@ export default function LibraryPage() {
           onTimeRangeChange={setCollectTimeRange}
         />
         <EmptyState title="还没有账号" body="在上方添加 B站或抖音账号并采集，采集结果会自动写入本地风格库。" />
+        {customAccountOpen ? (
+          <CustomAccountModal
+            busy={busy === "custom-account"}
+            onClose={() => setCustomAccountOpen(false)}
+            onSubmit={handleCreateCustomAccount}
+          />
+        ) : null}
       </div>
     );
   }
@@ -410,6 +439,7 @@ export default function LibraryPage() {
         stats={stats}
         timeRange={collectTimeRange}
         onCollect={handleCollect}
+        onCreateCustomAccount={() => setCustomAccountOpen(true)}
         onCustomFromDateChange={setCustomFromDate}
         onCustomToDateChange={setCustomToDate}
         onHealthCheck={handleHealthCheck}
@@ -500,6 +530,13 @@ export default function LibraryPage() {
           onClose={closeEditorModal}
           onGenerateStyle={handleGenerateStyle}
           onSaveStyle={handleSaveStyle}
+        />
+      ) : null}
+      {customAccountOpen ? (
+        <CustomAccountModal
+          busy={busy === "custom-account"}
+          onClose={() => setCustomAccountOpen(false)}
+          onSubmit={handleCreateCustomAccount}
         />
       ) : null}
       {deleteTarget === "accounts" ? (

@@ -219,7 +219,7 @@
         <button
           class="btn btn-primary"
           @click="handleGenerate">
-          {{ loading && model === 'gpt-image2' ? '停止生成' : (loading ? `🎨 生成中${progress > 0 ? ` (${progress})` : ''}` : '🎨 开始生成') }}
+          {{ loading && model === 'gpt-image2' ? '🎨 继续生成' : (loading ? `🎨 生成中${progress > 0 ? ` (${progress})` : ''}` : '🎨 开始生成') }}
         </button>
       </div>
 
@@ -293,11 +293,14 @@
             <div
               class="prompt-result-frame"
               :draggable="!!job.url"
+              :title="job.url ? '拖到图生图参考区' : ''"
               @dragstart.stop="job.url && handleImageDragStart($event, job.url)"
               @dragend.stop="handleImageDragEnd">
               <div v-if="job.status === 'running'" class="prompt-result-loading">
-                <div class="prompt-result-blur"></div>
-                <span>生成中</span>
+                <div class="prompt-result-sheen"></div>
+                <div class="prompt-result-orbit" aria-hidden="true">
+                  <i></i><i></i><i></i>
+                </div>
               </div>
               <img
                 v-if="job.url"
@@ -306,7 +309,7 @@
                 :class="{ revealed: job.revealed }"
                 alt="生成结果"
                 draggable="true"
-                title="拖到图生图参考图"
+                title="拖到图生图参考区"
                 @dragstart.stop="handleImageDragStart($event, job.url)"
                 @dragend.stop="handleImageDragEnd" />
               <div v-if="!job.url && job.status !== 'running'" class="prompt-result-state">
@@ -394,13 +397,16 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import {
+  createGptImageTask,
   editDreaminaImage,
   editGptImage,
   generateDreaminaImage,
   generateGptImage,
   generateMiniMaxImage,
+  getGptImageTaskStatus,
+  listGptImageTasks,
   normalizeImageUrl,
   getImagegenHistory,
   deleteImagegenHistory
@@ -432,7 +438,11 @@ const i2iDragActive = ref(false)
 const draggingResultUrl = ref('')
 const imageFileCache = new Map()
 const gptJobControllers = new Map()
+const GPT_MAX_CONCURRENT = 1
+const GPT_TASK_POLL_MS = 2500
 let gptQueueRunning = false
+let activeGptWorkers = 0
+let gptTaskPollTimer = null
 
 const MODEL_OPTIONS = T2I_MODEL_OPTIONS
 const RES_OPTIONS = RESOLUTION_OPTIONS
@@ -622,9 +632,9 @@ async function readI2IBase64List(options = {}) {
   const withMeta = Boolean(options.withMeta)
   const files = (i2iFiles.value.length ? i2iFiles.value : (i2iFile.value ? [i2iFile.value] : [])).slice(0, 8)
   const count = Math.max(1, files.length)
-  const totalTargetBytes = count > 1 ? 2.8 * 1024 * 1024 : 1.2 * 1024 * 1024
-  const perImageMaxBytes = Math.max(360 * 1024, Math.min(900 * 1024, Math.floor(totalTargetBytes / count)))
-  const maxSide = count > 4 ? 768 : 1024
+  const totalTargetBytes = count > 1 ? 2.0 * 1024 * 1024 : 700 * 1024
+  const perImageMaxBytes = Math.max(280 * 1024, Math.min(600 * 1024, Math.floor(totalTargetBytes / count)))
+  const maxSide = count > 4 ? 720 : 896
   const refs = await Promise.all(files.map(async file => {
     const compressed = await compressImageFile(file, {
       always: true,
@@ -648,28 +658,42 @@ async function readI2IBase64List(options = {}) {
   return withMeta ? refs : refs.map(item => item.base64)
 }
 
-function addPromptJobs(amount = 1) {
+function addPromptJobs(amount = 1, base64List = []) {
   const text = prompt.value.trim()
   if (!text) return []
   const total = Math.max(1, Math.floor(Number(amount) || 1))
+  const references = Array.isArray(base64List) ? base64List : []
   const jobs = Array.from({ length: total }, (_, index) => ({
     id: Date.now() + '-' + index + '-' + Math.random().toString(36).slice(2, 8),
     prompt: total > 1 ? `${text} (${index + 1}/${total})` : text,
     rawPrompt: text,
+    base64List: references,
     batchIndex: index + 1,
     batchTotal: total,
     status: 'queued',
     url: '',
     error: '',
-    revealed: false
+    revealed: false,
+    taskId: '',
+    provider: gptImageRoute.value
   }))
   promptJobs.value.push(...jobs)
-  prompt.value = ''
   return jobs
 }
 
 function pendingPromptJobs() {
   return promptJobs.value.filter(job => job.status === 'queued')
+}
+
+function hasSubmittedActiveGptJob() {
+  return promptJobs.value.some(job => job.taskId && (job.status === 'queued' || job.status === 'running'))
+}
+
+function claimPromptJob() {
+  if (hasSubmittedActiveGptJob()) return null
+  const job = pendingPromptJobs()[0]
+  if (job) job.status = 'running'
+  return job
 }
 
 function unfinishedPromptJobs() {
@@ -678,6 +702,109 @@ function unfinishedPromptJobs() {
 
 function syncGptLoading() {
   loading.value = gptQueueRunning || unfinishedPromptJobs().length > 0
+}
+
+function isTerminalGptStatus(status) {
+  return status === 'succeeded' || status === 'failed' || status === 'canceled'
+}
+
+function applyGptTaskToJob(task, existingJob = null) {
+  if (!task) return null
+  let job = existingJob || promptJobs.value.find(item => item.taskId === task.id || item.id === task.id)
+  if (!job) {
+    job = {
+      id: task.id,
+      taskId: task.id,
+      prompt: task.prompt || '',
+      rawPrompt: task.prompt || '',
+      base64List: [],
+      batchIndex: 1,
+      batchTotal: 1,
+      status: 'queued',
+      url: '',
+      error: '',
+      revealed: false,
+      provider: task.provider || 'primary'
+    }
+    promptJobs.value.unshift(job)
+  }
+  job.taskId = task.id
+  job.provider = task.provider || job.provider || 'primary'
+  job.prompt = task.prompt || job.prompt
+  job.rawPrompt = task.prompt || job.rawPrompt
+  if (task.status === 'succeeded') {
+    const wasDone = job.status === 'done'
+    job.url = normalizeImageUrl(task.result_url || job.url)
+    if (job.url) warmImageFileCache(job.url)
+    job.status = 'done'
+    job.error = ''
+    window.setTimeout(() => { job.revealed = true }, 60)
+    if (!wasDone) progress.value += 1
+  } else if (task.status === 'failed' || task.status === 'canceled') {
+    const wasError = job.status === 'error'
+    job.status = 'error'
+    job.error = task.error || 'failed'
+    if (!wasError) progress.value += 1
+  } else if (task.status === 'running') {
+    job.status = 'running'
+    job.error = ''
+  } else {
+    job.status = 'queued'
+  }
+  return job
+}
+
+async function pollGptTasks() {
+  const ids = promptJobs.value.map(job => job.taskId).filter(Boolean)
+  if (!ids.length) {
+    stopGptTaskPolling()
+    syncGptLoading()
+    return
+  }
+  try {
+    const data = await getGptImageTaskStatus(ids)
+    ;(data.list || []).forEach(task => applyGptTaskToJob(task))
+  } catch (e) {
+    // Keep polling; a transient page/API hiccup should not orphan the running tasks.
+  } finally {
+    syncGptLoading()
+    const hasActive = promptJobs.value.some(job => job.taskId && (job.status === 'queued' || job.status === 'running'))
+    if (!hasActive && pendingPromptJobs().length) {
+      runGptQueue()
+    } else if (!hasActive) {
+      stopGptTaskPolling()
+    }
+  }
+}
+
+function startGptTaskPolling() {
+  if (gptTaskPollTimer) return
+  gptTaskPollTimer = window.setInterval(pollGptTasks, GPT_TASK_POLL_MS)
+  pollGptTasks()
+}
+
+function stopGptTaskPolling() {
+  if (gptTaskPollTimer) {
+    window.clearInterval(gptTaskPollTimer)
+    gptTaskPollTimer = null
+  }
+}
+
+async function restoreGptTasks() {
+  try {
+    const data = await listGptImageTasks(20)
+    const tasks = data.list || []
+    const nowSec = Math.floor(Date.now() / 1000)
+    const visible = tasks
+      .filter(task => !isTerminalGptStatus(task.status) || nowSec - Number(task.created_at || 0) < 30 * 60)
+      .slice(0, 12)
+    visible.forEach(task => applyGptTaskToJob(task))
+    if (visible.length) {
+      model.value = 'gpt-image2'
+      startGptTaskPolling()
+      syncGptLoading()
+    }
+  } catch (e) {}
 }
 
 function resetErroredPromptJobs() {
@@ -692,20 +819,25 @@ function resetErroredPromptJobs() {
   return changed
 }
 
-async function runGptQueue(base64List) {
-  if (gptQueueRunning) return
+function runGptQueue() {
   gptQueueRunning = true
   syncGptLoading()
-  try {
-    while (true) {
-      const job = pendingPromptJobs()[0]
-      if (!job) break
-      await runGptPromptJob(job, base64List)
-    }
-  } finally {
-    gptQueueRunning = false
-    syncGptLoading()
+  while (activeGptWorkers < GPT_MAX_CONCURRENT) {
+    const job = claimPromptJob()
+    if (!job) break
+    activeGptWorkers += 1
+    runGptPromptJob(job).finally(() => {
+      activeGptWorkers = Math.max(0, activeGptWorkers - 1)
+      if (pendingPromptJobs().length) {
+        runGptQueue()
+      } else if (activeGptWorkers === 0) {
+        gptQueueRunning = false
+        syncGptLoading()
+      }
+    })
   }
+  if (activeGptWorkers === 0 && !pendingPromptJobs().length) gptQueueRunning = false
+  syncGptLoading()
 }
 
 function removePromptJob(id) {
@@ -714,10 +846,10 @@ function removePromptJob(id) {
 
 function clearPromptJobs() {
   if (loading.value && model.value === 'gpt-image2') {
-    stopGptJobs('已手动停止生成')
+    promptJobs.value = promptJobs.value.filter(job => job.taskId && (job.status === 'queued' || job.status === 'running'))
     return
   }
-  promptJobs.value = promptJobs.value.filter(job => job.status === 'running')
+  promptJobs.value = promptJobs.value.filter(job => job.taskId && job.status === 'running')
 }
 
 function stopGptJobs(message = '已停止生成') {
@@ -725,6 +857,8 @@ function stopGptJobs(message = '已停止生成') {
     try { controller.abort() } catch (e) {}
   })
   gptJobControllers.clear()
+  activeGptWorkers = 0
+  stopGptTaskPolling()
   promptJobs.value.forEach(job => {
     if (job.status === 'queued' || job.status === 'running') {
       job.status = 'error'
@@ -748,34 +882,29 @@ function hasRunningPromptJobs() {
   return unfinishedPromptJobs().length > 0
 }
 
-async function runGptPromptJob(job, base64List) {
-  job.status = 'running'
+async function runGptPromptJob(job) {
+  if (job.status !== 'running') job.status = 'running'
   job.error = ''
   job.revealed = false
-  const controller = new AbortController()
-  const timeoutMs = 180_000
-  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
-  gptJobControllers.set(job.id, controller)
+  const base64List = Array.isArray(job.base64List) ? job.base64List : []
   try {
-    const data = base64List.length
-      ? await editGptImage({ prompt: job.rawPrompt || job.prompt, image_base64_list: base64List, ratio: ratio.value, resolution: resVal.value, quality: 'auto', provider: gptImageRoute.value }, controller.signal)
-      : await generateGptImage({ prompt: job.rawPrompt || job.prompt, ratio: ratio.value, resolution: resVal.value, quality: 'auto', provider: gptImageRoute.value }, controller.signal)
+    const data = await createGptImageTask({
+      prompt: job.rawPrompt || job.prompt,
+      ...(base64List.length ? { image_base64_list: base64List } : {}),
+      ratio: ratio.value,
+      resolution: resVal.value,
+      quality: 'auto',
+      provider: gptImageRoute.value
+    })
     if (data.error) throw new Error(data.error)
-    if (!data.url) throw new Error('生成未返回图片')
-    job.url = normalizeImageUrl(data.url)
-    warmImageFileCache(job.url)
-    job.status = 'done'
-    window.setTimeout(() => { job.revealed = true }, 60)
-    progress.value += 1
+    if (!data.task?.id) throw new Error('task create failed')
+    applyGptTaskToJob(data.task, job)
+    startGptTaskPolling()
   } catch (e) {
-    job.error = e?.name === 'AbortError'
-      ? `当前线路超过 ${Math.round(timeoutMs / 1000)} 秒没有返回，已停止等待`
-      : formatGptImageError(e)
+    job.error = formatGptImageError(e)
     job.status = 'error'
     progress.value += 1
   } finally {
-    window.clearTimeout(timer)
-    gptJobControllers.delete(job.id)
     syncGptLoading()
   }
 }
@@ -817,17 +946,15 @@ function formatGptImageError(e) {
 }
 
 async function handleGenerate() {
-  if (model.value === 'gpt-image2' && loading.value) {
-    stopGptJobs('已手动停止生成')
-    return
-  }
   const hasPrompt = prompt.value.trim() || (model.value === 'gpt-image2' && promptJobs.value.length)
   if (!hasPrompt) return showToast('请输入描述词', 'error')
   if (mode.value === 'i2i' && !i2iFiles.value.length && !i2iFile.value) return showToast('请上传参考图', 'error')
 
   loading.value = true
-  results.value = []
-  progress.value = 0
+  if (model.value !== 'gpt-image2') {
+    results.value = []
+    progress.value = 0
+  }
 
   try {
     if (model.value === 'minimax') {
@@ -846,30 +973,23 @@ async function handleGenerate() {
         showToast(data.error || '生成失败', 'error')
       }
     } else if (model.value === 'gpt-image2') {
-      const newJobs = prompt.value.trim() ? addPromptJobs(count.value) : []
+      const base64List = mode.value === 'i2i' && prompt.value.trim() ? await readI2IBase64List({ withMeta: true }) : []
+      const newJobs = prompt.value.trim() ? addPromptJobs(count.value, base64List) : []
       if (!newJobs.length) resetErroredPromptJobs()
       const queuedBeforeRun = pendingPromptJobs().length
       if (!queuedBeforeRun) {
         syncGptLoading()
-        showToast(loading.value ? 'Queue is already running. Add another prompt to append.' : 'No prompt jobs to run.', loading.value ? 'info' : 'error')
+        showToast(loading.value ? '队列正在生成，输入新提示词后可继续追加' : '没有待生成任务', loading.value ? 'info' : 'error')
         return
       }
-      const base64List = mode.value === 'i2i' ? await readI2IBase64List({ withMeta: true }) : []
       if (gptQueueRunning) {
+        runGptQueue()
         syncGptLoading()
-        showToast(`Queued ${newJobs.length || queuedBeforeRun} image job(s).`, 'info')
+        showToast(`已追加 ${newJobs.length || queuedBeforeRun} 张生图任务`, 'success')
       } else {
         progress.value = 0
-        await runGptQueue(base64List)
-        const recentJobs = newJobs.length ? newJobs : promptJobs.value.slice(-queuedBeforeRun)
-        const failed = recentJobs.filter(job => job.status === 'error')
-        const done = recentJobs.filter(job => job.status === 'done')
-        if (done.length) {
-          const suffix = failed.length ? `, failed ${failed.length}` : ''
-          showToast(`Generated ${done.length} image(s)${suffix}`, failed.length ? 'info' : 'success')
-        } else {
-          showToast(failed[0]?.error || 'Generation failed', 'error')
-        }
+        runGptQueue()
+        showToast(`已提交 ${newJobs.length || queuedBeforeRun} 张生图任务`, 'success')
       }
     } else {
       // 即梦
@@ -1009,6 +1129,14 @@ function handleSaveImg(url) {
   a.click()
   showToast('开始下载...', 'success')
 }
+
+onMounted(() => {
+  restoreGptTasks()
+})
+
+onUnmounted(() => {
+  stopGptTaskPolling()
+})
 </script>
 
 <style scoped>
@@ -1246,7 +1374,9 @@ function handleSaveImg(url) {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: #05050d;
+  background:
+    linear-gradient(135deg, rgba(13, 18, 26, 0.98), rgba(29, 24, 48, 0.96)),
+    #05050d;
 }
 .prompt-result-img,
 .prompt-result-state,
@@ -1268,45 +1398,55 @@ function handleSaveImg(url) {
   opacity: 1;
 }
 .prompt-result-loading {
-  display: flex;
+  z-index: 1;
+  display: grid;
+  grid-template-rows: 1fr auto 1fr;
   align-items: center;
   justify-content: center;
   overflow: hidden;
-  background: #05050d;
-}
-.prompt-result-blur {
-  position: absolute;
-  inset: -18%;
+  padding: 22px 18px 72px;
   background:
-    radial-gradient(circle at 30% 28%, rgba(255, 255, 255, 0.34), transparent 23%),
-    radial-gradient(circle at 72% 36%, rgba(0, 245, 212, 0.28), transparent 25%),
-    radial-gradient(circle at 50% 72%, rgba(123, 47, 255, 0.42), transparent 30%),
-    linear-gradient(135deg, rgba(90, 31, 219, 0.75), rgba(12, 12, 42, 0.95));
-  filter: blur(18px);
-  transform: scale(1.08);
-  animation: promptBlurDrift 1.7s ease-in-out infinite alternate;
+    radial-gradient(circle at 32% 22%, rgba(255, 255, 255, 0.12), transparent 24%),
+    radial-gradient(circle at 74% 24%, rgba(0, 214, 178, 0.14), transparent 22%),
+    linear-gradient(135deg, rgba(9, 14, 23, 0.98), rgba(32, 27, 55, 0.96));
 }
-.prompt-result-loading span {
+.prompt-result-sheen {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  background:
+    linear-gradient(110deg, transparent 8%, rgba(255, 255, 255, 0.12) 20%, transparent 34%),
+    repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.035) 0 1px, transparent 1px 14px);
+  transform: translateX(-60%);
+  animation: promptSheen 2.4s ease-in-out infinite;
+}
+.prompt-result-orbit {
   position: relative;
-  z-index: 1;
+  z-index: 2;
+  grid-row: 2;
   display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  max-width: calc(100% - 32px);
-  min-height: 30px;
-  padding: 7px 12px;
-  border-radius: 999px;
-  background: rgba(5, 5, 13, 0.46);
-  backdrop-filter: blur(10px);
-  text-align: center;
-  white-space: nowrap;
-  color: rgba(255, 255, 255, 0.82);
-  font-size: 13px;
-  font-weight: 700;
+  justify-self: center;
+  align-self: center;
+  gap: 7px;
 }
-@keyframes promptBlurDrift {
-  from { transform: scale(1.08) translate3d(-2%, -1%, 0); opacity: 0.72; }
-  to { transform: scale(1.16) translate3d(2%, 1%, 0); opacity: 0.95; }
+.prompt-result-orbit i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--primary-light, #b47fff) 70%, #fff);
+  opacity: 0.34;
+  animation: promptDot 1.18s ease-in-out infinite;
+}
+.prompt-result-orbit i:nth-child(2) { animation-delay: 0.14s; }
+.prompt-result-orbit i:nth-child(3) { animation-delay: 0.28s; }
+@keyframes promptSheen {
+  0% { transform: translateX(-68%); opacity: 0.25; }
+  45%, 65% { opacity: 0.82; }
+  100% { transform: translateX(68%); opacity: 0.22; }
+}
+@keyframes promptDot {
+  0%, 80%, 100% { transform: translateY(0); opacity: 0.32; }
+  40% { transform: translateY(-5px); opacity: 0.96; }
 }
 .prompt-result-state {
   display: flex;
@@ -1356,9 +1496,10 @@ function handleSaveImg(url) {
   left: 0;
   right: 0;
   bottom: 0;
-  z-index: 2;
-  padding: 24px 10px 9px;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0));
+  z-index: 4;
+  min-height: 48px;
+  padding: 18px 10px 8px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.72), rgba(0, 0, 0, 0.36) 58%, rgba(0, 0, 0, 0));
   color: rgba(255, 255, 255, 0.88);
   font-size: 11px;
   line-height: 1.35;
