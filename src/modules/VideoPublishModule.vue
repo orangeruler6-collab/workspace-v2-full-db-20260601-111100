@@ -553,6 +553,8 @@ const platformColors = {
   kuaishou: 'linear-gradient(135deg, #ff7a00, #facc15)'
 }
 
+const defaultExcludedPlatformIds = new Set(['wechatVideo'])
+
 const publishAccounts = [
   {
     id: 'tianji-mei',
@@ -727,7 +729,9 @@ function platformAccount(id, name, icon, handle, profile, status) {
 }
 
 function readyPlatformIds(account) {
-  return account.platforms.filter(platform => platform.status === 'ready').map(platform => platform.id)
+  return account.platforms
+    .filter(platform => platform.status === 'ready' && !defaultExcludedPlatformIds.has(platform.id))
+    .map(platform => platform.id)
 }
 
 function syncSelectedAccount() {
