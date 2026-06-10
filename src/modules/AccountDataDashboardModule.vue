@@ -491,6 +491,128 @@
       </section>
     </section>
 
+    <section v-else-if="activeView === 'updatePlan'" class="update-plan-layout">
+      <section class="update-summary-grid" aria-label="更新计划概览">
+        <article
+          v-for="item in updatePlanSummaryCards"
+          :key="item.key"
+          class="update-summary-card"
+          :style="{ '--metric-color': item.color }">
+          <span>{{ item.label }}</span>
+          <strong>{{ item.value }}</strong>
+          <em>{{ item.note }}</em>
+        </article>
+      </section>
+
+      <section class="update-plan-main-grid">
+        <article class="update-plan-progress-card">
+          <div class="panel-head">
+            <strong>月度更新计划</strong>
+            <span>按账号月目标量追踪本月发文完成度</span>
+          </div>
+          <div class="plan-progress-hero">
+            <div class="plan-progress-orb" :style="{ '--plan-rate': `${updatePlanSummary.completionRate * 3.6}deg` }">
+              <strong>{{ updatePlanSummary.completionRate }}%</strong>
+              <span>完成率</span>
+            </div>
+            <div class="plan-progress-copy">
+              <span>{{ activePlatformLabel }} · {{ activeGroupLabel }}</span>
+              <strong>{{ updatePlanSummary.completed }} / {{ updatePlanSummary.target }} 条</strong>
+              <em>本月还差 {{ updatePlanSummary.remaining }} 条，{{ updatePlanSummary.behindCount }} 个账号需要盯进度。</em>
+              <div class="plan-progress-bar">
+                <u :style="{ width: updatePlanSummary.completionRate + '%' }"></u>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="update-risk-card">
+          <div class="panel-head">
+            <strong>需要优先跟进</strong>
+            <span>按缺口和接入状态排序</span>
+          </div>
+          <div class="update-risk-list" v-if="updateRiskRows.length">
+            <div v-for="row in updateRiskRows" :key="row.id" class="update-risk-row">
+              <span :class="['plan-status', row.statusClass]">{{ row.statusLabel }}</span>
+              <div>
+                <strong>{{ row.account }}</strong>
+                <em>{{ row.groupName }} · {{ row.owner || '未填负责人' }}</em>
+              </div>
+              <b>差 {{ row.gap }} 条</b>
+            </div>
+          </div>
+          <div v-else class="plan-empty">当前筛选范围没有滞后账号。</div>
+        </article>
+      </section>
+
+      <section class="update-plan-sub-grid">
+        <article class="update-group-card">
+          <div class="panel-head">
+            <strong>小组完成度</strong>
+            <span>目标、已发和缺口汇总</span>
+          </div>
+          <div class="update-group-list">
+            <div v-for="group in updateGroupRows" :key="group.groupName" class="update-group-row">
+              <div>
+                <strong>{{ group.groupName }}</strong>
+                <em>目标 {{ group.target }} · 已发 {{ group.completed }} · 风险 {{ group.behindCount }}</em>
+              </div>
+              <i><u :style="{ width: group.progress + '%' }"></u></i>
+              <b>{{ group.progress }}%</b>
+            </div>
+          </div>
+        </article>
+
+        <article class="update-owner-card">
+          <div class="panel-head">
+            <strong>负责人负载</strong>
+            <span>看谁手上还有更新缺口</span>
+          </div>
+          <div class="update-owner-grid">
+            <span v-for="owner in updateOwnerRows" :key="owner.owner">
+              <em>{{ owner.owner }}</em>
+              <strong>{{ owner.remaining }}</strong>
+              <small>剩余 / 目标 {{ owner.target }}</small>
+            </span>
+          </div>
+        </article>
+      </section>
+
+      <article class="update-plan-table-card">
+        <div class="panel-head">
+          <strong>账号更新明细</strong>
+          <span>{{ updatePlanDisplayRows.length }} 个计划账号 · 来自月更新量表</span>
+        </div>
+        <div class="update-plan-table">
+          <div class="update-plan-head">
+            <span>账号</span>
+            <span>小组 / 平台</span>
+            <span>负责人</span>
+            <span>月目标</span>
+            <span>本月已发</span>
+            <span>缺口</span>
+            <span>进度</span>
+            <span>状态</span>
+            <span>对标 / 备注</span>
+          </div>
+          <div v-for="row in updatePlanDisplayRows" :key="row.id" class="update-plan-row">
+            <strong>{{ row.account }}</strong>
+            <span>{{ row.groupName }} · {{ row.platformLabel }}</span>
+            <span>{{ row.owner || '-' }}</span>
+            <b>{{ row.target }}</b>
+            <span>{{ row.completed }}</span>
+            <em>{{ row.gap }}</em>
+            <span class="plan-inline-progress">
+              <i><u :style="{ width: row.progress + '%' }"></u></i>
+              <b>{{ row.progress }}%</b>
+            </span>
+            <span :class="['plan-status', row.statusClass]">{{ row.statusLabel }}</span>
+            <small>{{ row.contextNote }}</small>
+          </div>
+        </div>
+      </article>
+    </section>
+
     <section v-else class="hot-video-layout">
       <section class="hot-summary-grid" aria-label="爆款视频总览">
         <article
@@ -600,6 +722,7 @@
 <script setup>
 import { computed, nextTick, ref, watch } from 'vue'
 import { accountDataMock, formatCompactNumber, platformOptions } from './account-data/mockData'
+import { updatePlanRows } from './account-data/updatePlan'
 
 const metricColors = {
   people: '#ff6b00',
@@ -609,14 +732,17 @@ const metricColors = {
   likes: '#f94d6a',
   battle: '#ff6b00',
   completion: '#18a058',
-  daily: '#8b6be8'
+  daily: '#8b6be8',
+  plan: '#00a67e',
+  warn: '#ef4444'
 }
 
 const viewOptions = [
   { id: 'overview', label: '总览' },
   { id: 'single', label: '单账号' },
   { id: 'battle', label: '战力分析' },
-  { id: 'hotVideo', label: '爆款视频' }
+  { id: 'hotVideo', label: '爆款视频' },
+  { id: 'updatePlan', label: '更新计划' }
 ]
 
 const rangeOptions = [
@@ -669,6 +795,20 @@ const battleMemePool = [
   '基本盘很硬',
   '这波能打'
 ]
+
+const updatePlanAccountAliases = {
+  '最翁damnnn': '最翁说游',
+  麦小雯: '麦晓花',
+  上官北: '上官北丶'
+}
+
+const updatePlanStatusMap = {
+  done: { label: '已达标', className: 'done' },
+  onTrack: { label: '进度正常', className: 'on-track' },
+  behind: { label: '需追赶', className: 'behind' },
+  unmatched: { label: '待接入', className: 'unmatched' },
+  paused: { label: '暂不更新', className: 'paused' }
+}
 
 const activeView = ref('overview')
 const activePlatform = ref('all')
@@ -840,6 +980,45 @@ function rangePosts(item) {
     : Math.max(1, Math.round(postCount(item) * activeRangeMeta.value.scale / 18))
 }
 
+function monthlyPostCount(item) {
+  if (!item) return 0
+  return Math.max(0, Math.round(postCount(item) * rangeMeta.month.scale / 18))
+}
+
+function normalizeAccountKey(name) {
+  return String(name || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s·丶、，,。._\-—/\\:：]/g, '')
+}
+
+function updateMonthProgressRatio() {
+  const now = new Date()
+  const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
+  return Math.min(1, Math.max(0.03, now.getDate() / Math.max(1, days)))
+}
+
+function findUpdatePlanAccount(plan) {
+  const candidates = accountDataMock.filter(item => item.platform === plan.platform)
+  const planKey = normalizeAccountKey(plan.account)
+  const targetName = updatePlanAccountAliases[planKey] || plan.account
+  const targetKey = normalizeAccountKey(targetName)
+  return candidates.find(item => normalizeAccountKey(item.account) === targetKey) ||
+    candidates.find((item) => {
+      const accountKey = normalizeAccountKey(item.account)
+      return accountKey && targetKey && (accountKey.includes(targetKey) || targetKey.includes(accountKey))
+    }) ||
+    null
+}
+
+function updatePlanStatus(plan, matchedAccount, completed, expected) {
+  if (!plan.monthlyTarget) return 'paused'
+  if (!matchedAccount) return 'unmatched'
+  if (completed >= plan.monthlyTarget) return 'done'
+  if (completed >= expected) return 'onTrack'
+  return 'behind'
+}
+
 function sumBy(rows, getter) {
   return rows.reduce((sum, item) => sum + getter(item), 0)
 }
@@ -933,6 +1112,150 @@ const dashboardRows = computed(() => {
     return aggregateDimensionRows(filteredAccounts.value, departmentName, departmentName, 'department')
   }
   return filteredAccounts.value
+})
+
+const updatePlanDisplayRows = computed(() => {
+  const word = keyword.value.toLowerCase()
+  const monthProgress = updateMonthProgressRatio()
+  return updatePlanRows
+    .filter(item => activePlatform.value === 'all' || item.platform === activePlatform.value)
+    .filter(item => activeGroup.value === 'all' || item.groupName === activeGroup.value)
+    .filter((item) => {
+      if (!word) return true
+      return `${item.account} ${item.owner} ${item.groupName} ${item.platformLabel}`.toLowerCase().includes(word)
+    })
+    .map((plan) => {
+      const matchedAccount = findUpdatePlanAccount(plan)
+      const completed = matchedAccount ? monthlyPostCount(matchedAccount) : 0
+      const target = Number(plan.monthlyTarget) || 0
+      const expected = Math.ceil(target * monthProgress)
+      const gap = Math.max(0, target - completed)
+      const progress = target ? Math.min(100, Math.round(completed / target * 100)) : 100
+      const status = updatePlanStatus(plan, matchedAccount, completed, expected)
+      const statusMeta = updatePlanStatusMap[status] || updatePlanStatusMap.behind
+      const matchNote = matchedAccount && matchedAccount.account !== plan.account ? `匹配：${matchedAccount.account}` : ''
+      return {
+        ...plan,
+        matched: Boolean(matchedAccount),
+        matchedAccountName: matchedAccount?.account || '',
+        target,
+        completed,
+        expected,
+        gap,
+        progress,
+        status,
+        statusLabel: statusMeta.label,
+        statusClass: statusMeta.className,
+        contextNote: [plan.benchmarkAccounts ? `对标：${plan.benchmarkAccounts}` : '', plan.note, matchNote || (!matchedAccount && target ? '待接入账号池' : '')]
+          .filter(Boolean)
+          .join('；') || '正常推进'
+      }
+    })
+    .sort((a, b) => {
+      const statusWeight = { behind: 0, unmatched: 1, onTrack: 2, done: 3, paused: 4 }
+      return (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) || b.gap - a.gap || b.target - a.target
+    })
+})
+
+const updatePlanSummary = computed(() => {
+  const rows = updatePlanDisplayRows.value
+  const target = sumBy(rows, item => item.target)
+  const completed = sumBy(rows, item => item.target ? Math.min(item.completed, item.target) : 0)
+  const remaining = sumBy(rows, item => item.gap)
+  const behindCount = rows.filter(item => item.target > 0 && (item.status === 'behind' || item.status === 'unmatched')).length
+  const activeCount = rows.filter(item => item.target > 0).length
+  return {
+    rowCount: rows.length,
+    activeCount,
+    target,
+    completed,
+    remaining,
+    behindCount,
+    pausedCount: rows.filter(item => item.status === 'paused').length,
+    matchedCount: rows.filter(item => item.matched).length,
+    completionRate: target ? Math.min(100, Math.round(completed / target * 100)) : 100
+  }
+})
+
+const updatePlanSummaryCards = computed(() => {
+  const summary = updatePlanSummary.value
+  return [
+    {
+      key: 'target',
+      label: '月更新目标',
+      value: `${summary.target}条`,
+      note: `${summary.activeCount} 个账号有目标`,
+      color: metricColors.plan
+    },
+    {
+      key: 'completed',
+      label: '本月已发',
+      value: `${summary.completed}条`,
+      note: `完成率 ${summary.completionRate}%`,
+      color: metricColors.posts
+    },
+    {
+      key: 'remaining',
+      label: '剩余缺口',
+      value: `${summary.remaining}条`,
+      note: `${summary.behindCount} 个账号需跟进`,
+      color: summary.behindCount ? metricColors.warn : metricColors.completion
+    },
+    {
+      key: 'matched',
+      label: '账号接入',
+      value: `${summary.matchedCount}/${summary.rowCount}`,
+      note: `${summary.pausedCount} 个暂不更新`,
+      color: metricColors.views
+    }
+  ]
+})
+
+const updateRiskRows = computed(() => {
+  return updatePlanDisplayRows.value
+    .filter(item => item.target > 0 && (item.status === 'behind' || item.status === 'unmatched'))
+    .sort((a, b) => b.gap - a.gap || b.target - a.target)
+    .slice(0, 6)
+})
+
+const updateGroupRows = computed(() => {
+  const map = new Map()
+  updatePlanDisplayRows.value.forEach((item) => {
+    const current = map.get(item.groupName) || {
+      groupName: item.groupName,
+      target: 0,
+      completed: 0,
+      remaining: 0,
+      behindCount: 0
+    }
+    current.target += item.target
+    current.completed += item.target ? Math.min(item.completed, item.target) : 0
+    current.remaining += item.gap
+    if (item.target > 0 && (item.status === 'behind' || item.status === 'unmatched')) current.behindCount += 1
+    map.set(item.groupName, current)
+  })
+  return Array.from(map.values())
+    .map(item => ({
+      ...item,
+      progress: item.target ? Math.min(100, Math.round(item.completed / item.target * 100)) : 100
+    }))
+    .sort((a, b) => b.remaining - a.remaining || b.target - a.target)
+})
+
+const updateOwnerRows = computed(() => {
+  const map = new Map()
+  updatePlanDisplayRows.value.forEach((item) => {
+    const owner = item.owner || '未填负责人'
+    const current = map.get(owner) || { owner, target: 0, completed: 0, remaining: 0 }
+    current.target += item.target
+    current.completed += item.target ? Math.min(item.completed, item.target) : 0
+    current.remaining += item.gap
+    map.set(owner, current)
+  })
+  return Array.from(map.values())
+    .filter(item => item.target > 0)
+    .sort((a, b) => b.remaining - a.remaining || b.target - a.target)
+    .slice(0, 8)
 })
 
 const chartPanels = computed(() => {
@@ -1554,6 +1877,7 @@ const singleSnapshots = computed(() => {
 .single-layout,
 .single-main,
 .battle-layout,
+.update-plan-layout,
 .hot-video-layout {
   min-width: 0;
   display: grid;
@@ -1574,6 +1898,12 @@ const singleSnapshots = computed(() => {
 .battle-summary-card,
 .battle-tree-card,
 .battle-chart-card,
+.update-summary-card,
+.update-plan-progress-card,
+.update-risk-card,
+.update-group-card,
+.update-owner-card,
+.update-plan-table-card,
 .hot-summary-card,
 .hot-hero-card,
 .hot-factor-card,
@@ -1645,6 +1975,12 @@ const singleSnapshots = computed(() => {
   gap: 12px;
 }
 
+.update-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
 .battle-summary-card {
   min-height: 96px;
   display: grid;
@@ -1695,11 +2031,53 @@ const singleSnapshots = computed(() => {
   font-style: normal;
 }
 
+.update-summary-card {
+  min-height: 96px;
+  display: grid;
+  gap: 8px;
+  padding: 16px;
+  border-left: 4px solid var(--metric-color);
+  background:
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--metric-color) 12%, transparent), transparent 42%),
+    #fff;
+}
+
+.update-summary-card span {
+  color: #596172;
+  font-size: 13px;
+}
+
+.update-summary-card strong {
+  color: #202330;
+  font-size: 24px;
+  line-height: 1;
+}
+
+.update-summary-card em {
+  color: #8b92a0;
+  font-size: 12px;
+  font-style: normal;
+}
+
 .battle-main-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.42fr) minmax(320px, .58fr);
   gap: 18px;
   align-items: start;
+}
+
+.update-plan-main-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr);
+  gap: 18px;
+  align-items: stretch;
+}
+
+.update-plan-sub-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, .72fr);
+  gap: 18px;
+  align-items: stretch;
 }
 
 .hot-main-grid {
@@ -1723,6 +2101,11 @@ const singleSnapshots = computed(() => {
 
 .battle-tree-card,
 .battle-chart-card,
+.update-plan-progress-card,
+.update-risk-card,
+.update-group-card,
+.update-owner-card,
+.update-plan-table-card,
 .hot-hero-card,
 .hot-factor-card,
 .hot-rank-card,
@@ -2011,6 +2394,283 @@ const singleSnapshots = computed(() => {
   height: 100%;
   border-radius: inherit;
   background: var(--orange);
+}
+
+.plan-progress-hero {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 20px;
+  align-items: center;
+  min-height: 220px;
+  padding: 18px;
+  border: 1px solid #edf0f4;
+  border-radius: 8px;
+  background:
+    radial-gradient(circle at 12% 12%, rgba(0, 166, 126, .12), transparent 28%),
+    linear-gradient(135deg, #f7fffc 0%, #fff 52%, #fff7f0 100%);
+}
+
+.plan-progress-orb {
+  position: relative;
+  width: 150px;
+  height: 150px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(#00a67e var(--plan-rate), #edf0f4 0deg);
+  box-shadow: 0 16px 30px rgba(0, 166, 126, .14);
+}
+
+.plan-progress-orb::before {
+  content: "";
+  position: absolute;
+  inset: 14px;
+  border-radius: inherit;
+  background: #fff;
+  box-shadow: inset 0 0 0 1px #edf0f4;
+}
+
+.plan-progress-orb strong,
+.plan-progress-orb span {
+  position: relative;
+  z-index: 1;
+}
+
+.plan-progress-orb strong {
+  align-self: end;
+  color: #202330;
+  font-size: 30px;
+  line-height: 1;
+}
+
+.plan-progress-orb span {
+  align-self: start;
+  margin-top: 7px;
+  color: #8b92a0;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.plan-progress-copy {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.plan-progress-copy span {
+  color: #00a67e;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.plan-progress-copy strong {
+  color: #202330;
+  font-size: 30px;
+  line-height: 1;
+}
+
+.plan-progress-copy em {
+  color: #6d7584;
+  font-size: 13px;
+  font-style: normal;
+}
+
+.plan-progress-bar,
+.plan-inline-progress i,
+.update-group-row i {
+  overflow: hidden;
+  border-radius: 999px;
+  background: #edf0f4;
+}
+
+.plan-progress-bar {
+  height: 10px;
+  margin-top: 4px;
+}
+
+.plan-progress-bar u,
+.plan-inline-progress u,
+.update-group-row u {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #00a67e, #ff9f43);
+}
+
+.update-risk-list,
+.update-group-list {
+  display: grid;
+  gap: 10px;
+}
+
+.update-risk-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) 64px;
+  gap: 10px;
+  align-items: center;
+  min-height: 52px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8f9fb;
+}
+
+.update-risk-row div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.update-risk-row strong,
+.update-risk-row em {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.update-risk-row strong {
+  color: #202330;
+  font-size: 13px;
+}
+
+.update-risk-row em {
+  color: #8b92a0;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.update-risk-row b {
+  color: #ef4444;
+  font-size: 12px;
+  text-align: right;
+}
+
+.plan-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: #eef2f7;
+  color: #596172;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.plan-status.done {
+  background: #e7f7ef;
+  color: #00a67e;
+}
+
+.plan-status.on-track {
+  background: #fff7e8;
+  color: #f59f00;
+}
+
+.plan-status.behind,
+.plan-status.unmatched {
+  background: #fff0f0;
+  color: #ef4444;
+}
+
+.plan-status.paused {
+  background: #f1f3f6;
+  color: #8b92a0;
+}
+
+.plan-empty {
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed #dce2ea;
+  border-radius: 8px;
+  color: #8b92a0;
+  font-size: 13px;
+}
+
+.update-group-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, .8fr) 44px;
+  gap: 10px;
+  align-items: center;
+  min-height: 46px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f8f9fb;
+}
+
+.update-group-row div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.update-group-row strong,
+.update-group-row em {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.update-group-row strong {
+  color: #202330;
+  font-size: 13px;
+}
+
+.update-group-row em {
+  color: #8b92a0;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.update-group-row i {
+  height: 8px;
+}
+
+.update-group-row b {
+  color: #00a67e;
+  font-size: 12px;
+  text-align: right;
+}
+
+.update-owner-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.update-owner-grid span {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8f9fb;
+}
+
+.update-owner-grid em {
+  min-width: 0;
+  overflow: hidden;
+  color: #596172;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.update-owner-grid strong {
+  color: #ef4444;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.update-owner-grid small {
+  color: #8b92a0;
+  font-size: 12px;
 }
 
 .hot-factor-list,
@@ -3095,6 +3755,82 @@ const singleSnapshots = computed(() => {
   font-weight: 900;
 }
 
+.update-plan-table {
+  display: grid;
+  gap: 3px;
+  max-height: 560px;
+  overflow: auto;
+}
+
+.update-plan-head,
+.update-plan-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1.05fr) minmax(112px, .92fr) .62fr .42fr .54fr .44fr .72fr .62fr minmax(180px, 1.3fr);
+  gap: 10px;
+  align-items: center;
+  min-height: 38px;
+  min-width: 1120px;
+  padding: 0 10px;
+}
+
+.update-plan-head {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-bottom: 1px solid #edf0f4;
+  background: #fff;
+  color: #8b92a0;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.update-plan-row {
+  border-radius: 7px;
+  background: #f8f9fb;
+  font-size: 12px;
+}
+
+.update-plan-row strong,
+.update-plan-row span,
+.update-plan-row small {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.update-plan-row > b {
+  color: #202330;
+  font-size: 13px;
+}
+
+.update-plan-row > em {
+  color: #ef4444;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.update-plan-row small {
+  color: #8b92a0;
+}
+
+.plan-inline-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 38px;
+  gap: 6px;
+  align-items: center;
+}
+
+.plan-inline-progress i {
+  height: 6px;
+}
+
+.plan-inline-progress b {
+  color: #00a67e;
+  font-size: 12px;
+  text-align: right;
+}
+
 .account-table-head,
 .account-table-row {
   display: grid;
@@ -3317,12 +4053,15 @@ const singleSnapshots = computed(() => {
   }
 
   .battle-summary-grid,
+  .update-summary-grid,
   .hot-summary-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .hot-main-grid,
-  .hot-detail-grid {
+  .hot-detail-grid,
+  .update-plan-main-grid,
+  .update-plan-sub-grid {
     grid-template-columns: 1fr;
   }
 
@@ -3339,7 +4078,9 @@ const singleSnapshots = computed(() => {
   .analysis-grid,
   .single-layout,
   .battle-main-grid,
-  .battle-sub-grid {
+  .battle-sub-grid,
+  .update-plan-main-grid,
+  .update-plan-sub-grid {
     grid-template-columns: 1fr;
   }
 
@@ -3374,6 +4115,7 @@ const singleSnapshots = computed(() => {
   .kpi-grid,
   .chart-board,
   .battle-summary-grid,
+  .update-summary-grid,
   .hot-summary-grid,
   .hot-hero-metrics {
     grid-template-columns: 1fr;
@@ -3414,6 +4156,16 @@ const singleSnapshots = computed(() => {
 
   .hot-factor-row {
     grid-template-columns: 1fr;
+  }
+
+  .plan-progress-hero,
+  .update-risk-row,
+  .update-group-row {
+    grid-template-columns: 1fr;
+  }
+
+  .plan-progress-orb {
+    justify-self: center;
   }
 
   .battle-tree {
@@ -3473,6 +4225,10 @@ const singleSnapshots = computed(() => {
   }
 
   .cosmos-stage {
+    grid-template-columns: 1fr;
+  }
+
+  .update-owner-grid {
     grid-template-columns: 1fr;
   }
 }
