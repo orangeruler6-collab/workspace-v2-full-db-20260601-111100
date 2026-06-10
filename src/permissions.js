@@ -7,8 +7,8 @@ export const MODULE_DEFINITIONS = [
     label: '账号数据看板',
     icon: '📈',
     children: [
-      { id: 'accountDataDashboard', label: '数据看板', icon: '图' },
-      { id: 'accountDataAccounts', label: '账号池', icon: '库' },
+      { id: 'accountDataDashboard', label: '数据看板', icon: '📉' },
+      { id: 'accountDataAccounts', label: '账号池', icon: '👥' },
       { id: 'ops', label: '流水看板', icon: '📊' }
     ]
   },
