@@ -665,6 +665,14 @@ function cleanAmountAccountName(value) {
   );
 }
 
+function isAmountLabelOnlyName(name) {
+  const key = normalizeText(name)
+    .replace(/[：:]+$/g, '')
+    .replace(/[0-9][\d,.]*(?:元|块|万|w|W|k|K)?/g, '')
+    .replace(/\*/g, '');
+  return /^(费用|报价|金额|价格|合作价|合作金额|实际合作金额|实际合作价格|平台报价|对客折扣|对客返点|折扣|返点|返利)$/.test(key);
+}
+
 function knownAccounts() {
   const map = new Map();
   GROUP_ACCOUNTS.forEach(function(group) {
@@ -776,13 +784,16 @@ function extractAccountSchedules(raw) {
   return schedules;
 }
 
-function extractAmounts(raw) {
+function extractAmounts(raw, candidateNames) {
   const map = new Map();
+  const fallbackNames = (Array.isArray(candidateNames) ? candidateNames : [])
+    .map(text)
+    .filter(Boolean);
+  let fallbackIndex = 0;
   text(raw).split(/\r?\n/).forEach(function(line) {
     const clean = text(line);
     if (!clean || !/(元|报价|金额|价格|折扣|返点|\*)/.test(clean)) return;
-    const name = cleanAmountAccountName(clean);
-    if (!name) return;
+    let name = cleanAmountAccountName(clean);
     const expr = clean.match(/([0-9][\d,.]*)\s*\*\s*([0-9](?:\.\d+)?)/);
     const allMoney = Array.from(clean.matchAll(/([0-9][\d,.]*)\s*元/g)).map(function(match) { return money(match[1]); }).filter(Boolean);
     const original = expr ? money(expr[1]) : (allMoney[0] || 0);
@@ -799,6 +810,12 @@ function extractAmounts(raw) {
     if (!discounted && expr) discounted = money(Number(String(expr[1]).replace(/,/g, '')) * Number(expr[2]));
     if (!discounted && original && discountRate) discounted = money(original * discountRate / 100);
     if (!discounted && allMoney.length) discounted = allMoney[allMoney.length - 1];
+    const labelOnlyName = isAmountLabelOnlyName(name);
+    if (labelOnlyName && fallbackNames.length && (original || discounted)) {
+      name = fallbackNames[Math.min(fallbackIndex, fallbackNames.length - 1)];
+      fallbackIndex += 1;
+    }
+    if (!name || labelOnlyName && !fallbackNames.length) return;
     if (name && (original || discounted)) {
       const next = {
         accountName: name,
@@ -1015,7 +1032,7 @@ function parseProjectText(rawText, fallbackGroup) {
     if (known && !names.some(function(item) { return normalizeText(item) === normalizeText(known); })) names.push(known);
   });
   const schedules = extractAccountSchedules(raw);
-  const amounts = extractAmounts(raw);
+  const amounts = extractAmounts(raw, names);
   const amountNames = [];
   amounts.forEach(function(item) {
     const canonical = canonicalAccountName(item.accountName, names);
