@@ -1286,7 +1286,46 @@ module.exports = function createVideoPublishRoutes(deps) {
     ].join('');
   }
 
+  function douyinCommerceProductModalReadyScript() {
+    return [
+      '(function(){',
+      'function textOf(el){return (el&&((el.innerText||el.textContent||el.value||el.placeholder||el.getAttribute&&el.getAttribute("aria-label"))||"")||"").trim().replace(/\\s+/g," ")}',
+      'function visible(el){if(!el)return false;var r=el.getBoundingClientRect(),s=getComputedStyle(el);return s.display!=="none"&&s.visibility!=="hidden"&&r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth}',
+      'function disabled(el){return !!(el.disabled||el.getAttribute("aria-disabled")==="true"||/disabled|disable|loading/.test(String(el.className||"")))}',
+      'function ctx(el){var a=[],p=el;for(var i=0;i<5&&p;i++,p=p.parentElement)a.push(textOf(p));return a.join(" | ").slice(0,700)}',
+      'function items(selector){return Array.from(document.querySelectorAll(selector)).map(function(el){var r=el.getBoundingClientRect();return{el:el,text:textOf(el),ctx:ctx(el),placeholder:el.getAttribute&&el.getAttribute("placeholder")||"",type:el.getAttribute&&el.getAttribute("type")||"",cls:String(el.className||"").slice(0,160),visible:visible(el),disabled:disabled(el),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}})}',
+      'var body=(document.body&&document.body.innerText||"").replace(/\\s+/g," ");',
+      'var productEditorPattern=/\\u5546\\u54c1\\u77ed\\u6807\\u9898|\\u5546\\u54c1\\u539f\\u6807\\u9898|\\u5b8c\\u6210\\u7f16\\u8f91|\\u6700\\u591a\\u8f93\\u516510\\u4e2a\\u6c49\\u5b57/;',
+      'var dialogs=items("[role=dialog],.semi-modal,.semi-modal-content,[class*=modal],[class*=dialog],.dy-creator-content-modal-wrap,.dy-creator-content-modal").filter(function(item){return item.visible&&!item.disabled&&item.w>260&&item.h>160&&productEditorPattern.test(item.text+" "+item.ctx)}).sort(function(a,b){return(b.w*b.h)-(a.w*a.h)});',
+      'var controls=items("input,textarea,[contenteditable=true]").filter(function(item){return item.visible&&!item.disabled&&item.type!=="file"&&productEditorPattern.test(item.placeholder+" "+item.text+" "+item.ctx)}).sort(function(a,b){return a.y-b.y||a.x-b.x});',
+      'var modalReady=!!dialogs[0]||!!controls[0];',
+      'var attached=/\\u5df2\\u6dfb\\u52a0\\u5546\\u54c1/.test(body);',
+      'return{ok:attached||modalReady,attached:attached,modalReady:modalReady,dialog:dialogs[0]&&{text:dialogs[0].text.slice(0,120),ctx:dialogs[0].ctx.slice(0,160),x:dialogs[0].x,y:dialogs[0].y,w:dialogs[0].w,h:dialogs[0].h},controls:controls.slice(0,6).map(function(item){return{text:item.text,placeholder:item.placeholder,ctx:item.ctx.slice(0,160),x:item.x,y:item.y,w:item.w,h:item.h}}),linkEntryVisible:/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|https?:\\/\\//.test(body),tail:body.slice(-900)}',
+      '})()'
+    ].join('');
+  }
+
   async function runDouyinCommerceStage(row, commerce, prefix, session, combined, stage, timeoutMs) {
+    if (stage === 'completeProduct') {
+      const modalProbe = await evalBrowserJson(prefix, session, 'probe douyin commerce product modal', douyinCommerceProductModalReadyScript(), combined, 60000);
+      const modalData = modalProbe.data || {};
+      if (modalData.attached) {
+        combined.code = 0;
+        return {
+          result: modalProbe.result,
+          data: { ...modalData, ok: true, alreadyAttached: true }
+        };
+      }
+      if (!modalData.modalReady) {
+        combined.code = 1;
+        combined.stderr += '\n商品编辑弹窗尚未出现，已暂停填写商品文案，避免写入商品链接输入框：' + stringify(modalData);
+        return {
+          result: modalProbe.result,
+          data: { ...modalData, ok: false, waitingProductModal: true }
+        };
+      }
+      combined.code = 0;
+    }
     const probed = await evalBrowserJson(prefix, session, 'douyin commerce ' + stage, douyinCommerceScript(row, commerce, stage), combined, timeoutMs || 60000);
     if (stage === 'addProduct' && probed.data && !probed.data.ok) {
       const productUrl = cleanText(commerce && commerce.productUrl, 1000);
@@ -1837,13 +1876,20 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
     await runDouyinCommerceStage(row, commerce, prefix, session, combined, 'addProduct', 60000);
     if (combined.code !== 0) return combined;
     let completedProduct = null;
-    for (let productTry = 1; productTry <= 5; productTry += 1) {
-      await step('wait product modal ' + productTry, prefix.concat(['browser', session, 'wait', 'time', productTry === 1 ? '8' : '4']), 20000);
+    for (let productTry = 1; productTry <= 4; productTry += 1) {
+      await step('wait product modal ' + productTry, prefix.concat(['browser', session, 'wait', 'time', '4']), 15000);
       combined.code = 0;
       completedProduct = await runDouyinCommerceStage(row, commerce, prefix, session, combined, 'completeProduct', 60000);
       if (combined.code === 0) break;
-      if (productTry >= 5) return combined;
-      combined.stderr += '\n商品弹窗或商品卡片尚未稳定，继续等待后重试。';
+      if (productTry >= 4) return combined;
+      if (completedProduct && completedProduct.data && completedProduct.data.waitingProductModal && completedProduct.data.linkEntryVisible) {
+        combined.stderr += '\n商品编辑弹窗未出现，页面仍停在添加链接入口，重新点击添加链接后重试。';
+        combined.code = 0;
+        await runDouyinCommerceStage(row, commerce, prefix, session, combined, 'addProduct', 60000);
+        if (combined.code !== 0) return combined;
+      } else {
+        combined.stderr += '\n商品弹窗或商品卡片尚未稳定，短暂等待后重试。';
+      }
     }
     await step('wait product attached', prefix.concat(['browser', session, 'wait', 'time', '3']), 15000);
     const ready = await runDouyinCommerceStage(row, commerce, prefix, session, combined, 'verifyReady', 60000);
