@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import os
+import re
 import sqlite3
 import time
 import uuid
@@ -14,6 +15,23 @@ COLLECTION_ALIASES = {
     'bf_library_v1': 'bf',
     'cases_library_v1': 'cases',
 }
+
+SEARCH_SYNONYMS = {
+    '开场': ['开头', '开篇', '开局', '起手', '钩子', '前三秒', '第一句', 'hook'],
+    '开头': ['开场', '开篇', '开局', '起手', '钩子', '前三秒', '第一句', 'hook'],
+    '钩子': ['开场', '开头', '开篇', '开局', '起手', '前三秒', '第一句', 'hook'],
+    '冲突': ['反差', '矛盾', '争议', '悬念', '爆点', '转折', '对立', '问题'],
+    '反差': ['冲突', '矛盾', '争议', '悬念', '爆点', '转折', '对立'],
+    '爆点': ['冲突', '反差', '争议', '悬念', '看点', '亮点'],
+    '卖点': ['亮点', '优势', '特点', '看点', '核心点', '产品点'],
+    '看点': ['卖点', '亮点', '优势', '特点', '爆点'],
+    '游戏': ['手游', '端游', '主机', '玩家', '玩法', '剧情', '电竞'],
+    'brief': ['bf', '需求', '合作需求', '推广需求', '商单需求'],
+    'bf': ['brief', '需求', '合作需求', '推广需求', '商单需求'],
+    '案例': ['复盘', '参考', '样例', '拆解'],
+}
+
+SEARCH_INTENT_WORDS = set(SEARCH_SYNONYMS.keys())
 
 
 def normalize_collection(value):
@@ -288,6 +306,7 @@ def query_tokens(query):
     noise = {
         '这个', '一个', '视频', '内容', '素材', '文案', '分析', '结构', '背景', '搜索',
         '转写', '原文', '来源', '可以', '需要', '但是', '因为', '所以', '我们', '他们',
+        '帮我', '找一下', '看一下', '相关', '资料', '有没有', '适合', '参考一下',
         'the', 'and', 'http', 'https', 'www', 'com',
     }
     tokens = []
@@ -296,9 +315,11 @@ def query_tokens(query):
             continue
         if len(part) <= 18:
             tokens.append(part)
+            for intent in SEARCH_INTENT_WORDS:
+                if intent in part and intent != part:
+                    tokens.append(intent)
             continue
         # Long pasted text is too noisy as a query. Keep only compact Chinese/ASCII entities.
-        import re
         for match in re.findall(r'[a-z0-9_-]{2,30}|[\u4e00-\u9fff]{2,8}', part):
             if match not in noise:
                 tokens.append(match)
@@ -314,35 +335,124 @@ def query_tokens(query):
     return picked
 
 
+def token_variants(token):
+    token = str(token or '').lower().strip()
+    if not token:
+        return []
+    variants = [token]
+    variants.extend(SEARCH_SYNONYMS.get(token, []))
+    seen = set()
+    picked = []
+    for item in variants:
+        value = str(item or '').lower().strip()
+        if value and value not in seen:
+            seen.add(value)
+            picked.append(value)
+    return picked
+
+
+def item_search_fields(item):
+    return [
+        (item.get('hook') or '', 5),
+        (item.get('golden_line') or '', 5),
+        (item.get('case_tags') or '', 4),
+        (item.get('marketing_target') or '', 4),
+        (item.get('content_direction') or '', 4),
+        (item.get('account') or '', 3),
+        (item.get('scene') or '', 3),
+        (item.get('progression') or '', 3),
+        (item.get('source') or '', 2),
+        (item.get('content') or item.get('text') or '', 1),
+        (item.get('link') or '', 1),
+        (item.get('type') or '', 1),
+    ]
+
+
+def normalize_search_text(value):
+    return str(value or '').lower()
+
+
+def best_variant_score(fields, variants):
+    best = 0
+    matched = ''
+    for variant in variants:
+        variant_score = 0
+        for raw_text, weight in fields:
+            text = normalize_search_text(raw_text)
+            if not text or variant not in text:
+                continue
+            count = min(text.count(variant), 4)
+            base = 9 if len(variant) >= 4 else 5
+            variant_score += (base + count) * weight
+        if variant_score > best:
+            best = variant_score
+            matched = variant
+    return best, matched
+
+
 def score_item(item, query):
     q = str(query or '').lower().strip()
     tokens = query_tokens(q)
     if not q and not tokens:
         return 0
-    text = ' '.join([
-        item.get('content') or '',
-        item.get('account') or '',
-        item.get('scene') or '',
-        item.get('hook') or '',
-        item.get('golden_line') or '',
-        item.get('progression') or '',
-        item.get('source') or '',
-        item.get('marketing_target') or '',
-        item.get('content_direction') or '',
-        item.get('case_tags') or '',
-        item.get('link') or '',
-    ]).lower()
+    fields = item_search_fields(item)
+    text = ' '.join(normalize_search_text(value) for value, _ in fields)
     score = 0
     if q in text:
-        score += 100 + text.count(q)
+        score += 120 + min(text.count(q), 6) * 4
     matched = 0
+    matched_variants = []
     for token in tokens:
-        if token and token in text:
+        variants = token_variants(token)
+        token_score, matched_variant = best_variant_score(fields, variants)
+        if token_score:
             matched += 1
-            score += 6 if len(token) >= 4 else 3
-    if len(tokens) >= 2 and matched < 2:
+            matched_variants.append(matched_variant)
+            score += token_score
+    if tokens and matched == 0:
         return 0
-    return score
+    if len(tokens) >= 2:
+        coverage = matched / float(len(tokens))
+        if coverage >= 0.67:
+            score += 18
+        elif coverage >= 0.34:
+            score += 7
+        else:
+            score = max(1, int(score * 0.55))
+    item['_matched_tokens'] = matched
+    item['_matched_variants'] = matched_variants[:8]
+    return int(score)
+
+
+def load_search_items(collection, account_filter='', scene_filter='', max_items=5000):
+    key = normalize_collection(collection)
+    where = ['collection=?']
+    args = [key]
+    if account_filter and account_filter != '通用':
+        where.append('account=?')
+        args.append(account_filter)
+    if scene_filter:
+        where.append('scene=?')
+        args.append(scene_filter)
+    conn = get_db()
+    rows = conn.execute(
+        'SELECT * FROM vector_items WHERE ' + ' AND '.join(where) + ' ORDER BY updated_at DESC, created_at DESC LIMIT ?',
+        tuple(args + [max_items])
+    ).fetchall()
+    conn.close()
+    return [row_to_item(row) for row in rows]
+
+
+def search_result_item(item, preview_chars=900):
+    full_text = item.get('text') or item.get('content') or ''
+    preview = full_text[:preview_chars]
+    result = dict(item)
+    result['text'] = preview
+    result['content'] = preview
+    result['preview'] = preview
+    result['text_length'] = len(full_text)
+    result['is_preview'] = len(full_text) > len(preview)
+    return result
 
 
 def search_items(collection, params):
@@ -354,19 +464,17 @@ def search_items(collection, params):
     account_filter = str(params.get('account') or '').strip()
     scene_filter = str(params.get('scene') or '').strip()
 
-    items = list_items(key, {'limit': 5000})['data']
-    if account_filter and account_filter != '通用':
-        items = [item for item in items if item.get('account') == account_filter]
-    if scene_filter:
-        items = [item for item in items if item.get('scene') == scene_filter]
+    items = load_search_items(key, account_filter, scene_filter)
 
     ranked = []
     for item in items:
         score = score_item(item, query)
         if query and score < min_score:
             continue
-        next_item = dict(item)
+        next_item = search_result_item(item)
         next_item['score'] = score
+        next_item['matched_tokens'] = item.get('_matched_tokens', 0)
+        next_item['matched_variants'] = item.get('_matched_variants', [])
         ranked.append((score, next_item))
     ranked.sort(key=lambda pair: pair[0], reverse=True)
 
