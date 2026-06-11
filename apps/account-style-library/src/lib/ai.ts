@@ -23,7 +23,7 @@ import {
   saveStyle,
   upsertProject
 } from "./storage";
-import { normalizeRewritePrompt } from "./source-extraction";
+import { extractSourceUrls, normalizeRewritePrompt } from "./source-extraction";
 import { resolveRewriteSourceMaterial } from "./source-transcription";
 
 type ChatMessage = {
@@ -112,6 +112,8 @@ type FetchInitWithDispatcher = UndiciRequestInit & {
 const STYLE_MAX_OUTPUT_TOKENS = 3200;
 const WEB_RESEARCH_MAX_OUTPUT_TOKENS = 1800;
 const WEB_RESEARCH_TIMEOUT_MS = 180_000;
+const WEB_RESEARCH_HTTP_TIMEOUT_MS = 25_000;
+const WEB_RESEARCH_SEARCH_RESULT_LIMIT = 4;
 
 class StreamResponseTextError extends Error {
   partialText: string;
@@ -1049,11 +1051,19 @@ function extractResponseErrorMessage(data: unknown) {
 }
 
 async function buildWebResearchContext(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
+  const nativeError = { current: null as unknown };
   try {
     return await buildNativeWebResearchContext(input);
   } catch (error) {
+    nativeError.current = error;
     console.warn("[ai] web research failed:", describeErrorForLog(error));
-    return buildWebResearchFailureContext(error);
+  }
+
+  try {
+    return await buildSearchEngineResearchContext(input, nativeError.current);
+  } catch (error) {
+    console.warn("[ai] search engine research failed:", describeErrorForLog(error));
+    return buildWebResearchFailureContext(nativeError.current || error);
   }
 }
 
@@ -1089,10 +1099,8 @@ function summarizeWebResearchFailure(error: unknown) {
 }
 
 async function buildNativeWebResearchContext(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
-  const researchTask =
-    input.mode === "topic"
-      ? `请围绕这个写作主题联网检索最新事实，并整理成写作参考：\n${input.prompt}`
-      : `请围绕这次改写任务联网检索相关最新事实，并整理成写作参考。\n改写要求：${input.prompt}\n\n原文：\n${input.sourceText || ""}`;
+  const researchTask = buildResearchTask(input);
+  const researchQueries = buildResearchQueries(input);
 
   const messages: ChatMessage[] = [
     {
@@ -1102,7 +1110,7 @@ async function buildNativeWebResearchContext(input: { mode: Draft["mode"]; promp
     },
     {
       role: "user",
-      content: `${researchTask}\n\n要求：\n1. 只整理和写作任务强相关的信息。\n2. 每条信息尽量带上日期或时间线索。\n3. 来源部分列出站点名和链接。\n4. 不要直接写成成稿文案。`
+      content: `${researchTask}\n\n建议检索词：\n${researchQueries.map((query, index) => `${index + 1}. ${query}`).join("\n") || "无"}\n\n要求：\n1. 优先按建议检索词逐条搜索，再补充你认为必要的同义关键词。\n2. 只整理和写作任务强相关的信息，不要被素材里的无关句子带偏。\n3. 每条信息尽量带上日期或时间线索。\n4. 来源部分列出站点名和链接。\n5. 不要直接写成成稿文案。`
     }
   ];
 
@@ -1124,6 +1132,286 @@ async function buildNativeWebResearchContext(input: { mode: Draft["mode"]; promp
   }
 
   return `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}\n检索方式：Responses API web_search\n${result.text.trim()}`;
+}
+
+async function buildSearchEngineResearchContext(
+  input: { mode: Draft["mode"]; prompt: string; sourceText?: string },
+  nativeError: unknown
+) {
+  const queries = buildResearchQueries(input);
+  if (!queries.length) throw new Error("没有可用检索词");
+
+  const groups = await Promise.all(
+    queries.slice(0, 3).map(async (query) => ({
+      query,
+      results: await searchWebForResearch(query)
+    }))
+  );
+  const usefulGroups = groups
+    .map((group) => ({
+      ...group,
+      results: dedupeSearchResults(group.results).slice(0, WEB_RESEARCH_SEARCH_RESULT_LIMIT)
+    }))
+    .filter((group) => group.results.length);
+
+  if (!usefulGroups.length) {
+    throw new Error("搜索引擎兜底没有返回可用资料");
+  }
+
+  const sourceNote = nativeError ? `原生 web_search 未使用成功：${summarizeWebResearchFailure(nativeError) || "模型工具不可用"}` : "";
+  return [
+    `检索时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`,
+    "检索方式：搜索引擎 HTML 兜底",
+    sourceNote,
+    "",
+    ...usefulGroups.map((group, groupIndex) =>
+      [
+        `检索 ${groupIndex + 1}：${group.query}`,
+        ...group.results.map((result, resultIndex) =>
+          [
+            `${resultIndex + 1}. ${result.title}`,
+            result.snippet ? `摘要：${result.snippet}` : "",
+            `来源：${result.url}`
+          ]
+            .filter(Boolean)
+            .join("\n")
+        )
+      ].join("\n")
+    )
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+type WebSearchResult = {
+  title: string;
+  url: string;
+  snippet: string;
+};
+
+async function searchWebForResearch(query: string): Promise<WebSearchResult[]> {
+  const ddg = await fetchDuckDuckGoResults(query).catch((error) => {
+    console.warn("[ai] duckduckgo fallback failed:", describeErrorForLog(error));
+    return [];
+  });
+  if (ddg.length) return ddg;
+
+  return fetchBingResults(query);
+}
+
+async function fetchDuckDuckGoResults(query: string): Promise<WebSearchResult[]> {
+  const url = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+  const html = await fetchSearchHtml(url);
+  const results: WebSearchResult[] = [];
+  const resultPattern = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/gi;
+
+  for (const match of html.matchAll(resultPattern)) {
+    const urlValue = normalizeDuckDuckGoUrl(decodeHtml(match[1] || ""));
+    const title = cleanHtmlText(match[2] || "");
+    const snippet = cleanHtmlText(match[3] || "");
+    if (urlValue && title) results.push({ title, url: urlValue, snippet });
+  }
+
+  return results;
+}
+
+async function fetchBingResults(query: string): Promise<WebSearchResult[]> {
+  const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=8&mkt=zh-CN`;
+  const html = await fetchSearchHtml(url);
+  const results: WebSearchResult[] = [];
+  const resultPattern = /<li class="b_algo"[\s\S]*?<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:<p[^>]*>([\s\S]*?)<\/p>)?/gi;
+
+  for (const match of html.matchAll(resultPattern)) {
+    const urlValue = decodeHtml(match[1] || "");
+    const title = cleanHtmlText(match[2] || "");
+    const snippet = cleanHtmlText(match[3] || "");
+    if (urlValue && title) results.push({ title, url: urlValue, snippet });
+  }
+
+  return results;
+}
+
+async function fetchSearchHtml(url: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), WEB_RESEARCH_HTTP_TIMEOUT_MS);
+  try {
+    const response = await undiciFetch(url, {
+      headers: {
+        "User-Agent": "Mozilla/5.0 style-library research assistant",
+        Accept: "text/html,application/xhtml+xml"
+      },
+      signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`搜索请求失败：HTTP ${response.status}`);
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function buildResearchTask(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
+  const prompt = clampText(stripResearchNoise(input.prompt || ""), 1200);
+  const source = clampText(stripResearchNoise(input.sourceText || ""), 1600);
+  if (input.mode === "topic") {
+    return `请围绕这个写作主题联网检索最新事实，并整理成写作参考：\n${prompt}`;
+  }
+
+  return [
+    "请围绕这次改写任务联网检索相关最新事实，并整理成写作参考。",
+    `改写要求：${prompt || "按用户提供素材改写"}`,
+    source ? `原文/素材节选：\n${source}` : ""
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function buildResearchQueries(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
+  const text = stripResearchNoise([input.prompt, input.sourceText].filter(Boolean).join("\n"));
+  const candidates = [
+    ...extractMarkedResearchPhrases(text),
+    ...extractStructuredResearchPhrases(text),
+    makeKeywordQuery(input.prompt || ""),
+    makeKeywordQuery(input.sourceText || "")
+  ]
+    .map(normalizeResearchQuery)
+    .filter(Boolean);
+
+  return [...new Set(candidates)].slice(0, 3);
+}
+
+function extractMarkedResearchPhrases(text: string) {
+  const phrases: string[] = [];
+  for (const match of text.matchAll(/[《【「“"]([^《》【】「」“”"]{2,32})[》】」”"]/g)) {
+    phrases.push(match[1] || "");
+  }
+  for (const match of text.matchAll(/(?:产品|游戏|项目|品牌|活动|赛事|主题)\s*[：:]\s*([^\n，。；;]{2,42})/g)) {
+    phrases.push(match[1] || "");
+  }
+  return phrases;
+}
+
+function extractStructuredResearchPhrases(text: string) {
+  const phrases: string[] = [];
+  const lines = text
+    .split(/[。！？!?\n\r]+/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (const line of lines) {
+    const compact = removeDateNoise(line);
+    if (/[\u4e00-\u9fff]/.test(compact) && /(?:游戏|赛事|活动|产品|品牌|发布|上线|官方|价格|型号|版本|更新|大会|邀请赛)/.test(compact)) {
+      phrases.push(compact.slice(0, 42));
+    }
+  }
+
+  return phrases;
+}
+
+function makeKeywordQuery(text: string) {
+  const cleaned = removeDateNoise(stripResearchNoise(text))
+    .replace(/[^\p{Script=Han}A-Za-z0-9+#._ -]+/gu, " ")
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter((part) => part.length >= 2 && !RESEARCH_STOP_WORDS.has(part.toLowerCase()))
+    .slice(0, 12)
+    .join(" ");
+  return cleaned;
+}
+
+function stripResearchNoise(text: string) {
+  return String(text || "")
+    .replace(/https?:\/\/\S+/gi, " ")
+    .replace(/@\s*素材\d+/g, " ")
+    .replace(/(?:素材|Material)\s*\d+\s*[：:]?/gi, " ")
+    .replace(/来源链接|Source links|Video transcript|Document text|Feishu document/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function removeDateNoise(text: string) {
+  return text
+    .replace(/\b\d{1,2}\s*[\/.-]\s*\d{1,2}\b/g, " ")
+    .replace(/\d{1,2}\s*月\s*\d{1,2}\s*[日号]?/g, " ")
+    .replace(/\d{4}\s*年/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizeResearchQuery(query: string) {
+  return query
+    .replace(/\s+/g, " ")
+    .replace(/^(产品|游戏|项目|品牌|活动|赛事|主题)\s*[：:]\s*/g, "")
+    .trim()
+    .slice(0, 80);
+}
+
+const RESEARCH_STOP_WORDS = new Set([
+  "请",
+  "这个",
+  "那个",
+  "一篇",
+  "文案",
+  "改写",
+  "生成",
+  "素材",
+  "参考",
+  "主题",
+  "要求",
+  "用户",
+  "视频",
+  "内容",
+  "the",
+  "and",
+  "with",
+  "for"
+]);
+
+function dedupeSearchResults(results: WebSearchResult[]) {
+  const seen = new Set<string>();
+  return results.filter((result) => {
+    const key = normalizeSearchResultUrl(result.url);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function normalizeSearchResultUrl(url: string) {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = "";
+    ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content"].forEach((key) => parsed.searchParams.delete(key));
+    return parsed.toString();
+  } catch {
+    return url.trim();
+  }
+}
+
+function normalizeDuckDuckGoUrl(url: string) {
+  try {
+    const parsed = new URL(url, "https://duckduckgo.com");
+    const uddg = parsed.searchParams.get("uddg");
+    return uddg ? decodeURIComponent(uddg) : parsed.toString();
+  } catch {
+    return url;
+  }
+}
+
+function cleanHtmlText(html: string) {
+  return decodeHtml(html.replace(/<[^>]+>/g, " "))
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function decodeHtml(value: string) {
+  return value
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#39;/g, "'")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number.parseInt(code, 10)));
 }
 
 async function withWebResearchTimeout<T>(run: (signal: AbortSignal) => Promise<T>): Promise<T> {
@@ -1620,7 +1908,7 @@ function cleanSelectionReplacement(text: string) {
 
 async function normalizeRewriteSourceText(sourceText: string) {
   const trimmed = sourceText.trim();
-  if (!trimmed || (isNormalizedMaterialText(trimmed) && !containsReadableSourceLink(trimmed))) return trimmed;
+  if (!trimmed || (isNormalizedMaterialText(trimmed) && !containsAnySourceLink(trimmed))) return trimmed;
   return (await resolveRewriteSourceMaterial(trimmed)).normalizedText || trimmed;
 }
 
@@ -1628,8 +1916,8 @@ function isNormalizedMaterialText(sourceText: string) {
   return /^(【素材\s*\d+】|素材\s*\d+\s*[：:]|Material\s+\d+\s*:)/m.test(sourceText);
 }
 
-function containsReadableSourceLink(sourceText: string) {
-  return /https?:\/\/[^\s<>"']*(?:feishu|larksuite)\.(?:cn|com)[^\s<>"']*/i.test(sourceText);
+function containsAnySourceLink(sourceText: string) {
+  return extractSourceUrls(sourceText).length > 0;
 }
 
 async function savePreparedDraft(
