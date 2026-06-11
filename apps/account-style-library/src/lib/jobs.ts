@@ -61,7 +61,10 @@ async function ensureJobs() {
 async function readJson<T>(target: string): Promise<T | null> {
   try {
     return JSON.parse(await fs.readFile(target, "utf8")) as T;
-  } catch {
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.warn(`[jobs] invalid JSON skipped: ${target}`);
+    }
     return null;
   }
 }
@@ -70,7 +73,38 @@ async function writeJson(target: string, value: unknown) {
   await fs.mkdir(path.dirname(target), { recursive: true });
   const temp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.${Date.now()}.tmp`);
   await fs.writeFile(temp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  await fs.rename(temp, target);
+  try {
+    await renameWithRetry(temp, target);
+  } catch (error) {
+    await fs.rm(temp, { force: true, maxRetries: 3, retryDelay: 100 }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function renameWithRetry(source: string, target: string) {
+  const attempts = process.platform === "win32" ? 8 : 3;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      await fs.rename(source, target);
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRetriableFsError(error)) break;
+      await sleep(80 * (attempt + 1));
+    }
+  }
+  throw lastError;
+}
+
+function isRetriableFsError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "EPERM" || code === "EBUSY" || code === "EACCES";
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function writeJob(job: JobRecord) {
