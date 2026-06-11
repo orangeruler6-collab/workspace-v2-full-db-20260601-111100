@@ -16,22 +16,7 @@ COLLECTION_ALIASES = {
     'cases_library_v1': 'cases',
 }
 
-SEARCH_SYNONYMS = {
-    '开场': ['开头', '开篇', '开局', '起手', '钩子', '前三秒', '第一句', 'hook'],
-    '开头': ['开场', '开篇', '开局', '起手', '钩子', '前三秒', '第一句', 'hook'],
-    '钩子': ['开场', '开头', '开篇', '开局', '起手', '前三秒', '第一句', 'hook'],
-    '冲突': ['反差', '矛盾', '争议', '悬念', '爆点', '转折', '对立', '问题'],
-    '反差': ['冲突', '矛盾', '争议', '悬念', '爆点', '转折', '对立'],
-    '爆点': ['冲突', '反差', '争议', '悬念', '看点', '亮点'],
-    '卖点': ['亮点', '优势', '特点', '看点', '核心点', '产品点'],
-    '看点': ['卖点', '亮点', '优势', '特点', '爆点'],
-    '游戏': ['手游', '端游', '主机', '玩家', '玩法', '剧情', '电竞'],
-    'brief': ['bf', '需求', '合作需求', '推广需求', '商单需求'],
-    'bf': ['brief', '需求', '合作需求', '推广需求', '商单需求'],
-    '案例': ['复盘', '参考', '样例', '拆解'],
-}
-
-SEARCH_INTENT_WORDS = set(SEARCH_SYNONYMS.keys())
+SEARCH_INTENT_WORDS = set()
 
 
 def normalize_collection(value):
@@ -335,22 +320,6 @@ def query_tokens(query):
     return picked
 
 
-def token_variants(token):
-    token = str(token or '').lower().strip()
-    if not token:
-        return []
-    variants = [token]
-    variants.extend(SEARCH_SYNONYMS.get(token, []))
-    seen = set()
-    picked = []
-    for item in variants:
-        value = str(item or '').lower().strip()
-        if value and value not in seen:
-            seen.add(value)
-            picked.append(value)
-    return picked
-
-
 def item_search_fields(item):
     return [
         (item.get('hook') or '', 5),
@@ -372,22 +341,19 @@ def normalize_search_text(value):
     return str(value or '').lower()
 
 
-def best_variant_score(fields, variants):
-    best = 0
-    matched = ''
-    for variant in variants:
-        variant_score = 0
-        for raw_text, weight in fields:
-            text = normalize_search_text(raw_text)
-            if not text or variant not in text:
-                continue
-            count = min(text.count(variant), 4)
-            base = 9 if len(variant) >= 4 else 5
-            variant_score += (base + count) * weight
-        if variant_score > best:
-            best = variant_score
-            matched = variant
-    return best, matched
+def token_field_score(fields, token):
+    token = str(token or '').lower().strip()
+    if not token:
+        return 0
+    score = 0
+    for raw_text, weight in fields:
+        text = normalize_search_text(raw_text)
+        if not text or token not in text:
+            continue
+        count = min(text.count(token), 4)
+        base = 9 if len(token) >= 4 else 5
+        score += (base + count) * weight
+    return score
 
 
 def score_item(item, query):
@@ -401,13 +367,12 @@ def score_item(item, query):
     if q in text:
         score += 120 + min(text.count(q), 6) * 4
     matched = 0
-    matched_variants = []
+    matched_terms = []
     for token in tokens:
-        variants = token_variants(token)
-        token_score, matched_variant = best_variant_score(fields, variants)
+        token_score = token_field_score(fields, token)
         if token_score:
             matched += 1
-            matched_variants.append(matched_variant)
+            matched_terms.append(token)
             score += token_score
     if tokens and matched == 0:
         return 0
@@ -415,12 +380,12 @@ def score_item(item, query):
         coverage = matched / float(len(tokens))
         if coverage >= 0.67:
             score += 18
-        elif coverage >= 0.34:
+        elif len(tokens) >= 3 and coverage >= 0.5:
             score += 7
         else:
-            score = max(1, int(score * 0.55))
+            return 0
     item['_matched_tokens'] = matched
-    item['_matched_variants'] = matched_variants[:8]
+    item['_matched_terms'] = matched_terms[:8]
     return int(score)
 
 
@@ -474,7 +439,7 @@ def search_items(collection, params):
         next_item = search_result_item(item)
         next_item['score'] = score
         next_item['matched_tokens'] = item.get('_matched_tokens', 0)
-        next_item['matched_variants'] = item.get('_matched_variants', [])
+        next_item['matched_terms'] = item.get('_matched_terms', [])
         ranked.append((score, next_item))
     ranked.sort(key=lambda pair: pair[0], reverse=True)
 

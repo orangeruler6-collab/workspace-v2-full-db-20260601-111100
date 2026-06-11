@@ -481,6 +481,10 @@
           <textarea class="wf-side-text" v-model="detailContent" readonly></textarea>
         </template>
         <template v-else-if="selectedNode.type === 'vec'">
+          <label class="wf-field">
+            <span>表达参考检索词（可选）</span>
+            <input class="wf-side-input" v-model="selectedNode.data.query" placeholder="留空自动拆题，多组用 / 分隔" />
+          </label>
           <textarea class="wf-side-text" v-model="detailContent" readonly></textarea>
         </template>
         <template v-else-if="selectedNode.type === 'ideaCard'">
@@ -953,7 +957,7 @@ function df(t) {
   if (t === 'analyze') return { s: '待运行', r: '' }
   if (t === 'hot') return { s: '待运行', rs: [], analysis: '', query: '', source: '' }
   if (t === 'platform') return { s: '待运行', rs: [], candidates: [], selected: [], keywords: '', platforms: ['bilibili'], enabled: false }
-  if (t === 'vec') return { s: '待运行', rs: [] }
+  if (t === 'vec') return { s: '待运行', rs: [], query: '', autoQuery: '', searchQueries: [], fallbackQueries: [], search_intent: null, vectorPlan: null }
   if (t === 'sum') return { s: '待运行', txt: '' }
   if (t === 'idea') return { s: '待运行', list: [], sel: -1 }
   if (t === 'ideaCard') return { s: '已选择创意', title: '', text: '', entry: '', framework: '', ending: '', sourceIdeaId: '' }
@@ -1693,6 +1697,9 @@ function formatSearchResults(results = []) {
     `### ${i + 1}. ${r.title || r.hook || r.account || '素材结果'}`,
     bullets([
       r.score !== undefined ? '匹配分：' + r.score : '',
+      r.vector_query ? '检索词：' + r.vector_query : '',
+      r.vector_match_scope ? '参考层级：' + r.vector_match_scope : '',
+      Array.isArray(r.matched_terms) && r.matched_terms.length ? '命中词：' + r.matched_terms.slice(0, 5).join('、') : '',
       r.account ? '账号：' + r.account : '',
       r.scene ? '场景：' + r.scene : '',
       r.link || r.url || '',
@@ -1711,16 +1718,350 @@ function vectorResultText(item) {
   return (match ? match[1] : text).trim()
 }
 
-function extractVectorSearchQuery(text) {
-  const source = String(text || '')
+const VECTOR_QUERY_NOISE = new Set([
+  '这个', '一个', '不是', '但是', '因为', '所以', '然后', '如果', '我们', '他们', '大家',
+  '视频', '内容', '素材', '文案', '分析', '结构', '切入点', '切入', '框架', '背景', '搜索',
+  '参考', '表达', '方式', '原文', '总结', '摘要', '来源', '信息', '相关', '资料', '可以',
+  '需要', '建议', '输出', '格式', '使用', '保留', '注意', '要求', '说明', '可选', '最多',
+  '一句话', '主线', '论据', '结尾', '风险', '提醒', '项目', '产品', '核心', '必须覆盖',
+  '原切入点', '主线结构', '关键论据', '结尾方式', '风险提醒', '创作方向', '建议切入角度',
+  '账号', '平台', '标题', '发布时间', '热度', '转写原文', '金句',
+  '抖音', '快手', '小红书', '视频号', 'B站', 'b站', '哔哩哔哩',
+  'title', 'golden', 'douyin', 'bilibili',
+  '离谱', '逆天', '炸裂', '震惊', '没想到', '太狠', '太强', '绝了',
+  '商单', 'brief', 'bf', 'http', 'https', 'www', 'com'
+])
+
+const VECTOR_SIGNAL_TERMS = [
+  '游戏圈', '大瓜', '爆料', '爆点', '翻车', '塌房', '反转', '反差', '冲突', '争议',
+  '质疑', '悬念', '揭秘', '避雷', '电诈', '诈骗', '网恋', '跨国', '套路', '骗局',
+  '开场', '开头', '前三秒', '钩子', '悬疑', '猎奇', '吐槽', '测评', '攻略', '教程',
+  '福利', '活动', '版本', '联动', '赛事', '战队', '冠军', '对手', '排名', '看点',
+  '卖点', '痛点', '需求', '禁区', '授权', '组件', '植入', '口播', '信息流'
+]
+
+const VECTOR_FRAME_TERMS = new Set([
+  '游戏圈', '大瓜', '爆料', '爆点', '翻车', '塌房', '反转', '反差', '冲突', '争议',
+  '质疑', '悬念', '揭秘', '避雷', '开场', '开头', '前三秒', '钩子', '悬疑', '猎奇',
+  '吐槽', '看点'
+])
+
+function cleanVectorTerm(value) {
+  return String(value || '')
     .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/^(账号|平台|标题|发布时间|热度|转写原文|金句|title|golden)\s*[：:]\s*/i, '')
+    .replace(/^[\s#>*\-—•·、.。0-9一二三四五六七八九十]+/g, '')
+    .replace(/^(关于|围绕|针对|这期|本期|这条|这个|一个|如何|为什么|怎么|帮我|请你|请|写一篇|做一个)+/g, '')
+    .replace(/(的视频|的内容|的素材|的文案|相关|资料|参考|表达|方式|结构|分析|搜索)+$/g, '')
+    .replace(/[，。！？；：、,.!?;:()[\]【】《》"'“”‘’]/g, ' ')
     .replace(/[　\s]+/g, ' ')
     .trim()
-  const quoted = source.match(/[「“](.{2,32}?)[」”]/)
-  if (quoted) return quoted[1].trim()
-  const words = (source.match(/[\u4e00-\u9fa5A-Za-z0-9]{2,12}/g) || [])
-    .filter(w => !['视频', '内容', '素材', '文案', '分析', '结构', '切入点', '框架', '背景', '搜索'].includes(w))
-  return Array.from(new Set(words)).slice(0, 6).join(' ')
+}
+
+function vectorTermKey(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, '')
+}
+
+function isVectorNoiseTerm(value) {
+  const term = cleanVectorTerm(value)
+  const key = vectorTermKey(term)
+  if (!term || key.length < 2 || key.length > 28) return true
+  if (/^\d+$/.test(key)) return true
+  if (VECTOR_QUERY_NOISE.has(term) || VECTOR_QUERY_NOISE.has(key)) return true
+  return false
+}
+
+function isVectorBannedTerm(value, bannedTerms = []) {
+  const key = vectorTermKey(value)
+  if (!key) return true
+  return (bannedTerms || []).some(term => {
+    const banned = vectorTermKey(term)
+    return banned && (key === banned || key.includes(banned))
+  })
+}
+
+function uniqueVectorList(list = [], limit, bannedTerms = []) {
+  const seen = new Set()
+  const out = []
+  ;(list || []).forEach(item => {
+    const value = cleanVectorTerm(item)
+    const key = vectorTermKey(value)
+    if (!value || isVectorNoiseTerm(value) || isVectorBannedTerm(value, bannedTerms) || seen.has(key)) return
+    seen.add(key)
+    out.push(value)
+  })
+  return typeof limit === 'number' ? out.slice(0, limit) : out
+}
+
+function tokenizeVectorText(value, limit = 30) {
+  const source = String(value || '')
+    .replace(/https?:\/\/\S+/g, ' ')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .split(/\r?\n/)
+    .filter(line => !/^\s*(账号|平台|发布时间|热度|转写原文)\s*[：:]/.test(line))
+    .join('\n')
+    .replace(/[，。！？；：、,.!?;:()[\]【】《》"'“”‘’]/g, ' ')
+    .replace(/[　\s]+/g, ' ')
+    .trim()
+  const words = source.match(/#[\u4e00-\u9fa5A-Za-z0-9_]{2,24}|[A-Za-z][A-Za-z0-9_-]{1,30}|[\u4e00-\u9fa5]{2,12}/g) || []
+  return uniqueVectorList(words.map(word => word.startsWith('#') ? word.slice(1) : word), limit)
+}
+
+function extractVectorSearchQuery(text) {
+  const terms = buildVectorSearchTerms(text)
+  return normalizeVectorQuery([].concat(terms.titleTerms, terms.signalTerms, terms.sectionTerms, terms.generalTerms).slice(0, 8))
+}
+
+function normalizeVectorQuery(value, limit = 5, bannedTerms = []) {
+  const raw = Array.isArray(value) ? value.join(' ') : String(value || '')
+  const words = raw.includes(' ')
+    ? raw.split(/\s+/)
+    : tokenizeVectorText(raw, limit + 4)
+  return uniqueVectorList(words, limit, bannedTerms).join(' ')
+}
+
+function splitVectorQueryInput(value) {
+  return String(value || '')
+    .split(/[\n/|；;]+/)
+    .map(query => normalizeVectorQuery(query, 6))
+    .filter(Boolean)
+}
+
+function findVectorSignalTerms(text) {
+  const source = String(text || '')
+  const lower = source.toLowerCase()
+  return uniqueVectorList(VECTOR_SIGNAL_TERMS.filter(term => {
+    const value = String(term || '')
+    return /[a-z]/i.test(value) ? lower.includes(value.toLowerCase()) : source.includes(value)
+  }), 10)
+}
+
+function extractVectorPhrases(text) {
+  const source = String(text || '')
+  const phrases = []
+  const quoted = /[《【「“](.{2,36}?)[》】」”]/g
+  let match
+  while ((match = quoted.exec(source))) phrases.push(match[1])
+  const lines = source.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+  lines.slice(0, 8).forEach(line => {
+    if (/^(账号|平台|发布时间|热度|转写原文)\s*[：:]/.test(line)) return
+    const labeled = line.match(/^(标题|title|金句|golden)\s*[：:]\s*(.+)$/i)
+    if (labeled) {
+      phrases.push(labeled[2])
+      return
+    }
+    if (line.length <= 72 && !/^#{1,6}\s*/.test(line)) phrases.push(line)
+  })
+  lines.forEach(line => {
+    const kv = line.match(/^(?:[-*]\s*)?(标题|title|主题|选题|项目|产品|游戏|活动|看点|切入点|原切入点|核心卖点|创作方向|建议切入角度)[：:]\s*(.+)$/i)
+    if (kv) phrases.push(kv[2])
+  })
+  return uniqueVectorList(phrases, 12)
+}
+
+function extractVectorSectionLines(text) {
+  const lines = String(text || '').split(/\r?\n/)
+  const out = []
+  let active = false
+  const sectionPattern = /^(?:#{1,6}\s*)?(素材一句话|原切入点|主线结构|关键论据|结尾方式|风险提醒|项目一句话|核心卖点|必须覆盖|创作方向|禁区|可用素材|建议切入角度|看点|需求|卖点|痛点)\b/
+  for (const rawLine of lines) {
+    const line = rawLine.trim()
+    if (!line) continue
+    if (/^#{1,6}\s*/.test(line)) {
+      active = sectionPattern.test(line)
+      continue
+    }
+    if (active) out.push(line)
+    if (/^(?:[-*]\s*)?(素材一句话|原切入点|切入点|核心卖点|创作方向|建议切入角度|风险提醒|看点|需求|卖点|痛点)[：:]/.test(line)) {
+      out.push(line.replace(/^[^：:]+[：:]\s*/, ''))
+    }
+  }
+  return uniqueVectorList(out, 16)
+}
+
+function buildVectorSearchTerms(text) {
+  const source = String(text || '')
+  const phrases = extractVectorPhrases(source)
+  const sectionLines = extractVectorSectionLines(source)
+  const phraseTerms = phrases.flatMap(phrase => [].concat(findVectorSignalTerms(phrase), tokenizeVectorText(phrase, 6)))
+  const sectionTerms = sectionLines.flatMap(line => [].concat(findVectorSignalTerms(line), tokenizeVectorText(line, 8)))
+  const signalTerms = findVectorSignalTerms(source)
+  const generalTerms = tokenizeVectorText([phrases.join('\n'), sectionLines.join('\n'), source.slice(0, 900)].join('\n'), 30)
+  return {
+    titleTerms: uniqueVectorList(phraseTerms, 8),
+    signalTerms: uniqueVectorList(signalTerms, 10),
+    sectionTerms: uniqueVectorList(sectionTerms, 12),
+    generalTerms: uniqueVectorList(generalTerms, 12)
+  }
+}
+
+function isUsefulVectorQuery(query) {
+  const terms = splitVectorQueryInput(query)[0]?.split(/\s+/).filter(Boolean) || []
+  if (!terms.length) return false
+  if (terms.length === 1 && ['游戏', '活动', '版本', '开场', '开头', '钩子', '卖点', '看点', '争议', '爆点', '攻略', '教程', '测评', '福利', '排名'].includes(terms[0])) return false
+  return true
+}
+
+function pickVectorSearchQueries(manualQuery, intent, sourceText) {
+  const manualQueries = splitVectorQueryInput(manualQuery)
+  if (manualQueries.length) return uniqueVectorList(manualQueries, 3)
+
+  const terms = buildVectorSearchTerms(sourceText)
+  const entities = uniqueVectorList([].concat(intent?.entities || [], terms.titleTerms, terms.generalTerms), 10)
+  const intentTerms = uniqueVectorList([].concat(intent?.intent_terms || []), 6)
+  const signals = uniqueVectorList([].concat(terms.signalTerms, intentTerms, terms.sectionTerms), 12)
+  const topicSignals = uniqueVectorList(signals.filter(term => !VECTOR_FRAME_TERMS.has(term)), 8)
+  const frameSignals = uniqueVectorList(signals.filter(term => VECTOR_FRAME_TERMS.has(term)), 6)
+  const primarySignals = topicSignals.length ? topicSignals : signals
+  const candidates = []
+  const addQuery = value => {
+    const query = normalizeVectorQuery(value, 5)
+    if (query && isUsefulVectorQuery(query)) candidates.push(query)
+  }
+  const addTerms = value => addQuery((value || []).filter(Boolean).join(' '))
+
+  if (primarySignals.length >= 2) addTerms(primarySignals.slice(0, 5))
+  addTerms(frameSignals.slice(0, 2).concat(topicSignals.slice(0, 3)))
+  addTerms([entities[0], ...topicSignals.slice(0, 3), ...frameSignals.slice(0, 1)])
+  addTerms(entities.slice(0, 2).concat(primarySignals.slice(0, 2)))
+  ;(intent?.queries || []).forEach(query => addQuery(query))
+  addTerms(terms.sectionTerms.slice(0, 5))
+  addTerms(terms.titleTerms.slice(0, 4))
+  addQuery(extractVectorSearchQuery(sourceText))
+
+  return uniqueVectorList(candidates, 3)
+}
+
+function pickVectorFallbackQueries(intent, sourceText) {
+  const terms = buildVectorSearchTerms(sourceText)
+  const entities = uniqueVectorList([].concat(intent?.entities || [], terms.titleTerms, terms.generalTerms), 8)
+  const signals = uniqueVectorList([].concat(terms.signalTerms, intent?.intent_terms || [], terms.sectionTerms), 12)
+  const frameSignals = uniqueVectorList(signals.filter(term => VECTOR_FRAME_TERMS.has(term)), 6)
+  const topicSignals = uniqueVectorList(signals.filter(term => !VECTOR_FRAME_TERMS.has(term)), 6)
+  const candidates = []
+  const addQuery = value => {
+    const query = normalizeVectorQuery(value, 5)
+    if (query && isUsefulVectorQuery(query)) candidates.push(query)
+  }
+  const addTerms = value => addQuery((value || []).filter(Boolean).join(' '))
+
+  if (frameSignals.length >= 2) addTerms(frameSignals.slice(0, 4))
+  if (frameSignals.length && topicSignals.length) addTerms(frameSignals.slice(0, 2).concat(topicSignals.slice(0, 2)))
+  if (frameSignals.length && entities.length) addTerms([entities[0], ...frameSignals.slice(0, 3)])
+
+  return uniqueVectorList(candidates, 2)
+}
+
+function extractVectorMetaTerms(text) {
+  const out = ['抖音', '快手', '小红书', '视频号', 'B站', 'bilibili', 'douyin']
+  String(text || '').split(/\r?\n/).forEach(line => {
+    const match = line.trim().match(/^(账号|平台|发布时间|热度)\s*[：:]\s*(.+)$/)
+    if (!match) return
+    tokenizeVectorText(match[2], 4).forEach(term => out.push(term))
+  })
+  return uniqueVectorList(out, 12)
+}
+
+function normalizeVectorAiQueries(list = [], limit = 3, bannedTerms = []) {
+  return uniqueVectorList((Array.isArray(list) ? list : [])
+    .map(query => normalizeVectorQuery(String(query || '').replace(/["“”'‘’`]+/g, ' ').replace(/[，、,+]+/g, ' '), 5, bannedTerms))
+    .filter(query => query && isUsefulVectorQuery(query)), limit)
+}
+
+function parseVectorSearchPlanReply(reply, sourceText = '') {
+  const bannedTerms = extractVectorMetaTerms(sourceText)
+  const raw = String(reply || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .trim()
+  const jsonText = (raw.match(/\{[\s\S]*\}/) || [raw])[0]
+  try {
+    const data = JSON.parse(jsonText)
+    return {
+      primary: normalizeVectorAiQueries(data.primary_queries || data.primary || data.queries, 3, bannedTerms),
+      fallback: normalizeVectorAiQueries(data.fallback_queries || data.fallback || data.expression_queries, 2, bannedTerms),
+      reason: compactLine(data.reason || data.search_reason || '', 160)
+    }
+  } catch {
+    const lines = raw.split(/\r?\n/)
+      .map(line => line.replace(/^[-*\d.、\s]+/, '').trim())
+      .filter(Boolean)
+    return {
+      primary: normalizeVectorAiQueries(lines.slice(0, 3), 3, bannedTerms),
+      fallback: normalizeVectorAiQueries(lines.slice(3, 5), 2, bannedTerms),
+      reason: ''
+    }
+  }
+}
+
+async function getVectorSearchPlanWithAI(analysisText, sourceText) {
+  const analysis = String(analysisText || '').trim()
+  const source = String(sourceText || '').trim()
+  if (!analysis && !source) return null
+  const bannedTerms = extractVectorMetaTerms([analysis, source].filter(Boolean).join('\n'))
+  try {
+    const d = await chatMinimax({
+      model: 'gpt-5.5',
+      system: '你只负责为本地向量素材库规划检索词。只输出 JSON，不写文案，不补充事实。',
+      prompt: `请基于“AI拆解摘要”和“原始素材摘录”，判断这篇文案去本地转写库里应该搜什么。
+
+目标：
+- primary_queries：找题材/对象/核心事件相近的表达参考。
+- fallback_queries：如果题材搜不到，再找开场方式/冲突表达/叙事包装相近的表达参考。
+
+硬规则：
+- 只输出 JSON：{"primary_queries":[],"fallback_queries":[],"reason":""}
+- 每个 query 2-5 个短词，用空格分隔，例如“玩家 卡视角 游戏制作者”。
+- primary_queries 不要只写“离谱/大瓜/爆点/游戏/素材/文案”等包装词或泛词。
+- 不要输出账号、平台、发布时间、热度、标题、转写原文、链接等元信息。
+- 以下是本次禁用的元信息词，绝对不要输出：${bannedTerms.join('、') || '无'}
+- 不要输出整句长句，尽量抽成可检索的名词/动作/冲突。
+- 检索词必须来自材料中的真实信息，不能发明新事实。
+
+AI拆解摘要：
+${analysis.substring(0, 2200)}
+
+原始素材摘录：
+${source.substring(0, 2200)}`
+    })
+    const plan = parseVectorSearchPlanReply(d.reply || d.response || d.content || '', [analysis, source].filter(Boolean).join('\n'))
+    if (!plan.primary.length && !plan.fallback.length) return null
+    return plan
+  } catch {
+    return null
+  }
+}
+
+async function searchVectorQuerySet(queries = [], scope = '主题匹配') {
+  const errors = []
+  const batches = await Promise.all((queries || []).map(async query => {
+    try {
+      const d = await searchVector({ query, limit: 5, min_score: 4 })
+      return (d.results || []).map(item => ({
+        ...item,
+        vector_query: query,
+        vector_match_scope: scope
+      }))
+    } catch (e) {
+      errors.push(e.message || String(e))
+      return []
+    }
+  }))
+  return { results: mergeVectorResults(batches.flat()), errors }
+}
+
+function mergeVectorResults(results = []) {
+  const map = new Map()
+  ;(results || []).forEach(item => {
+    const text = vectorResultText(item)
+    if (!text) return
+    const matched = item?.matched_tokens
+    if (matched !== undefined && Number(matched) <= 0) return
+    const key = item?.id || item?.link || item?.url || vectorTermKey(text.slice(0, 180))
+    if (!key) return
+    const previous = map.get(key)
+    if (!previous || Number(item?.score || 0) > Number(previous?.score || 0)) map.set(key, item)
+  })
+  return Array.from(map.values()).sort((a, b) => Number(b.score || 0) - Number(a.score || 0))
 }
 
 function filterVectorResults(results = [], limit = 2) {
@@ -3641,15 +3982,59 @@ async function runN(n, options = {}) {
     }
 
     if (n.type === 'vec') {
-      const txt = gD(n, 'analyze') || gD(n, 'transcribe')
+      const analysisTxt = gD(n, 'analyze')
+      const transcribeTxt = gD(n, 'transcribe')
+      const txt = [analysisTxt, transcribeTxt].filter(Boolean).join('\n\n')
       if (!txt) { n.data.s = '需要信息采集内容'; return }
-      n.data.s = '向量搜索中...'
-      const query = extractVectorSearchQuery(txt).trim()
-      if (!query) { n.data.s = '没有提取到可用搜索词'; return }
-      n.data.query = query
-      const d = await searchVector({ query, limit: 3, min_score: 6 })
-      n.data.rs = filterVectorResults(d.results || [], 2)
-      n.data.s = n.data.rs.length ? '高相关素材 ' + n.data.rs.length + ' 条' : '未找到高相关素材，后续以原文为主'
+      n.data.s = '规划向量检索词...'
+      const typedQuery = String(n.data.query || '').trim()
+      const autoQuery = String(n.data.autoQuery || '').trim()
+      const manualQuery = typedQuery && typedQuery !== autoQuery ? typedQuery : ''
+      let intent = { query: '', queries: [], entities: [], exclude_terms: [], intent_terms: [] }
+      let vectorPlan = null
+      let queries = []
+      let fallbackQueries = []
+      if (manualQuery) {
+        queries = pickVectorSearchQueries(manualQuery, intent, txt)
+      } else {
+        n.data.s = 'AI 规划向量检索词...'
+        vectorPlan = await getVectorSearchPlanWithAI(analysisTxt, transcribeTxt || txt)
+        if (vectorPlan) {
+          queries = vectorPlan.primary
+          fallbackQueries = vectorPlan.fallback
+        }
+        if (!queries.length && !fallbackQueries.length) {
+          intent = await getSearchIntentQuery(txt, 'vector')
+          queries = pickVectorSearchQueries('', intent, txt)
+          fallbackQueries = pickVectorFallbackQueries(intent, txt)
+        }
+      }
+      if (!queries.length && !fallbackQueries.length) { n.data.s = '没有提取到可用搜索词'; return }
+      n.data.search_intent = vectorPlan
+        ? { mode: 'ai_vector_plan', queries, fallback_queries: fallbackQueries, reason: vectorPlan.reason || '' }
+        : intent
+      n.data.vectorPlan = vectorPlan
+      n.data.searchQueries = queries
+      n.data.fallbackQueries = fallbackQueries
+      n.data.query = (queries.length ? queries : fallbackQueries).join(' / ')
+      if (!manualQuery) n.data.autoQuery = n.data.query
+      n.data.s = '向量搜索中：' + (queries.length ? queries.join(' / ') : fallbackQueries.join(' / '))
+      let searchState = await searchVectorQuerySet(queries, manualQuery ? '手动检索' : '主题匹配')
+      let usedFallback = false
+      if (!searchState.results.length && fallbackQueries.length) {
+        n.data.s = '主题未强匹配，尝试表达兜底：' + fallbackQueries.join(' / ')
+        const fallbackState = await searchVectorQuerySet(fallbackQueries, '表达兜底（题材未强匹配）')
+        searchState = {
+          results: fallbackState.results,
+          errors: searchState.errors.concat(fallbackState.errors)
+        }
+        usedFallback = Boolean(searchState.results.length)
+      }
+      const merged = searchState.results
+      n.data.rs = filterVectorResults(merged, 2)
+      n.data.s = n.data.rs.length
+        ? (usedFallback ? '表达兜底 ' : '表达参考 ') + n.data.rs.length + ' 条 · 检索 ' + (usedFallback ? fallbackQueries.length : queries.length) + ' 组'
+        : (searchState.errors.length ? '向量搜索失败：' + searchState.errors[0] : '未找到高相关表达参考，后续以原文为主')
       return
     }
 
