@@ -1,4 +1,4 @@
-export const MODULE_DEFINITIONS = [
+﻿export const MODULE_DEFINITIONS = [
   { id: 'accountmonitor', label: '账号热榜', icon: '↗' },
   { id: 'trafficPlan', label: '投流计划', icon: '◆' },
   { id: 'dailyhot', label: '每日热点', icon: '🔥' },
@@ -36,7 +36,8 @@ export const MODULE_DEFINITIONS = [
   { id: 'feedback', label: '意见收集', icon: '✦' },
   { id: 'vector', label: '向量库', icon: '🧠' },
   { id: 'adminUsers', label: '成员管理', icon: '👥', adminOnly: true },
-  { id: 'operationLogs', label: '操作日志', icon: '📜', adminOnly: true }
+  { id: 'operationLogs', label: '操作日志', icon: '📜', adminOnly: true },
+  { id: 'systemHealth', label: '全模块自检', icon: '◎', adminOnly: true }
 ]
 
 const copyWorkbenchChildren = MODULE_DEFINITIONS.find(item => item.id === 'copyWorkbench')?.children
@@ -76,7 +77,7 @@ export const ALL_MODULE_DEFINITIONS = LEAF_MODULE_DEFINITIONS.concat(
   HIDDEN_MODULE_DEFINITIONS.filter(item => item.id !== 'workflow')
 )
 export const MEMBER_MODULES = LEAF_MODULE_DEFINITIONS.filter(item => !item.adminOnly)
-export const RESTRICTED_MEMBER_MODULES = ['ops', 'adminUsers', 'operationLogs']
+export const RESTRICTED_MEMBER_MODULES = ['ops', 'adminUsers', 'operationLogs', 'systemHealth']
 
 export function isAdminLike(user) {
   if (!user) return false
@@ -108,3 +109,5 @@ export function canAccessModule(user, moduleId) {
   if (user.role === 'member') return true
   return Array.isArray(user.permissions) && user.permissions.includes(moduleId)
 }
+
+

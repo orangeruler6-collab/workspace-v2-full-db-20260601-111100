@@ -16,8 +16,8 @@
           <div class="card-hdr">
             <span class="tool-icon">转</span>
             <div class="card-title-group">
-              <span class="card-title">抖音 / B站转写</span>
-              <span class="card-caption">默认快速转写，需要素材下载时再勾选下载</span>
+              <span class="card-title">抖音 / B站 / MP3 转写</span>
+              <span class="card-caption">链接走快速转写，音频直接上传硅基流动</span>
             </div>
             <div class="transcribe-switch" aria-label="转写平台">
               <button
@@ -33,6 +33,13 @@
                 :class="{ active: transcribePlatform === 'bilibili' }"
                 @click="transcribePlatform = 'bilibili'">
                 B站
+              </button>
+              <button
+                type="button"
+                class="mode-btn"
+                :class="{ active: transcribePlatform === 'audio' }"
+                @click="transcribePlatform = 'audio'">
+                MP3
               </button>
             </div>
           </div>
@@ -221,6 +228,92 @@
               </div>
             </div>
           </div>
+
+          <div v-show="transcribePlatform === 'audio'" class="transcribe-pane">
+            <div class="operation-step">
+              <span class="step-index">1</span>
+              <div class="step-main">
+                <div class="step-label">MP3 上传</div>
+                <div
+                  class="audio-upload-zone"
+                  :class="{ active: audioFileName, busy: audioTranscribing, dragging: audioDragging }"
+                  @dragover.prevent="audioDragging = true"
+                  @dragleave.prevent="audioDragging = false"
+                  @drop.prevent="handleAudioDrop">
+                  <div class="audio-upload-copy">
+                    <strong>{{ audioFileName || '选择或拖入 MP3 / 音频文件' }}</strong>
+                    <span>支持拖入 MP3、M4A、WAV、AAC、FLAC、OGG，适合直播录音和长音频转写</span>
+                  </div>
+                  <label class="btn btn-ghost btn-sm" :class="{ disabled: audioTranscribing }">
+                    选择文件
+                    <input
+                      type="file"
+                      accept=".mp3,.m4a,.wav,.aac,.flac,.ogg,.opus,audio/*"
+                      :disabled="audioTranscribing"
+                      @change="handleAudioFileChange" />
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="operation-step">
+              <span class="step-index">2</span>
+              <div class="step-main">
+                <div class="step-label">处理路线</div>
+                <div class="bilibili-route-panel">
+                  <span class="route-card active">上传音频</span>
+                  <span class="route-card active">硅基流动</span>
+                  <span class="route-card">清洗分段</span>
+                </div>
+                <button class="btn btn-primary run-btn audio-run-btn" :disabled="audioTranscribing || !audioFileName" @click="handleTranscribeAudio">
+                  {{ audioTranscribing ? '转写中...' : '开始 MP3 转写' }}
+                </button>
+              </div>
+            </div>
+
+            <div class="operation-step">
+              <span class="step-index">3</span>
+              <div class="step-main">
+                <div class="progress-panel" :class="{ active: audioTranscribing, done: audioProgress === 100 && !audioError, failed: !!audioError }">
+                  <div class="progress-line">
+                    <span class="step-label">进度</span>
+                    <span class="progress-status">{{ audioProgressText }}</span>
+                    <strong>{{ audioProgress }}%</strong>
+                  </div>
+                  <div class="progress-track">
+                    <span class="progress-fill" :style="{ width: audioProgress + '%' }"></span>
+                  </div>
+                </div>
+
+                <div v-if="audioFileName || audioSource" class="source-meta-strip">
+                  <span v-if="audioFileName" class="source-title">{{ audioFileName }}</span>
+                  <span v-if="audioSource" class="result-tag">{{ audioSourceLabel(audioSource) }}</span>
+                </div>
+
+                <div v-if="audioError" class="result-box error-box">
+                  {{ audioError }}
+                </div>
+
+                <div v-if="audioResult" class="transcript-output">
+                  <div class="result-head">
+                    <span class="step-label">转写文案</span>
+                    <div class="result-actions">
+                      <button class="btn btn-primary btn-sm" @click="handleGenerateCopy('audio', audioResult)">带入评论</button>
+                      <button class="btn btn-ghost btn-sm" :disabled="audioFixing" @click="handleFixAudio">
+                        {{ audioFixing ? '清洗中...' : '清洗分段' }}
+                      </button>
+                    </div>
+                  </div>
+                  <textarea
+                    v-model="audioResult"
+                    class="inp transcript-area"
+                    rows="8"
+                    :readonly="audioTranscribing || audioFixing"
+                    placeholder="MP3 转写结果会出现在这里" />
+                </div>
+              </div>
+            </div>
+          </div>
           </div>
         </div>
 
@@ -238,12 +331,14 @@ import { useToast } from '../composables/useToast'
 import { useClipboard } from '../composables/useClipboard'
 import { useDouyinTool } from './tools/useDouyinTool'
 import { useBilibiliTranscription } from './tools/useBilibiliTranscription'
+import { useAudioTranscription } from './tools/useAudioTranscription'
 import CommentGeneratorPanel from './tools/CommentGeneratorPanel.vue'
 
 const { showToast } = useToast()
 const { handleCopy } = useClipboard(showToast)
 const transcribePlatform = ref('douyin')
 const commentPanelRef = ref(null)
+const audioDragging = ref(false)
 
 const {
   douyinUrl,
@@ -280,12 +375,39 @@ const {
   handleFix: handleFixBilibili
 } = useBilibiliTranscription(showToast)
 
+const {
+  audioFileName,
+  audioTranscribing,
+  audioProgress,
+  audioProgressText,
+  audioResult,
+  audioError,
+  audioSource,
+  audioFixing,
+  setAudioFile,
+  handleTranscribeAudio,
+  handleFixAudio
+} = useAudioTranscription(showToast)
+
+function handleAudioFileChange(event) {
+  const file = event.target.files && event.target.files[0]
+  event.target.value = ''
+  if (file) setAudioFile(file)
+}
+
+function handleAudioDrop(event) {
+  audioDragging.value = false
+  if (audioTranscribing.value) return
+  const file = event.dataTransfer?.files?.[0]
+  if (file) setAudioFile(file)
+}
+
 function handleGenerateCopy(platform, text) {
   const value = String(text || '').trim()
   if (!value) return showToast('没有可带入的文案', 'error')
   commentPanelRef.value?.fill({
     script: value,
-    videoUrl: platform === 'bilibili' ? bilibiliUrl.value : douyinUrl.value
+    videoUrl: platform === 'bilibili' ? bilibiliUrl.value : platform === 'douyin' ? douyinUrl.value : ''
   })
   transcribePlatform.value = platform
   showToast('已带入评论生成区', 'success')
@@ -312,6 +434,14 @@ function bilibiliSourceLabel(source) {
     whisper: '音频转写'
   }
   return map[source] || source
+}
+
+function audioSourceLabel(source) {
+  const map = {
+    siliconflow: '硅基流动',
+    'FunAudioLLM/SenseVoiceSmall': 'SenseVoiceSmall'
+  }
+  return map[source] || source || '音频转写'
 }
 </script>
 
@@ -420,20 +550,21 @@ function bilibiliSourceLabel(source) {
 
 .transcribe-switch {
   flex: 0 0 auto;
-  display: inline-grid;
-  grid-template-columns: repeat(2, 1fr);
+  display: inline-flex;
+  align-items: center;
   gap: 4px;
   margin-left: auto;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--panel-bg);
+  white-space: nowrap;
 }
 
 .mode-btn {
-  min-width: 64px;
+  min-width: 54px;
   min-height: 32px;
-  padding: 0 12px;
+  padding: 0 10px;
   border: 1px solid transparent;
   border-radius: 7px;
   background: transparent;
@@ -630,6 +761,59 @@ function bilibiliSourceLabel(source) {
   width: 100%;
   min-height: 220px;
   resize: vertical;
+}
+
+.audio-upload-zone {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  background: var(--panel-bg-soft);
+}
+
+.audio-upload-zone.active {
+  border-color: var(--border-bright);
+}
+
+.audio-upload-zone.dragging {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 12%, var(--panel-bg-soft));
+}
+
+.audio-upload-zone.busy {
+  opacity: 0.82;
+}
+
+.audio-upload-zone input[type="file"] {
+  display: none;
+}
+
+.audio-upload-copy {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.audio-upload-copy strong {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.audio-upload-copy span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.audio-run-btn {
+  margin-top: 10px;
+  width: 100%;
 }
 
 .comment-textarea,

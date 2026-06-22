@@ -71,11 +71,6 @@
             <button class="mini-btn" @click="loadFolders" :disabled="folderLoading">刷新</button>
           </div>
           <div class="tree-list">
-            <div class="tree-row" :class="{ active: currentFolder === ALL_FOLDER }" @click="selectFolder(ALL_FOLDER)">
-              <span class="tree-icon">◎</span>
-              <span class="tree-name">全部素材</span>
-              <em>{{ storage?.indexed_count || 0 }}</em>
-            </div>
             <div class="tree-row" :class="{ active: currentFolder === '/' }" @click="selectFolder('/')">
               <span class="tree-icon">/</span>
               <span class="tree-name">根目录</span>
@@ -220,7 +215,7 @@
           <div v-else-if="!visibleFolders.length && list.length === 0" class="list-empty">
             <div class="empty-icon">∅</div>
             <div class="empty-text">当前目录没有素材</div>
-            <div class="empty-sub">可以新建子文件夹、上传素材，或从智能采片自动入库。</div>
+            <div class="empty-sub">可以新建子文件夹、上传素材，或从 AI剪辑自动入库。</div>
           </div>
 
           <div v-else-if="viewMode === 'grid'" class="material-grid explorer-grid anim-fade-up stagger-children">
@@ -625,7 +620,6 @@ const props = defineProps({
 })
 
 const {
-  ALL_FOLDER,
   ALL_CATEGORY,
   materialType,
   typeLabels,

@@ -36,6 +36,10 @@
       </label>
       <div class="danmaku-option">
         <label class="toggle-row">
+          <input v-model="commentFastMode" type="checkbox" />
+          <span>快速生成</span>
+        </label>
+        <label class="toggle-row">
           <input v-model="danmakuEnabled" type="checkbox" />
           <span>同时生成弹幕</span>
         </label>
@@ -68,7 +72,7 @@
             <span>{{ commentResult.length }} 条</span>
           </div>
           <button
-            v-for="(comment, index) in commentResult"
+            v-for="(comment, index) in visibleCommentResult"
             :key="'comment-' + index"
             type="button"
             class="comment-item"
@@ -77,6 +81,14 @@
             <span class="comment-index">{{ index + 1 }}</span>
             <span>{{ comment }}</span>
           </button>
+          <button
+            v-if="hiddenCommentCount"
+            type="button"
+            class="result-toggle"
+            @click="resultsExpanded = !resultsExpanded"
+          >
+            {{ resultsExpanded ? '收起评论预览' : `已隐藏 ${hiddenCommentCount} 条，点击展开` }}
+          </button>
         </section>
         <section v-if="danmakuResult?.length" class="result-section">
           <div class="result-section-head">
@@ -84,7 +96,7 @@
             <span>{{ danmakuResult.length }} 条</span>
           </div>
           <button
-            v-for="(comment, index) in danmakuResult"
+            v-for="(comment, index) in visibleDanmakuResult"
             :key="'danmaku-' + index"
             type="button"
             class="comment-item danmaku-item"
@@ -92,6 +104,14 @@
           >
             <span class="comment-index">{{ index + 1 }}</span>
             <span>{{ comment }}</span>
+          </button>
+          <button
+            v-if="hiddenDanmakuCount"
+            type="button"
+            class="result-toggle"
+            @click="resultsExpanded = !resultsExpanded"
+          >
+            {{ resultsExpanded ? '收起弹幕预览' : `已隐藏 ${hiddenDanmakuCount} 条，点击展开` }}
           </button>
         </section>
       </div>
@@ -125,6 +145,10 @@ const props = defineProps({
   compact: {
     type: Boolean,
     default: false
+  },
+  resultPreviewLimit: {
+    type: Number,
+    default: 18
   }
 })
 
@@ -135,6 +159,7 @@ const {
   commentScript,
   commentCount,
   commentScenario,
+  commentFastMode,
   danmakuEnabled,
   danmakuCount,
   commentAccountSel,
@@ -173,6 +198,26 @@ const hasContext = computed(() =>
 
 const contextKey = computed(() => JSON.stringify(normalizedContext.value))
 const lastAppliedScript = ref('')
+const resultsExpanded = ref(false)
+
+const previewLimit = computed(() => {
+  const limit = Number(props.resultPreviewLimit)
+  if (Number.isFinite(limit) && limit > 0) return Math.max(1, Math.round(limit))
+  return props.compact ? 8 : 18
+})
+
+const visibleCommentResult = computed(() => {
+  const rows = commentResult.value || []
+  return resultsExpanded.value ? rows : rows.slice(0, previewLimit.value)
+})
+
+const visibleDanmakuResult = computed(() => {
+  const rows = danmakuResult.value || []
+  return resultsExpanded.value ? rows : rows.slice(0, previewLimit.value)
+})
+
+const hiddenCommentCount = computed(() => Math.max(0, (commentResult.value?.length || 0) - visibleCommentResult.value.length))
+const hiddenDanmakuCount = computed(() => Math.max(0, (danmakuResult.value?.length || 0) - visibleDanmakuResult.value.length))
 
 function applyContext(force = false) {
   const context = normalizedContext.value
@@ -222,6 +267,10 @@ watch(contextKey, () => {
   if (commentResult.value?.length) return
   applyContext(false)
 }, { immediate: true })
+
+watch([commentResult, danmakuResult], () => {
+  resultsExpanded.value = false
+})
 </script>
 
 <style scoped>
@@ -364,6 +413,18 @@ watch(contextKey, () => {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.result-toggle {
+  width: 100%;
+  min-height: 34px;
+  border: 1px dashed var(--border, #d7dde8);
+  border-radius: 8px;
+  background: var(--panel-bg-soft, rgba(148, 163, 184, 0.08));
+  color: var(--text-muted, #64748b);
+  font-size: 12px;
+  font-weight: 900;
+  cursor: pointer;
 }
 
 .comment-index {

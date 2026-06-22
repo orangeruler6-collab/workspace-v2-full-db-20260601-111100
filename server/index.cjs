@@ -1,4 +1,4 @@
-const http = require('http');
+﻿const http = require('http');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
@@ -84,7 +84,9 @@ const createFeedbackRoutes = require('./routes/feedback.cjs');
 const createAgentRoutes = require('./routes/agent.cjs');
 const createTrafficPlanRoutes = require('./routes/trafficPlan.cjs');
 const createTrafficPlanV2Routes = require('./routes/trafficPlanV2.cjs');
+const createAccountDataRoutes = require('./routes/accountData.cjs');
 const createProjectDeliveryRoutes = require('./routes/projectDelivery.cjs');
+const createSystemHealthRoutes = require('./routes/systemHealth.cjs');
 
 const logger = createLogger('server');
 var pythonRuntime = createPythonRuntime({ serverDir: __dirname });
@@ -152,11 +154,25 @@ var trafficPlanRoutes = createTrafficPlanRoutes({
 var trafficPlanV2Routes = createTrafficPlanV2Routes({
   root: RUNTIME_ROOT
 });
+var accountDataRoutes = createAccountDataRoutes({
+  root: RUNTIME_ROOT,
+  serverDir: __dirname
+});
 var projectDeliveryRoutes = createProjectDeliveryRoutes({
   root: RUNTIME_ROOT
 });
+var systemHealthRoutes = createSystemHealthRoutes({
+  root: RUNTIME_ROOT,
+  repoRoot: ROOT
+});
 if (trafficPlanRoutes && typeof trafficPlanRoutes._startCrmAutoRefresh === 'function') {
   trafficPlanRoutes._startCrmAutoRefresh(Number(process.env.TRAFFIC_CRM_REFRESH_INTERVAL_MS) || 2 * 60 * 60 * 1000);
+}
+if (accountDataRoutes && typeof accountDataRoutes._startCollectScheduler === 'function') {
+  accountDataRoutes._startCollectScheduler();
+}
+if (systemHealthRoutes && typeof systemHealthRoutes._startScheduler === 'function') {
+  systemHealthRoutes._startScheduler();
 }
 var smartCollectRoutes = createSmartCollectRoutes({
   db: videoStore._db,
@@ -197,7 +213,8 @@ var materialRoutes = {
 var downloadRoutes = createDownloadRoutes();
 
 var routes = {};
-Object.assign(routes, authRoutes, adminRoutes, toolsRoutes, vectorRoutes, imagegenRoutes, ideasRoutes, profitRoutes, scheduleRoutes, dailyHotRoutes, materialRoutes, downloadRoutes, smartCollectRoutes, aiEditRoutes, accountMonitorRoutes, accountStyleRoutes, copygenRoutes, videoPublishRoutes, feedbackRoutes, trafficPlanRoutes, trafficPlanV2Routes, projectDeliveryRoutes);
+Object.assign(routes, authRoutes, adminRoutes, toolsRoutes, vectorRoutes, imagegenRoutes, ideasRoutes, profitRoutes, scheduleRoutes, dailyHotRoutes, materialRoutes, downloadRoutes, smartCollectRoutes, aiEditRoutes, accountMonitorRoutes, accountStyleRoutes, copygenRoutes, videoPublishRoutes, feedbackRoutes, trafficPlanRoutes, trafficPlanV2Routes, projectDeliveryRoutes, systemHealthRoutes);
+Object.assign(routes, accountDataRoutes);
 var agentRoutes = createAgentRoutes({
   root: RUNTIME_ROOT,
   routes: routes,
@@ -210,7 +227,7 @@ Object.assign(routes, agentRoutes);
 
 var authDisabledUser = {
   id: 0,
-  username: '免登录测试',
+  username: 'dev-user',
   display_name: '免登录测试',
   role: 'admin',
   permissions: authStore.ALL_MODULES || [],
@@ -241,6 +258,7 @@ function moduleForRoute(routePath) {
   if (routePath.indexOf('/api/ideas') === 0) return 'ideaboard';
   if (routePath.indexOf('/api/daily-hot') === 0) return 'dailyhot';
   if (routePath.indexOf('/api/account-monitor') === 0) return 'accountmonitor';
+  if (routePath.indexOf('/api/account-data') === 0) return 'accountDataDashboard';
   if (routePath.indexOf('/api/project-delivery') === 0) return 'projectDelivery';
   if (routePath.indexOf('/api/download') === 0) return 'download';
   if (routePath.indexOf('/api/imagegen') === 0 || routePath.indexOf('/api/minimax/image') === 0 || routePath.indexOf('/api/gpt-image2') === 0 || routePath.indexOf('/api/dreamina') === 0) return 'imagegen';
@@ -252,6 +270,7 @@ function moduleForRoute(routePath) {
   if (routePath.indexOf('/api/video-publish') === 0) return 'videopublish';
   if (routePath.indexOf('/api/feedback') === 0) return 'feedback';
   if (routePath.indexOf('/api/traffic-plan') === 0) return 'trafficPlan';
+  if (routePath.indexOf('/api/system-health') === 0) return 'systemHealth';
   if (routePath.indexOf('/api/system/health') === 0) return 'auth';
   if (
     routePath.indexOf('/api/transcribe') === 0 ||
@@ -283,17 +302,18 @@ function auditBody(body) {
 
 function auditSummaryFor(routePath, body, data) {
   var method = body._method || 'POST';
-  if (data && (data.error || data.ok === false)) return '请求失败：' + routePath;
-  if (method === 'GET') return '查看：' + routePath;
-  if (method === 'DELETE') return '删除：' + routePath;
-  if (method === 'PATCH' || method === 'PUT') return '更新：' + routePath;
-  return '操作：' + routePath;
+  if (data && (data.error || data.ok === false)) return 'request failed: ' + routePath;
+  if (method === 'GET') return 'view: ' + routePath;
+  if (method === 'DELETE') return 'delete: ' + routePath;
+  if (method === 'PATCH' || method === 'PUT') return 'update: ' + routePath;
+  return 'operate: ' + routePath;
 }
 
 function shouldAuditRoute(routePath) {
   if (routePath.indexOf('/api/') !== 0) return false;
   if (routePath === '/api/health') return false;
   if (routePath === '/api/system/health') return false;
+  if (routePath === '/api/system-health/latest') return false;
   if (routePath === '/api/admin/logs') return false;
   if (routePath === '/api/auth/me') return false;
   if (routePath === '/api/workflow/styles') return false;
@@ -323,32 +343,26 @@ function genericAuditInfo(routePath, body, data, startedAt) {
 
 function auditInfo(routePath, body, data) {
   if (!data || data.error || data.ok === false) return null;
-  if (routePath === '/api/profits' && body._method === 'POST') {
-    return { module: 'ops', action: 'profit.create', target_type: 'profit', target_id: data.id, summary: '新增流水记录', metadata: auditBody(body) };
-  }
-  if (/^\/api\/profits\/\d+$/.test(routePath) && (body._method === 'PATCH' || body._method === 'PUT')) {
-    return { module: 'ops', action: 'profit.update', target_type: 'profit', target_id: body.id, summary: '更新流水记录', metadata: auditBody(body) };
-  }
-  if (/^\/api\/profits\/\d+$/.test(routePath) && body._method === 'DELETE') {
-    return { module: 'ops', action: 'profit.delete', target_type: 'profit', target_id: body.id, summary: '删除流水记录', metadata: auditBody(body) };
-  }
-  if (routePath === '/api/profit/add') return { module: 'ops', action: 'profit.create', target_type: 'profit', target_id: data.id, summary: '新增流水记录', metadata: auditBody(body) };
-  if (routePath === '/api/profit/update') return { module: 'ops', action: 'profit.update', target_type: 'profit', target_id: body.id, summary: '更新流水记录', metadata: auditBody(body) };
-  if (routePath === '/api/profit/delete') return { module: 'ops', action: 'profit.delete', target_type: 'profit', target_id: body.id, summary: '删除流水记录', metadata: auditBody(body) };
-  if (routePath === '/api/schedule/save') return { module: 'schedule', action: 'schedule.save', target_type: 'schedule', summary: '保存排期看板', metadata: { tasks: Array.isArray(body.tasks) ? body.tasks.length : 0, members: Array.isArray(body.members) ? body.members.length : 0 } };
-  if (routePath === '/api/materials/upload') return { module: 'material', action: 'material.upload', target_type: 'material', target_id: data.id, summary: '上传素材：' + (body.original || body.filename || ''), metadata: auditBody(body) };
-  if (routePath === '/api/materials/update') return { module: 'material', action: 'material.update', target_type: 'material', target_id: body.id, summary: '更新素材信息', metadata: auditBody(body) };
-  if (routePath === '/api/materials/delete') return { module: 'material', action: 'material.delete', target_type: 'material', target_id: body.id, summary: '删除素材', metadata: auditBody(body) };
-  if (routePath === '/api/ideas/add') return { module: 'ideaboard', action: 'idea.create', target_type: 'idea', target_id: data.id, summary: '新增创意', metadata: auditBody(body) };
-  if (routePath === '/api/ideas/update') return { module: 'ideaboard', action: 'idea.update', target_type: 'idea', target_id: body.id, summary: '更新创意', metadata: auditBody(body) };
-  if (routePath === '/api/ideas/delete') return { module: 'ideaboard', action: 'idea.delete', target_type: 'idea', target_id: body.id, summary: '删除创意', metadata: auditBody(body) };
-  if (routePath === '/api/daily-hot/refresh') return { module: 'dailyhot', action: 'dailyhot.refresh', target_type: 'daily_hot', target_id: body.date || data.date || '', summary: '更新每日热点', metadata: { date: body.date || data.date, sources: body.sources, count: Array.isArray(data.items) ? data.items.length : 0 } };
-  if (routePath === '/api/daily-hot/analyze') return { module: 'dailyhot', action: 'dailyhot.analyze', target_type: 'daily_hot', target_id: body.date || data.date || '', summary: '分析每日热点', metadata: { date: body.date || data.date } };
-  if (routePath === '/api/daily-hot/update-status') return { module: 'dailyhot', action: 'dailyhot.update_status', target_type: 'daily_hot', target_id: body.id, summary: '更新热点状态：' + body.status, metadata: auditBody(body) };
-  if (routePath === '/api/daily-hot/manual-add') return { module: 'dailyhot', action: 'dailyhot.manual_add', target_type: 'daily_hot', target_id: body.title || '', summary: '手动新增热点：' + (body.title || ''), metadata: auditBody(body) };
+  if (routePath === '/api/profits' && body._method === 'POST') return { module: 'ops', action: 'profit.create', target_type: 'profit', target_id: data.id, summary: 'create profit record', metadata: auditBody(body) };
+  if (/^\/api\/profits\/\d+$/.test(routePath) && (body._method === 'PATCH' || body._method === 'PUT')) return { module: 'ops', action: 'profit.update', target_type: 'profit', target_id: body.id, summary: 'update profit record', metadata: auditBody(body) };
+  if (/^\/api\/profits\/\d+$/.test(routePath) && body._method === 'DELETE') return { module: 'ops', action: 'profit.delete', target_type: 'profit', target_id: body.id, summary: 'delete profit record', metadata: auditBody(body) };
+  if (routePath === '/api/profit/add') return { module: 'ops', action: 'profit.create', target_type: 'profit', target_id: data.id, summary: 'create profit record', metadata: auditBody(body) };
+  if (routePath === '/api/profit/update') return { module: 'ops', action: 'profit.update', target_type: 'profit', target_id: body.id, summary: 'update profit record', metadata: auditBody(body) };
+  if (routePath === '/api/profit/delete') return { module: 'ops', action: 'profit.delete', target_type: 'profit', target_id: body.id, summary: 'delete profit record', metadata: auditBody(body) };
+  if (routePath === '/api/schedule/save') return { module: 'schedule', action: 'schedule.save', target_type: 'schedule', summary: 'save schedule board', metadata: { tasks: Array.isArray(body.tasks) ? body.tasks.length : 0, members: Array.isArray(body.members) ? body.members.length : 0 } };
+  if (routePath === '/api/materials/upload') return { module: 'material', action: 'material.upload', target_type: 'material', target_id: data.id, summary: 'upload material: ' + (body.original || body.filename || ''), metadata: auditBody(body) };
+  if (routePath === '/api/materials/update') return { module: 'material', action: 'material.update', target_type: 'material', target_id: body.id, summary: 'update material', metadata: auditBody(body) };
+  if (routePath === '/api/materials/delete') return { module: 'material', action: 'material.delete', target_type: 'material', target_id: body.id, summary: 'delete material', metadata: auditBody(body) };
+  if (routePath === '/api/ideas/add') return { module: 'ideaboard', action: 'idea.create', target_type: 'idea', target_id: data.id, summary: 'create idea', metadata: auditBody(body) };
+  if (routePath === '/api/ideas/update') return { module: 'ideaboard', action: 'idea.update', target_type: 'idea', target_id: body.id, summary: 'update idea', metadata: auditBody(body) };
+  if (routePath === '/api/ideas/delete') return { module: 'ideaboard', action: 'idea.delete', target_type: 'idea', target_id: body.id, summary: 'delete idea', metadata: auditBody(body) };
+  if (routePath === '/api/daily-hot/refresh') return { module: 'dailyhot', action: 'dailyhot.refresh', target_type: 'daily_hot', target_id: body.date || data.date || '', summary: 'refresh daily hot', metadata: { date: body.date || data.date, sources: body.sources, count: Array.isArray(data.items) ? data.items.length : 0 } };
+  if (routePath === '/api/daily-hot/analyze') return { module: 'dailyhot', action: 'dailyhot.analyze', target_type: 'daily_hot', target_id: body.date || data.date || '', summary: 'analyze daily hot', metadata: { date: body.date || data.date } };
+  if (routePath === '/api/daily-hot/update-status') return { module: 'dailyhot', action: 'dailyhot.update_status', target_type: 'daily_hot', target_id: body.id, summary: 'update hot status: ' + body.status, metadata: auditBody(body) };
+  if (routePath === '/api/daily-hot/manual-add') return { module: 'dailyhot', action: 'dailyhot.manual_add', target_type: 'daily_hot', target_id: body.title || '', summary: 'manual add hot: ' + (body.title || ''), metadata: auditBody(body) };
+  if (routePath === '/api/system-health/run') return { module: 'systemHealth', action: 'system_health.run', target_type: 'system_health', summary: 'run system health check', metadata: { status: data.report && data.report.status, summary: data.report && data.report.summary } };
   return null;
 }
-
 function routeRequest(req, res) {
   var parsedUrl;
   try { parsedUrl = new URL(req.url, 'http://localhost'); }
@@ -638,7 +652,7 @@ function routeRequest(req, res) {
     var rateResult = rateLimiter.check(clientIp);
     if (!rateResult.allowed) {
       sendJSON(res, 429, {
-        error: '请求过于频繁，请 ' + rateResult.retryAfter + ' 秒后再试',
+        error: '璇锋眰杩囦簬棰戠箒锛岃 ' + rateResult.retryAfter + ' 绉掑悗鍐嶈瘯',
         retryAfter: rateResult.retryAfter
       });
       return;
@@ -745,3 +759,7 @@ ensureReady().then(function() {
 }
 
 module.exports = handleRequest;
+
+
+
+

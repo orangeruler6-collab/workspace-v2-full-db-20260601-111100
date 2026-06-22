@@ -120,6 +120,7 @@
               <div>
                 <h4>下载 / 处理队列</h4>
                 <p>{{ mediaQueueSummary }}</p>
+                <button class="media-clear-btn" type="button" @click="loadLatestMediaBatchZip">找回最近打包</button>
               </div>
               <button v-if="mediaTasks.length" class="media-clear-btn" type="button" :disabled="mediaBusy" @click="clearMediaTasks">清空</button>
             </div>
@@ -157,6 +158,7 @@
                       <span class="file-size">{{ [file.type, formatFileSize(file.size), file.url ? '保存：' + file.url : ''].filter(Boolean).join(' · ') }}</span>
                     </div>
                     <div class="download-result-actions">
+                      <template v-if="file.type !== 'zip'">
                       <button
                         v-for="action in mediaFollowupActions"
                         :key="action.id"
@@ -166,6 +168,7 @@
                         @click="runMediaFollowup(action.id, file, task)">
                         {{ action.shortLabel }}
                       </button>
+                      </template>
                       <a class="btn btn-primary btn-sm" :href="file.download_url || file.url" :download="file.name || true" target="_blank">下载</a>
                     </div>
                   </div>
@@ -263,6 +266,27 @@
     <div v-if="activeTab === 'video'" class="video-page">
       <!-- 左侧：视频区域 -->
       <div class="video-main-area">
+        <div class="analysis-mode-switch">
+          <button
+            type="button"
+            class="analysis-mode-option"
+            :class="{ active: analyzeInputMode === 'video' }"
+            :disabled="analyzing || uploadingVideo"
+            @click="setAnalyzeInputMode('video')">
+            <strong>视频+语音</strong>
+            <span>抽帧加转写</span>
+          </button>
+          <button
+            type="button"
+            class="analysis-mode-option"
+            :class="{ active: analyzeInputMode === 'audio' }"
+            :disabled="analyzing || uploadingVideo"
+            @click="setAnalyzeInputMode('audio')">
+            <strong>MP3音频打点</strong>
+            <span>长视频推荐</span>
+          </button>
+        </div>
+
         <!-- 视频上传区 -->
         <div
           v-if="!videoFile"
@@ -273,14 +297,14 @@
           @dragleave="isDraggingVideo = false"
           @drop.prevent="handleVideoDrop">
           <div class="video-upload-hint">
-            <span class="video-upload-icon">📹</span>
-            <span class="upload-title">拖拽视频文件到此处</span>
-            <span class="upload-sub">支持 MP4、MOV、WEBM 格式</span>
+            <span class="video-upload-icon">{{ analyzeInputMode === 'audio' ? '🎧' : '📹' }}</span>
+            <span class="upload-title">{{ analyzeInputMode === 'audio' ? '拖拽 MP3 音频到此处' : '拖拽视频文件到此处' }}</span>
+            <span class="upload-sub">{{ analyzeInputMode === 'audio' ? '支持 MP3、M4A、WAV、AAC、FLAC；适合长视频先提取音频后打点' : '支持 MP4、MOV、WEBM、MKV；会抽帧并补充语音转写' }}</span>
           </div>
           <div v-if="isDraggingVideo" class="drag-overlay">
-            <span>📥 释放以导入视频</span>
+            <span>{{ analyzeInputMode === 'audio' ? '📥 释放以导入音频' : '📥 释放以导入视频' }}</span>
           </div>
-          <input type="file" ref="videoInput" accept="video/*" @change="handleVideoUpload" class="hidden-input" />
+          <input type="file" ref="videoInput" :accept="analysisFileAccept" @change="handleVideoUpload" class="hidden-input" />
         </div>
 
         <!-- 视频播放器 -->
@@ -289,9 +313,19 @@
           @dragleave="isDraggingVideo = false"
           @drop.prevent="handleVideoDrop">
           <div v-if="isDraggingVideo" class="drag-overlay">
-            <span>📥 释放以替换视频</span>
+            <span>{{ analyzeInputMode === 'audio' ? '📥 释放以替换音频' : '📥 释放以替换视频' }}</span>
           </div>
+          <audio
+            v-if="isAudioAnalysis"
+            ref="videoPlayer"
+            class="video-player-native"
+            :src="videoSrc"
+            controls
+            @timeupdate="onTimeUpdate"
+            @loadedmetadata="onVideoLoaded">
+          </audio>
           <video
+            v-else
             ref="videoPlayer"
             class="video-player-native"
             :src="videoSrc"
@@ -324,13 +358,13 @@
 
         <!-- 控制按钮 -->
         <div v-if="videoFile" class="video-controls-row">
-          <button class="btn btn-ghost" @click="triggerVideoUpload">📤 上传视频</button>
+          <button class="btn btn-ghost" @click="triggerVideoUpload">{{ analyzeInputMode === 'audio' ? '📤 上传音频' : '📤 上传视频' }}</button>
           <button class="btn btn-ghost" @click="clearVideo">🗑️ 清除</button>
           <div class="analyze-form">
             <input
               v-model="analyzeUrl"
               class="inp analyze-input"
-              :placeholder="uploadedVideoUrl ? '视频已上传，可直接点击AI打点' : '输入视频链接让AI分析...'"
+              :placeholder="uploadedVideoUrl ? '文件已上传，可直接点击AI打点' : analyzeInputMode === 'audio' ? '上传 MP3 后打点；也可输入直链音频 URL...' : '输入视频链接让AI分析，或上传视频...'"
               @keyup.enter="analyzeVideo" />
             <button class="btn btn-primary" @click="analyzeVideo" :disabled="analyzing || uploadingVideo">
               {{ analyzing ? '分析中...' : uploadingVideo ? '上传中...' : '🚀 AI打点' }}
@@ -339,13 +373,13 @@
         </div>
 
         <div v-if="uploadingVideo" class="upload-status">
-          视频正在上传到服务器，上传完成后才能 AI 打点...
+          {{ videoUploadStatus || '正在上传到本机分析器...' }}
         </div>
 
         <!-- 加载状态 -->
         <div v-if="analyzing" class="analyzing-bar">
           <div class="analyzing-bar-inner"></div>
-          <span>AI 正在分析视频内容...</span>
+          <span>{{ isAudioAnalysis ? 'AI 正在转写并生成音频打点...' : 'AI 正在分析视频内容...' }}</span>
         </div>
 
         <!-- 错误信息 -->
@@ -358,12 +392,26 @@
       <div class="segments-panel">
         <div class="panel-header">
           <h3>📍 打点列表</h3>
-          <div class="segment-badges" v-if="videoSegments.length">
-            <span class="segment-count">{{ videoSegments.length }} 个打点</span>
-            <span class="segment-count" :class="{ fused: analyzeMeta.transcript_used }">
-              {{ analyzeMeta.transcript_used ? '画面+语音' : '仅画面' }}
-            </span>
+          <div class="segment-actions" v-if="videoSegments.length || transcriptText">
+            <div class="segment-badges" v-if="videoSegments.length">
+              <span class="segment-count">{{ videoSegments.length }} 个打点</span>
+              <span class="segment-count" :class="{ fused: analyzeMeta.transcript_used }">
+                {{ isAudioAnalysis ? '音频打点' : analyzeMeta.transcript_used ? '画面+语音' : '仅画面' }}
+              </span>
+            </div>
+            <button
+              class="btn btn-sm btn-primary"
+              type="button"
+              :disabled="exportingTimelineDoc"
+              @click="exportTimelineDoc">
+              {{ exportingTimelineDoc ? '导出中...' : '导出飞书文档' }}
+            </button>
           </div>
+        </div>
+
+        <div v-if="timelineDocUrl" class="timeline-doc-link">
+          <span>已生成打点文档</span>
+          <a :href="timelineDocUrl" target="_blank">打开飞书</a>
         </div>
 
         <div class="segments-scroll" v-if="videoSegments.length">
@@ -380,7 +428,15 @@
 
         <div v-else class="segments-empty">
           <span v-if="videoFile && !analyzing">暂无打点</span>
-          <span v-else-if="!videoFile">请先上传视频</span>
+          <span v-else-if="!videoFile">请先上传视频 / MP3</span>
+        </div>
+
+        <div v-if="transcriptText" class="transcript-result">
+          <div class="transcript-result-head">
+            <strong>完整转写</strong>
+            <button class="btn btn-sm btn-ghost" @click="copyTranscript">复制</button>
+          </div>
+          <pre>{{ transcriptText }}</pre>
         </div>
 
         <!-- 选中打点详情 -->
@@ -497,30 +553,18 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { callMiniMaxChat, getAuthToken, request } from '../api/client'
-import { uploadMaterial, uploadMaterialFile } from '../api/materials'
+import { uploadMaterialFile } from '../api/materials'
 import { useToast } from '../composables/useToast'
 
 const { showToast } = useToast()
 
-// chunk 方式转换 ArrayBuffer → base64（避免大文件栈溢出）
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer)
-  const len = bytes.byteLength
-  let binary = ''
-  const CHUNK = 8192
-  for (let i = 0; i < len; i += CHUNK) {
-    const chunk = bytes.slice(i, Math.min(i + CHUNK, len))
-    binary += String.fromCharCode(...chunk)
-  }
-  return btoa(binary)
-}
 const activeTab = ref('download')
 const tabs = [
   { id: 'download', label: '视频下载', icon: '↓' },
   { id: 'ncm', label: 'NCM转MP3', icon: '🎵' },
-  { id: 'video', label: '视频打点', icon: '🎬' },
+  { id: 'video', label: 'AI打点', icon: '🎬' },
   { id: 'ai', label: 'AI推荐', icon: '✨' },
 ]
 
@@ -567,6 +611,7 @@ const mediaTasks = ref([])
 const selectedMediaAction = ref('download-video')
 const selectedMediaQuality = ref('1080')
 let mediaTaskSeq = 0
+let mediaBatchPollTimer = null
 
 const mediaQueueSummary = computed(() => {
   if (!mediaTasks.value.length) return '等待新任务'
@@ -781,6 +826,164 @@ async function convertMediaSource(actionId, sourceUrl, task) {
   return files
 }
 
+function clearMediaBatchPoll() {
+  if (mediaBatchPollTimer) {
+    clearTimeout(mediaBatchPollTimer)
+    mediaBatchPollTimer = null
+  }
+}
+
+function mediaBatchZipFile(job) {
+  if (!job?.zip_url) return null
+  return {
+    name: '批量下载打包.zip',
+    url: job.zip_url,
+    download_url: job.zip_url,
+    type: 'zip'
+  }
+}
+
+function applyMediaBatchJob(task, job) {
+  if (!job) return
+  const total = job.total || 0
+  const currentIndex = job.currentIndex || (job.status === 'running' ? Math.min((job.done || 0) + 1, total) : 0)
+  const current = job.current && job.current !== 'zipping' ? `；当前：${job.current}` : ''
+  const liveFiles = job.liveFiles ? `；已落盘 ${job.liveFiles} 个文件${job.liveBytes ? ` / ${formatFileSize(job.liveBytes)}` : ''}` : ''
+  const phase = job.phase === 'zipping'
+    ? '正在生成 zip'
+    : (currentIndex ? `正在第 ${currentIndex}/${total} 条` : '队列处理中')
+  const statusText = job.status === 'done'
+    ? `已完成 ${job.done || 0}/${total}，成功 ${job.success || 0}，失败 ${job.failed || 0}${liveFiles}`
+    : `${phase}；已完成 ${job.done || 0}/${total}，成功 ${job.success || 0}，失败 ${job.failed || 0}${liveFiles}${current}`
+  const zipFile = mediaBatchZipFile(job)
+  updateMediaTask(task, {
+    status: job.status === 'done' ? 'done' : (job.status === 'error' ? 'error' : 'running'),
+    statusText,
+    error: job.status === 'error' ? (job.error || '批量下载失败') : '',
+    files: zipFile ? [zipFile] : []
+  })
+}
+
+async function loadLatestMediaBatchZip(options = {}) {
+  try {
+    const result = await request('/api/posttools/video-download-batch-latest', {
+      method: 'POST',
+      body: { limit: 1 }
+    })
+    const latest = result.latest || (Array.isArray(result.files) ? result.files[0] : null)
+    if (!latest?.url && !latest?.download_url) {
+      if (!options.silent) showToast('还没有找到最近的打包文件', 'warn')
+      return null
+    }
+    const file = {
+      ...latest,
+      name: latest.name || '最近批量下载.zip',
+      type: 'zip',
+      url: latest.url || latest.download_url,
+      download_url: latest.download_url || latest.url
+    }
+    let task = mediaTasks.value.find(item => item.actionId === 'download-video' && item.files?.some(existing => existing.url === file.url || existing.download_url === file.download_url))
+    if (!task) {
+      task = createMediaTask('download-video', '后台打包文件', file.name)
+    }
+    updateMediaTask(task, {
+      status: 'done',
+      statusText: `已找回最近打包文件：${file.name}`,
+      error: '',
+      files: [file]
+    })
+    if (!options.silent) showToast('已找回最近打包文件', 'success')
+    return file
+  } catch (e) {
+    if (!options.silent) showToast(e.message || '找回最近打包失败', 'error')
+    return null
+  }
+}
+
+function pollMediaDownloadBatch(task, jobId) {
+  clearMediaBatchPoll()
+  const tick = async () => {
+    try {
+      const result = await request('/api/posttools/video-download-batch-status', {
+        method: 'POST',
+        body: { id: jobId }
+      })
+      if (!result.ok) throw new Error(result.error || '查询批量任务失败')
+      const job = result.job
+      applyMediaBatchJob(task, job)
+      if (job.status === 'queued' || job.status === 'running') {
+        mediaBatchPollTimer = setTimeout(tick, 3000)
+        return
+      }
+      clearMediaBatchPoll()
+      if (job.zip_url) {
+        showToast('批量下载完成，zip 已生成', 'success')
+      } else if (job.success) {
+        showToast('批量下载完成，但没有可打包文件', 'warn')
+      } else {
+        showToast(job.error || '批量下载失败', 'error')
+      }
+    } catch (e) {
+      const recovered = await loadLatestMediaBatchZip({ silent: true })
+      if (recovered) {
+        updateMediaTask(task, { status: 'done', statusText: '任务状态丢失，已找回最近打包文件', error: '', files: [recovered] })
+      } else {
+        updateMediaTask(task, { status: 'error', statusText: '', error: e.message || '查询批量任务失败' })
+      }
+      clearMediaBatchPoll()
+      showToast(recovered ? '已找回最近打包文件' : (e.message || '查询批量任务失败'), recovered ? 'success' : 'error')
+    }
+  }
+  mediaBatchPollTimer = setTimeout(tick, 1200)
+}
+
+async function startMediaDownloadBatch(links) {
+  const task = createMediaTask('download-video', '后台慢队列', `批量下载 ${links.length} 条视频`)
+  updateMediaTask(task, { status: 'running', statusText: '正在启动后台队列' })
+  const result = await request('/api/posttools/video-download-batch-start', {
+    method: 'POST',
+    body: { links, quality: selectedMediaQuality.value }
+  })
+  if (!result.ok || !result.job?.id) {
+    const message = result.error || '批量下载任务启动失败'
+    updateMediaTask(task, { status: 'error', statusText: '', error: message })
+    throw new Error(message)
+  }
+  applyMediaBatchJob(task, result.job)
+  task.batchJobId = result.job.id
+  pollMediaDownloadBatch(task, result.job.id)
+  showToast(`已加入后台慢队列：${links.length} 条`, 'success')
+}
+
+async function restoreMediaDownloadBatchJobs() {
+  try {
+    const result = await request('/api/posttools/video-download-batch-jobs', {
+      method: 'POST',
+      body: { limit: 5 }
+    })
+    const jobs = Array.isArray(result.jobs) ? result.jobs : []
+    const job = jobs.find(item => item.status === 'queued' || item.status === 'running') || jobs.find(item => item.zip_url)
+    if (!job) {
+      await loadLatestMediaBatchZip({ silent: true })
+      return
+    }
+    let task = mediaTasks.value.find(item => item.batchJobId === job.id)
+    if (!task) {
+      task = createMediaTask('download-video', '后台慢队列', `批量下载 ${job.total || 0} 条视频`)
+      task.batchJobId = job.id
+    }
+    applyMediaBatchJob(task, job)
+    if (job.status === 'queued' || job.status === 'running') {
+      pollMediaDownloadBatch(task, job.id)
+    }
+  } catch (e) {
+    await loadLatestMediaBatchZip({ silent: true })
+  }
+}
+
+onMounted(restoreMediaDownloadBatchJobs)
+onUnmounted(clearMediaBatchPoll)
+
 async function runMediaAction(actionId) {
   if (!canRunMediaAction.value) {
     mediaError.value = mediaRunHint.value
@@ -806,6 +1009,11 @@ async function runMediaAction(actionId) {
 
     const links = splitMediaLinks(mediaInput.value)
     if (!links.length) throw new Error('请先粘贴链接或拖入文件')
+
+    if (actionId === 'download-video' && links.length > 1) {
+      await startMediaDownloadBatch(links)
+      return
+    }
 
     let doneCount = 0
     for (const link of links) {
@@ -977,111 +1185,142 @@ const videoPlayer = ref(null)
 const videoInput = ref(null)
 const analyzing = ref(false)
 const uploadingVideo = ref(false)
+const videoUploadStatus = ref('')
 const isDraggingVideo = ref(false)
 const videoError = ref('')
 const videoSegments = ref([])
+const transcriptText = ref('')
 const analyzeMeta = ref({})
+const exportingTimelineDoc = ref(false)
+const timelineDocUrl = ref('')
 const currentTime = ref(0)
 const videoDuration = ref(0)
 const analyzeUrl = ref('')
 const uploadedVideoUrl = ref('')
 const selectedSegment = ref(null)
+const analyzeInputMode = ref('video')
+let videoUploadSeq = 0
+const VIDEO_FILE_EXTENSIONS = new Set(['mp4', 'mov', 'webm', 'mkv', 'avi', 'm4v'])
+const AUDIO_FILE_EXTENSIONS = new Set(['mp3', 'm4a', 'wav', 'aac', 'flac', 'ogg', 'opus', 'mpeg', 'mpga'])
 
 const progressPercent = computed(() => {
   if (!videoDuration.value) return 0
   return (currentTime.value / videoDuration.value) * 100
 })
 
+const isAudioAnalysis = computed(() => isAudioFileForAnalysis(videoFile.value))
+const analysisFileAccept = computed(() => analyzeInputMode.value === 'audio'
+  ? 'audio/*,.mp3,.m4a,.wav,.aac,.flac,.ogg,.opus'
+  : 'video/*,.mp4,.mov,.webm,.mkv,.avi,.m4v'
+)
+
 function triggerVideoUpload() {
   videoInput.value?.click()
 }
 
+function setAnalyzeInputMode(mode) {
+  const nextMode = mode === 'audio' ? 'audio' : 'video'
+  if (nextMode === analyzeInputMode.value) return
+  analyzeInputMode.value = nextMode
+  if (!videoFile.value) return
+  const fileMatchesMode = nextMode === 'audio'
+    ? isAudioFileForAnalysis(videoFile.value)
+    : isVideoFileForAnalysis(videoFile.value)
+  if (!fileMatchesMode) {
+    clearVideo()
+  }
+}
+
+function isVideoFileForAnalysis(file) {
+  if (!file) return false
+  const ext = (file.name || '').split('.').pop()?.toLowerCase()
+  return file.type?.startsWith('video/') || VIDEO_FILE_EXTENSIONS.has(ext)
+}
+
+function isAudioFileForAnalysis(file) {
+  if (!file) return false
+  const ext = (file.name || '').split('.').pop()?.toLowerCase()
+  return file.type?.startsWith('audio/') || AUDIO_FILE_EXTENSIONS.has(ext)
+}
+
+function isMediaFileForAnalysis(file) {
+  return isVideoFileForAnalysis(file) || isAudioFileForAnalysis(file)
+}
+
+function isAudioUrlForAnalysis(value) {
+  const cleanUrl = String(value || '').split('?')[0].split('#')[0]
+  const ext = cleanUrl.split('.').pop()?.toLowerCase()
+  return AUDIO_FILE_EXTENSIONS.has(ext)
+}
+
+function shouldUseAudioAnalysis(target = '') {
+  return isAudioAnalysis.value || analyzeInputMode.value === 'audio' || isAudioUrlForAnalysis(target)
+}
+
+async function processVideoFileForAnalysis(file, options = {}) {
+  if (!file) return
+  if (!isMediaFileForAnalysis(file)) {
+    showToast('请选择 MP4、MOV、WEBM、MKV 或 MP3、M4A、WAV 等音视频文件', 'error')
+    return
+  }
+  if (analyzeInputMode.value === 'audio' && !isAudioFileForAnalysis(file)) {
+    showToast('MP3音频打点模式请上传 MP3、M4A、WAV 等音频文件；长视频请先提取音频', 'error')
+    return
+  }
+  if (analyzeInputMode.value === 'video' && !isVideoFileForAnalysis(file)) {
+    analyzeInputMode.value = 'audio'
+  }
+  if (options.revokeCurrent && videoSrc.value) URL.revokeObjectURL(videoSrc.value)
+  const seq = ++videoUploadSeq
+  videoFile.value = file
+  videoSrc.value = URL.createObjectURL(file)
+  videoSegments.value = []
+  transcriptText.value = ''
+  analyzeMeta.value = {}
+  timelineDocUrl.value = ''
+  videoError.value = ''
+  uploadedVideoUrl.value = ''
+  analyzeUrl.value = ''
+  selectedSegment.value = null
+  currentTime.value = 0
+  videoDuration.value = 0
+  uploadingVideo.value = false
+  videoUploadStatus.value = ''
+  if (seq === videoUploadSeq) showToast(isAudioFileForAnalysis(file) ? '音频已载入，可点击 AI 打点' : '视频已载入，可点击 AI 打点', 'success')
+}
+
 async function handleVideoUpload(e) {
   const file = e.target.files?.[0]
-  if (file) {
-    videoFile.value = file
-    videoSrc.value = URL.createObjectURL(file)
-    videoSegments.value = []
-    analyzeMeta.value = {}
-    videoError.value = ''
-    uploadedVideoUrl.value = ''
-    analyzeUrl.value = ''
-    // 上传视频到服务器
-    uploadingVideo.value = true
-    try {
-      const arrayBuffer = await file.arrayBuffer()
-      const base64 = arrayBufferToBase64(arrayBuffer)
-      const result = await uploadMaterial({
-        file_base64: base64,
-        filename: file.name,
-        size: file.size,
-        type: 'video'
-      })
-      if (result.id) {
-        uploadedVideoUrl.value = `/uploads/${result.type || 'video'}/${result.filename}`
-        analyzeUrl.value = uploadedVideoUrl.value
-        showToast('视频已上传，可点击AI打点', 'success')
-      } else {
-        throw new Error(result.error || '上传接口未返回素材ID')
-      }
-    } catch (err) {
-      showToast('视频上传失败: ' + err.message, 'warn')
-    } finally {
-      uploadingVideo.value = false
-    }
-  }
+  if (!file) return
+  await processVideoFileForAnalysis(file, { revokeCurrent: true })
+  if (e.target) e.target.value = ''
 }
 
 async function handleVideoDrop(e) {
   isDraggingVideo.value = false
   const file = e.dataTransfer?.files?.[0]
-  if (file && file.type.startsWith('video/')) {
-    if (videoSrc.value) URL.revokeObjectURL(videoSrc.value)
-    videoFile.value = file
-    videoSrc.value = URL.createObjectURL(file)
-    videoSegments.value = []
-    analyzeMeta.value = {}
-    videoError.value = ''
-    uploadedVideoUrl.value = ''
-    analyzeUrl.value = ''
-    // 上传视频到服务器
-    uploadingVideo.value = true
-    try {
-      const arrayBuffer = await file.arrayBuffer()
-      const base64 = arrayBufferToBase64(arrayBuffer)
-      const result = await uploadMaterial({
-        file_base64: base64,
-        filename: file.name,
-        size: file.size,
-        type: 'video'
-      })
-      if (result.id) {
-        uploadedVideoUrl.value = `/uploads/${result.type || 'video'}/${result.filename}`
-        analyzeUrl.value = uploadedVideoUrl.value
-        showToast('视频已上传，可点击AI打点', 'success')
-      } else {
-        throw new Error(result.error || '上传接口未返回素材ID')
-      }
-    } catch (err) {
-      showToast('视频上传失败: ' + err.message, 'warn')
-    } finally {
-      uploadingVideo.value = false
-    }
-  }
+  await processVideoFileForAnalysis(file, { revokeCurrent: true })
 }
 
 function clearVideo() {
+  videoUploadSeq += 1
   if (videoSrc.value) {
     URL.revokeObjectURL(videoSrc.value)
   }
   videoFile.value = null
   videoSrc.value = ''
   videoSegments.value = []
+  transcriptText.value = ''
   analyzeMeta.value = {}
+  timelineDocUrl.value = ''
   videoError.value = ''
   uploadedVideoUrl.value = ''
   analyzeUrl.value = ''
+  selectedSegment.value = null
+  currentTime.value = 0
+  videoDuration.value = 0
   uploadingVideo.value = false
+  videoUploadStatus.value = ''
 }
 
 function onVideoLoaded() {
@@ -1148,20 +1387,58 @@ function isCurrentSegment(timestamp) {
   return Math.abs(currentTime.value - segStart) < 5
 }
 
+async function uploadVideoForTranscript(file) {
+  uploadingVideo.value = true
+  const isAudio = isAudioFileForAnalysis(file)
+  videoUploadStatus.value = isAudio ? '正在上传音频用于打点...' : '正在上传视频用于打点...'
+  try {
+    const result = await uploadMaterialFile({
+      file,
+      type: isAudio ? 'audio' : 'video',
+      original: file.name
+    }, progress => {
+      videoUploadStatus.value = isAudio ? `正在上传音频用于打点 ${progress}%...` : `正在上传视频用于打点 ${progress}%...`
+    })
+    if (!result.id) throw new Error(result.error || '上传接口未返回素材ID')
+    return `/uploads/${result.type || (isAudio ? 'audio' : 'video')}/${result.filename}`
+  } finally {
+    uploadingVideo.value = false
+    videoUploadStatus.value = ''
+  }
+}
+
 async function analyzeVideo() {
   const url = uploadedVideoUrl.value || analyzeUrl.value.trim()
-  if (!url) {
-    showToast(uploadingVideo.value ? '视频还在上传，请稍等' : '请先上传视频或输入视频链接', 'error')
+  if (!url && !videoFile.value) {
+    showToast('请先选择视频 / MP3 或输入视频链接', 'error')
+    return
+  }
+  if (!videoFile.value && analyzeInputMode.value === 'audio' && url && !isAudioUrlForAnalysis(url)) {
+    showToast('音频打点模式请上传 MP3，或输入 mp3/m4a/wav 等直链音频 URL', 'error')
     return
   }
   analyzing.value = true
   videoError.value = ''
   analyzeMeta.value = {}
+  transcriptText.value = ''
+  timelineDocUrl.value = ''
 
   try {
+    let analyzeTarget = url
+    if (videoFile.value && !url) {
+      analyzeTarget = await uploadVideoForTranscript(videoFile.value)
+      uploadedVideoUrl.value = analyzeTarget
+      analyzeUrl.value = analyzeTarget
+    }
+    const useAudioMode = shouldUseAudioAnalysis(analyzeTarget)
     const result = await request('/api/posttools/video-analyze', {
       method: 'POST',
-      body: { url: url, provider: 'siliconflow' }
+      body: {
+        url: analyzeTarget,
+        provider: 'siliconflow',
+        mode: useAudioMode ? 'audio' : 'full',
+        sourceType: useAudioMode ? 'audio' : 'video'
+      }
     })
 
     if (result.error) {
@@ -1169,6 +1446,7 @@ async function analyzeVideo() {
       showToast(result.error, 'error')
     } else if (result.segments) {
       videoSegments.value = result.segments
+      transcriptText.value = result.transcript_text || ''
       analyzeMeta.value = result.meta || {}
       showToast('分析完成', 'success')
     } else {
@@ -1180,6 +1458,46 @@ async function analyzeVideo() {
     showToast('分析失败: ' + e.message, 'error')
   } finally {
     analyzing.value = false
+  }
+}
+
+async function copyTranscript() {
+  if (!transcriptText.value) return
+  try {
+    await navigator.clipboard.writeText(transcriptText.value)
+    showToast('完整转写已复制', 'success')
+  } catch (e) {
+    showToast('复制失败: ' + e.message, 'error')
+  }
+}
+
+async function exportTimelineDoc() {
+  if (!videoSegments.value.length && !transcriptText.value.trim()) {
+    showToast('请先完成 AI 打点或生成完整转写', 'error')
+    return
+  }
+  exportingTimelineDoc.value = true
+  try {
+    const titleBase = videoFile.value?.name || analyzeUrl.value || 'AI打点素材整理'
+    const result = await request('/api/posttools/timeline-doc', {
+      method: 'POST',
+      body: {
+        title: titleBase,
+        sourceUrl: analyzeUrl.value || uploadedVideoUrl.value || '',
+        duration: videoDuration.value ? formatTime(videoDuration.value) : '',
+        segments: videoSegments.value,
+        transcript: transcriptText.value,
+        meta: analyzeMeta.value
+      }
+    })
+    const url = result.doc_url || result.url || ''
+    if (!url) throw new Error(result.error || result.msg || '飞书未返回文档链接')
+    timelineDocUrl.value = url
+    showToast('飞书打点文档已生成', 'success')
+  } catch (e) {
+    showToast('导出失败: ' + (e.message || String(e)), 'error')
+  } finally {
+    exportingTimelineDoc.value = false
   }
 }
 
@@ -2196,6 +2514,47 @@ async function getRecommendations() {
   overflow: hidden;
 }
 
+.analysis-mode-switch {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.analysis-mode-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 46px;
+  padding: 8px 12px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 10px;
+  background: var(--surface2, #1e1e3a);
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.analysis-mode-option strong {
+  color: var(--text, #e0d8ff);
+  font-size: 13px;
+}
+
+.analysis-mode-option span {
+  font-size: 12px;
+  color: var(--text-dim, #666);
+}
+
+.analysis-mode-option.active {
+  border-color: var(--primary, #7b2fff);
+  background: rgba(123, 47, 255, 0.12);
+}
+
+.analysis-mode-option:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
 .video-upload-full {
   flex: 1;
   display: flex;
@@ -2424,6 +2783,14 @@ async function getRecommendations() {
   flex-wrap: wrap;
 }
 
+.segment-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
 .segment-count {
   font-size: 11px;
   color: var(--text-muted, #888);
@@ -2435,6 +2802,23 @@ async function getRecommendations() {
 .segment-count.fused {
   color: #22c55e;
   background: rgba(34, 197, 94, 0.12);
+}
+
+.timeline-doc-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border, #2a2a4a);
+  background: rgba(34, 197, 94, 0.08);
+  color: var(--text, #e0d8ff);
+  font-size: 12px;
+}
+
+.timeline-doc-link a {
+  color: var(--primary, #a78bfa);
+  font-weight: 700;
 }
 
 .segments-scroll {
@@ -2502,6 +2886,36 @@ async function getRecommendations() {
   justify-content: center;
   color: var(--text-dim, #666);
   font-size: 13px;
+}
+
+.transcript-result {
+  border-top: 1px solid var(--border, #2a2a4a);
+  padding: 12px;
+  background: rgba(34, 197, 94, 0.04);
+}
+
+.transcript-result-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+  color: var(--text, #e0d8ff);
+  font-size: 13px;
+}
+
+.transcript-result pre {
+  max-height: 220px;
+  overflow: auto;
+  margin: 0;
+  padding: 10px;
+  border-radius: 8px;
+  background: var(--surface2, #1e1e3a);
+  color: var(--text-muted, #aaa);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .segment-detail {

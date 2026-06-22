@@ -48,6 +48,7 @@ export function useWriterReferenceDetails({
       platform: selectedAccountDetailPlatform,
       accountId: selectedAccountDetailId,
       includeStyle: true,
+      styleOnly: true,
       version: selectedAccountUpdatedAt
     })
       .then((detail) => {
@@ -74,6 +75,7 @@ export function useWriterReferenceDetails({
 
     cachedGetProjectDetail(selectedProjectDetailId, {
       includeStyle: true,
+      styleOnly: true,
       version: selectedProjectUpdatedAt
     })
       .then((detail) => {

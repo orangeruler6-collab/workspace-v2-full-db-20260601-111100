@@ -1,4 +1,4 @@
-import { request } from './client'
+import { getAuthToken, request } from './client'
 
 export function transcribeVideo(platform, url, signal) {
   return request('/api/transcribe/' + platform, {
@@ -6,6 +6,35 @@ export function transcribeVideo(platform, url, signal) {
     body: { url },
     signal
   })
+}
+
+export async function transcribeAudioFile(file, signal) {
+  const form = new FormData()
+  form.append('file', file, file.name || 'audio.mp3')
+  const headers = {}
+  const token = getAuthToken()
+  if (token) headers.Authorization = 'Bearer ' + token
+
+  const resp = await fetch('/api/transcribe/audio', {
+    method: 'POST',
+    headers,
+    body: form,
+    signal
+  })
+  let data
+  try {
+    data = await resp.json()
+  } catch (e) {
+    const text = await resp.text().catch(() => 'Unknown error')
+    throw new Error(`请求失败 (${resp.status}): ${text.slice(0, 100)}`)
+  }
+  if (!resp.ok || data.error || data.ok === false) {
+    const err = new Error(data.error || data.message || `HTTP ${resp.status}`)
+    err.status = resp.status
+    err.data = data
+    throw err
+  }
+  return data
 }
 
 export function runDouyinDownloader(payload, signal) {
@@ -78,10 +107,11 @@ export function readFeishu(doc) {
   })
 }
 
-export function parseWorkflowDocument(payload) {
+export function parseWorkflowDocument(payload, signal) {
   return request('/api/workflow/parse-document', {
     method: 'POST',
-    body: payload
+    body: payload,
+    signal
   })
 }
 

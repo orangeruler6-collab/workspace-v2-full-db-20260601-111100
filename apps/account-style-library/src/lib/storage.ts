@@ -58,6 +58,7 @@ const grossMarginServices = ["play", "like", "douPlus", "coin", "comment", "shar
 
 type DetailReadOptions = {
   includeStyle?: boolean;
+  styleOnly?: boolean;
 };
 
 function videoHasTranscript(video: Pick<Video, "transcriptStatus" | "transcriptPath">) {
@@ -1392,6 +1393,22 @@ export async function getAccountDetail(
   const account = await resolveAccount(platform, accountIdOrSlug);
   await ensureAccountDirs(account.platform, account.slug);
 
+  if (options.styleOnly) {
+    const [listItem, style] = await Promise.all([
+      getAccountListItem(account),
+      options.includeStyle
+        ? fs.readFile(stylePath(account.platform, account.slug), "utf8").catch(() => DEFAULT_STYLE)
+        : Promise.resolve<string | undefined>(undefined)
+    ]);
+
+    return {
+      ...listItem,
+      ...(style !== undefined ? { style } : {}),
+      videos: [],
+      drafts: []
+    };
+  }
+
   const [videoFiles, draftFiles, style] = await Promise.all([
     fs.readdir(videosPath(account.platform, account.slug)).catch(() => []),
     fs.readdir(draftsPath(account.platform, account.slug)).catch(() => []),
@@ -1491,6 +1508,22 @@ export async function getProjectDetail(
 ): Promise<ProjectDetail> {
   const project = await resolveProject(projectIdOrSlug);
   await ensureProjectDirs(project.slug);
+
+  if (options.styleOnly) {
+    const style = options.includeStyle
+      ? await fs.readFile(projectStylePath(project.slug), "utf8").catch(() => DEFAULT_STYLE)
+      : undefined;
+
+    return {
+      ...project,
+      sourceMaterialIds: project.sourceMaterialIds || [],
+      ...(style !== undefined ? { style } : {}),
+      sourceAccounts: [],
+      sourceMaterials: [],
+      sourceMaterialCount: project.sourceMaterialIds?.length || 0
+    };
+  }
+
   const [style, libraryAccounts, sourceMaterials] = await Promise.all([
     options.includeStyle
       ? fs.readFile(projectStylePath(project.slug), "utf8").catch(() => DEFAULT_STYLE)

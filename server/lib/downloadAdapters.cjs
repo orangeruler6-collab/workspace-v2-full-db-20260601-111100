@@ -1,9 +1,12 @@
 const fs = require('fs');
+const https = require('https');
 const path = require('path');
 const { spawn } = require('child_process');
+const { buildProxyEnv, proxyAgentForUrl } = require('./proxy.cjs');
 
 const VIDEO_EXTS = ['.mp4', '.mov', '.webm', '.avi', '.mkv', '.flv', '.wmv', '.m4v'];
 const IMAGE_EXTS = ['.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp'];
+const BILI_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36';
 
 function isWindows() {
   return process.platform === 'win32';
@@ -54,6 +57,7 @@ function runCommand(command, args, options) {
     const spawnArgs = useCmd ? ['/d', '/s', '/c', command].concat(args || []) : (args || []);
     const proc = spawn(spawnCommand, spawnArgs, {
       cwd: options && options.cwd || process.cwd(),
+      env: buildProxyEnv(process.env),
       windowsHide: true
     });
     let stdout = '';
@@ -136,9 +140,122 @@ function normalizeLog(text) {
   return String(text || '').replace(/\s+/g, ' ').trim().slice(0, 1200);
 }
 
+function safeFilename(value) {
+  return String(value || 'bilibili-video')
+    .replace(/[<>:"/\\|?*\x00-\x1f]/g, '_')
+    .replace(/\s+/g, '_')
+    .replace(/_+/g, '_')
+    .slice(0, 120)
+    .replace(/^_+|_+$/g, '') || 'bilibili-video';
+}
+
 function downloadUrlForBvid(bvid, fallbackUrl) {
   if (bvid) return 'https://www.bilibili.com/video/' + bvid;
   return String(fallbackUrl || '');
+}
+
+function getJson(url, headers, timeout) {
+  return new Promise(resolve => {
+    const req = https.get(url, { headers: headers || {}, agent: proxyAgentForUrl(url) }, res => {
+      let data = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { data += chunk; });
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          resolve({ ok: false, error: 'HTTP ' + res.statusCode + ': ' + data.slice(0, 240) });
+          return;
+        }
+        try { resolve({ ok: true, data: JSON.parse(data) }); }
+        catch (e) { resolve({ ok: false, error: 'JSON parse failed: ' + data.slice(0, 240) }); }
+      });
+    });
+    req.on('error', err => resolve({ ok: false, error: err.message || String(err) }));
+    req.setTimeout(timeout || 30000, () => req.destroy(new Error('request timeout')));
+  });
+}
+
+function downloadHttpFile(url, filePath, headers, timeout, redirects) {
+  return new Promise(resolve => {
+    const req = https.get(url, { headers: headers || {}, agent: proxyAgentForUrl(url) }, res => {
+      if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && (redirects || 0) < 5) {
+        res.resume();
+        const nextUrl = new URL(res.headers.location, url).toString();
+        downloadHttpFile(nextUrl, filePath, headers, timeout, (redirects || 0) + 1).then(resolve);
+        return;
+      }
+      if (res.statusCode < 200 || res.statusCode >= 300) {
+        res.resume();
+        resolve({ ok: false, error: 'HTTP ' + res.statusCode });
+        return;
+      }
+      const stream = fs.createWriteStream(filePath);
+      res.pipe(stream);
+      stream.on('finish', () => {
+        stream.close(() => resolve({ ok: true, file: filePath }));
+      });
+      stream.on('error', err => {
+        try { fs.unlinkSync(filePath); } catch(e) {}
+        resolve({ ok: false, error: err.message || String(err) });
+      });
+    });
+    req.on('error', err => {
+      try { fs.unlinkSync(filePath); } catch(e) {}
+      resolve({ ok: false, error: err.message || String(err) });
+    });
+    req.setTimeout(timeout || 15 * 60 * 1000, () => req.destroy(new Error('download timeout')));
+  });
+}
+
+function qualityNumber(value) {
+  const text = String(value || '').toLowerCase();
+  if (text.includes('1080')) return 80;
+  if (text.includes('720')) return 64;
+  if (text.includes('480')) return 32;
+  return 64;
+}
+
+async function tryBilibiliPlayurl(input) {
+  if (!input.bvid) return { ok: false, skipped: true, tool: 'BiliPlayurl', error: 'BVID required' };
+  const pageUrl = downloadUrlForBvid(input.bvid, input.url);
+  const headers = {
+    'User-Agent': BILI_UA,
+    'Referer': 'https://www.bilibili.com/'
+  };
+  const view = await getJson('https://api.bilibili.com/x/web-interface/view?bvid=' + encodeURIComponent(input.bvid), headers, 30000);
+  if (!view.ok) return { ok: false, tool: 'BiliPlayurl', files: [], error: 'view api failed: ' + view.error };
+  const data = view.data && view.data.data || {};
+  const aid = data.aid;
+  const cid = data.cid;
+  if (!aid || !cid) return { ok: false, tool: 'BiliPlayurl', files: [], error: 'view api missing aid/cid' };
+
+  const qn = qualityNumber(input.quality);
+  const playUrl = 'https://api.bilibili.com/x/player/playurl?avid=' + encodeURIComponent(aid)
+    + '&cid=' + encodeURIComponent(cid)
+    + '&qn=' + encodeURIComponent(qn)
+    + '&fnval=0&fourk=0';
+  const play = await getJson(playUrl, Object.assign({}, headers, { Referer: pageUrl }), 30000);
+  if (!play.ok) return { ok: false, tool: 'BiliPlayurl', files: [], error: 'playurl api failed: ' + play.error };
+  const playData = play.data && play.data.data || {};
+  const durl = Array.isArray(playData.durl) && playData.durl[0];
+  const mediaUrl = durl && (durl.url || durl.backup_url && durl.backup_url[0] || durl.backupUrl && durl.backupUrl[0]);
+  if (!mediaUrl) return { ok: false, tool: 'BiliPlayurl', files: [], error: 'playurl api returned no progressive mp4 url' };
+
+  const name = safeFilename((data.title || input.bvid) + '_' + input.bvid) + '.mp4';
+  const filePath = path.join(input.outputDir, name);
+  const downloaded = await downloadHttpFile(mediaUrl, filePath, {
+    'User-Agent': BILI_UA,
+    'Referer': pageUrl,
+    'Origin': 'https://www.bilibili.com'
+  }, input.timeout || 15 * 60 * 1000);
+  const files = downloaded.ok && fs.existsSync(filePath) && fs.statSync(filePath).size > 0 ? [filePath] : [];
+  return {
+    ok: files.length > 0,
+    tool: 'BiliPlayurl',
+    files,
+    stdout: 'Downloaded from Bilibili playurl API, quality=' + (playData.quality || qn),
+    stderr: '',
+    error: files.length ? '' : (downloaded.error || 'BiliPlayurl finished but no media file was produced')
+  };
 }
 
 async function tryBBDown(tool, input) {
@@ -224,6 +341,7 @@ async function downloadBilibili(input) {
   const order = [
     () => tryBBDown(tools.bbdown, input),
     () => tryYtDlp(tools.ytdlp, input),
+    () => tryBilibiliPlayurl(input),
     () => tryOpenCli(tools.opencli, input)
   ];
 

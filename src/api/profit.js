@@ -1,13 +1,23 @@
 import { request } from './client'
 
-export function listProfits(grp) {
-  const qs = grp ? '?grp=' + encodeURIComponent(grp) : ''
-  return request('/api/profits' + qs)
+export function listProfits(grp, options = {}) {
+  return request('/api/profits', {
+    query: {
+      grp: grp || undefined,
+      year: options.year || undefined,
+      month: options.month || undefined
+    }
+  })
 }
 
-export function getProfitStats(grp) {
-  const qs = grp ? '?grp=' + encodeURIComponent(grp) : ''
-  return request('/api/profits/stats' + qs)
+export function getProfitStats(grp, options = {}) {
+  return request('/api/profits/stats', {
+    query: {
+      grp: grp || undefined,
+      year: options.year || undefined,
+      month: options.month || undefined
+    }
+  })
 }
 
 export function parseProfitText(text) {
@@ -45,6 +55,17 @@ export function syncProfitsToFeishu(options = {}) {
     body: {
       limit: options.limit || 0,
       force: options.force !== false
+    }
+  })
+}
+
+export function pullProfitsFromFeishu(options = {}) {
+  return request('/api/profits/pull-feishu', {
+    method: 'POST',
+    body: {
+      year: options.year || 0,
+      month: options.month || 0,
+      mode: options.mode || 'merge'
     }
   })
 }

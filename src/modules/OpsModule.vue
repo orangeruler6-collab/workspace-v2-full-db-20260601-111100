@@ -13,7 +13,8 @@
 
     <div class="group-tabs">
       <button class="group-tab department-tab" :class="{ active: isDepartmentView }" @click="switchDepartment">部门总览</button>
-      <button v-for="g in GROUPS" :key="g.id" class="group-tab" :class="{ active: !isDepartmentView && activeGroup === g.id }" @click="switchGroup(g.id)">{{ g.label }}</button>
+      <button v-for="g in GROUPS" :key="g.id" class="group-tab" :class="{ active: !isDepartmentView && !isDataManageView && activeGroup === g.id }" @click="switchGroup(g.id)">{{ g.label }}</button>
+      <button class="group-tab manage-tab" :class="{ active: isDataManageView }" @click="switchDataManage">管理数据</button>
     </div>
 
     <div class="year-month-bar">
@@ -41,7 +42,306 @@
       </span>
     </div>
 
-    <div v-if="isDepartmentView" class="department-board">
+    <section v-if="isDataManageView" class="data-manage-board">
+      <div class="data-manage-toolbar">
+        <div class="data-manage-title">
+          <span>DATA MANAGE</span>
+          <strong>流水数据管理</strong>
+          <em>{{ selectedYear }}年{{ selectedMonth ? selectedMonth + '月' : '全部月份' }} · {{ dataManageFilteredItems.length }} 条</em>
+        </div>
+        <div class="data-manage-compact-stats">
+          <span>流水 <b>￥{{ dataManageSummary.revenue.toLocaleString() }}</b></span>
+          <span>毛利 <b>￥{{ dataManageSummary.margin.toLocaleString() }}</b></span>
+          <span>毛利率 <b>{{ dataManageSummary.marginRate }}%</b></span>
+        </div>
+        <div class="data-manage-actions">
+          <button class="btn btn-primary btn-sm" @click="openCreateModal">手动新增</button>
+          <button class="btn btn-ghost btn-sm" :class="{ active: dataManagePanel === 'import' }" @click="toggleDataManagePanel('import')">规则导入</button>
+          <button class="btn btn-ghost btn-sm" :class="{ active: dataManagePanel === 'filters' }" @click="toggleDataManagePanel('filters')">更多筛选</button>
+          <button class="btn btn-ghost btn-sm" :class="{ active: dataManagePanel === 'export' }" @click="toggleDataManagePanel('export')">导出字段</button>
+          <button class="btn btn-ghost btn-sm" :disabled="feishuSyncing" @click="syncCurrentProfitsToFeishu">{{ feishuSyncing ? '同步中...' : '同步飞书' }}</button>
+          <button class="btn btn-ghost btn-sm" :disabled="feishuPulling" @click="pullCurrentProfitsFromFeishu">{{ feishuPulling ? '拉取中...' : '拉取飞书' }}</button>
+          <button class="btn btn-ghost btn-sm" @click="openFeishuProfitTable">打开飞书</button>
+          <button class="btn btn-ghost btn-sm" :disabled="loadingDepartment" @click="loadDepartmentData">刷新数据</button>
+          <button class="btn btn-ghost btn-sm" :disabled="!dataManageFilteredItems.length" @click="exportManagedData">导出筛选结果</button>
+        </div>
+      </div>
+
+      <div class="data-manage-quickbar">
+        <label>
+          <span>组别</span>
+          <select class="inp" v-model="dataManageFilters.group">
+            <option value="">全部组别</option>
+            <option v-for="group in GROUPS" :key="'manage-group-' + group.id" :value="group.label">{{ group.label }}</option>
+          </select>
+        </label>
+        <label>
+          <span>项目关键词</span>
+          <input class="inp" v-model.trim="dataManageFilters.keyword" placeholder="项目、备注、单号、链接" />
+        </label>
+        <label>
+          <span>平台</span>
+          <select class="inp" v-model="dataManageFilters.platform">
+            <option value="">全部平台</option>
+            <option v-for="platform in dataManagePlatformOptions" :key="'manage-platform-' + platform" :value="platform">{{ platform }}</option>
+          </select>
+        </label>
+        <label>
+          <span>执行状态</span>
+          <select class="inp" v-model="dataManageFilters.publishStatus">
+            <option value="">全部状态</option>
+            <option value="published">已发布</option>
+            <option value="unpublished">未发布</option>
+          </select>
+        </label>
+        <label>
+          <span>排序</span>
+          <select class="inp" v-model="dataManageFilters.sortBy">
+            <option value="created_desc">最新录入</option>
+            <option value="revenue_desc">流水从高到低</option>
+            <option value="margin_desc">毛利从高到低</option>
+            <option value="project_asc">项目 A-Z</option>
+            <option value="group_asc">组别 A-Z</option>
+          </select>
+        </label>
+        <button class="btn btn-ghost btn-sm" @click="clearDataManageFilters">清空</button>
+      </div>
+
+      <div v-if="editModal.show" class="data-manage-editor data-manage-panel">
+        <div class="data-manage-editor-head">
+          <div>
+            <span>{{ editModal.mode === 'create' ? 'NEW RECORD' : 'EDIT RECORD' }}</span>
+            <strong>{{ editModal.mode === 'create' ? '新增流水记录' : '修改流水记录' }}</strong>
+          </div>
+          <button class="btn btn-ghost btn-sm" @click="closeEditModal">收起</button>
+        </div>
+        <div class="modal-form inline-profit-form">
+          <div class="mf-row"><label>归属组</label>
+            <select class="inp" v-model="editModal.data.组别">
+              <option v-for="group in GROUPS" :key="'inline-group-' + group.id" :value="group.label">{{ group.label }}</option>
+            </select>
+          </div>
+          <div class="mf-row"><label>账号</label><input class="inp" v-model="editModal.data.账号" placeholder="账号 / 素材 / 平台收益"></div>
+          <div class="mf-row mf-wide"><label>产品/项目</label><input class="inp" v-model="editModal.data.项目" placeholder="产品或项目名"></div>
+          <div class="mf-row"><label>业务口径</label>
+            <select class="inp" v-model="editModal.data.类型">
+              <option v-for="type in PROFIT_BUSINESS_TYPES" :key="'inline-type-' + type" :value="type">{{ type }}</option>
+            </select>
+          </div>
+          <div class="mf-row"><label>游戏/非游</label>
+            <select class="inp" v-model="editModal.data.产品线">
+              <option value="">未填写</option>
+              <option value="游戏">游戏</option>
+              <option value="非游">非游</option>
+            </select>
+          </div>
+          <div class="mf-row"><label>平台</label>
+            <select class="inp" v-model="editModal.data.平台">
+              <option v-for="platform in PROFIT_PLATFORM_OPTIONS" :key="'inline-platform-' + platform" :value="platform">{{ platform }}</option>
+            </select>
+          </div>
+          <div class="mf-row"><label>档期</label><input class="inp" v-model="editModal.data.档期"></div>
+          <div class="mf-row"><label>下单金额（元）</label><input class="inp" type="number" v-model.number="editModal.data.下单金额"></div>
+          <div class="mf-row"><label>返点金额（元）</label><input class="inp" type="number" v-model.number="editModal.data.返点金额"></div>
+          <div class="mf-row"><label>最终合作价/流水（元）</label><input class="inp" type="number" v-model.number="editModal.data.费用" @input="syncManualFinancials"></div>
+          <div class="mf-row"><label>预估毛利（元）</label><input class="inp" type="number" v-model.number="editModal.data.毛利" @input="syncManualFinancials"></div>
+          <div class="mf-row"><label>来源</label>
+            <select class="inp" v-model="editModal.data.来源">
+              <option value="manual">手动录入</option>
+              <option value="ai">AI解析</option>
+              <option value="excel">Excel导入</option>
+            </select>
+          </div>
+          <label class="mf-check inline-check">
+            <input type="checkbox" v-model="editModal.data.内部分成" @change="syncInternalSplitDefaults">
+            <span>内部代做分成</span>
+          </label>
+          <div class="mf-row"><label>执行状态</label>
+            <select class="inp" v-model="editModal.data.执行状态" @change="syncPublishStatusFromExecution(editModal.data)">
+              <option v-for="status in PROFIT_STATUS_OPTIONS" :key="'inline-status-' + status" :value="status">{{ status }}</option>
+            </select>
+          </div>
+          <div class="mf-split-grid mf-wide">
+            <label><span>发布日期</span><input class="inp" v-model="editModal.data.发布日期" placeholder="例如 2026-06-10"></label>
+            <label><span>发布链接</span><input class="inp" v-model="editModal.data.链接" placeholder="粘贴链接，表格只显示打开按钮"></label>
+          </div>
+          <div class="mf-split-grid mf-wide">
+            <label><span>锁档日期</span><input class="inp" v-model="editModal.data.锁档日期" placeholder="例如 2026-06-10"></label>
+            <label><span>原ID</span><input class="inp" v-model="editModal.data.原ID" placeholder="飞书表原ID"></label>
+            <label><span>单号</span><input class="inp" v-model="editModal.data.单号" placeholder="单号"></label>
+            <label><span>CRM单号</span><input class="inp" v-model="editModal.data.CRM单号" placeholder="CRM单号"></label>
+          </div>
+          <div v-if="editModal.data.内部分成" class="mf-split-grid mf-wide">
+            <label><span>原组</span>
+              <select class="inp" v-model="editModal.data.原组">
+                <option v-for="group in GROUPS" :key="'inline-origin-' + group.id" :value="group.label">{{ group.label }}</option>
+              </select>
+            </label>
+            <label><span>代做组</span>
+              <select class="inp" v-model="editModal.data.代做组">
+                <option value="">请选择代做组</option>
+                <option v-for="group in GROUPS" :key="'inline-producer-' + group.id" :value="group.label">{{ group.label }}</option>
+              </select>
+            </label>
+            <label><span>原组比例 %</span><input class="inp" type="number" min="0" max="100" v-model.number="editModal.data.原组比例"></label>
+            <label><span>代做比例 %</span><input class="inp" type="number" min="0" max="100" v-model.number="editModal.data.代做比例"></label>
+          </div>
+          <div class="mf-row mf-wide"><label>备注</label><input class="inp" v-model="editModal.data.备注"></div>
+        </div>
+        <div class="modal-actions inline-actions">
+          <button class="btn btn-primary" @click="doEditRecord">{{ editModal.mode === 'create' ? '新增' : '保存' }}</button>
+          <button class="btn btn-ghost btn-sm" @click="closeEditModal">取消</button>
+        </div>
+      </div>
+
+      <div v-if="dataManagePanel === 'filters'" class="data-manage-filters data-manage-panel">
+        <label>
+          <span>账号</span>
+          <input class="inp" v-model.trim="dataManageFilters.account" placeholder="账号 / 平台收益 / 素材" />
+        </label>
+        <label>
+          <span>业务口径</span>
+          <select class="inp" v-model="dataManageFilters.type">
+            <option value="">全部类型</option>
+            <option v-for="type in dataManageTypeOptions" :key="'manage-type-' + type" :value="type">{{ type }}</option>
+          </select>
+        </label>
+        <label>
+          <span>来源</span>
+          <select class="inp" v-model="dataManageFilters.source">
+            <option value="">全部来源</option>
+            <option value="manual">手动录入</option>
+            <option value="ai">AI解析</option>
+            <option value="excel">Excel导入</option>
+          </select>
+        </label>
+        <label>
+          <span>流水区间</span>
+          <div class="range-inputs">
+            <input class="inp" type="number" min="0" v-model.number="dataManageFilters.revenueMin" placeholder="最小" />
+            <input class="inp" type="number" min="0" v-model.number="dataManageFilters.revenueMax" placeholder="最大" />
+          </div>
+        </label>
+        <label>
+          <span>毛利区间</span>
+          <div class="range-inputs">
+            <input class="inp" type="number" v-model.number="dataManageFilters.marginMin" placeholder="最小" />
+            <input class="inp" type="number" v-model.number="dataManageFilters.marginMax" placeholder="最大" />
+          </div>
+        </label>
+        <div class="data-manage-filter-summary">
+          <span>发布 {{ dataManageSummary.published }} / 未发 {{ dataManageSummary.unpublished }}</span>
+          <span>流水 ￥{{ dataManageSummary.revenue.toLocaleString() }}</span>
+          <span>毛利 ￥{{ dataManageSummary.margin.toLocaleString() }}</span>
+        </div>
+      </div>
+
+      <div v-if="dataManagePanel === 'import'" class="data-manage-import data-manage-panel">
+        <div class="data-manage-import-head">
+          <div>
+            <strong>规则拆解导入</strong>
+            <span>粘贴商务确认/锁档信息，会按达人、金额、返点和档期拆成多条流水。</span>
+          </div>
+          <div class="data-manage-actions">
+            <button class="btn btn-primary btn-sm" :disabled="profitParsing" @click="parseProfitTextRule">{{ profitParsing && profitParseMode === 'rule' ? '解析中...' : '规则拆解' }}</button>
+          </div>
+        </div>
+        <textarea
+          v-model="profitText"
+          class="inp data-manage-textarea"
+          rows="7"
+          placeholder="粘贴商务确认信息，例如：商务、标的、达人、平台、发布时间、费用明细。系统会优先取“实际合作金额”，自动拆成达人流水。"
+        ></textarea>
+        <div v-if="parsedRecords.length" class="parsed-preview manage-preview">
+          <div class="pp-head">
+            <span>组别</span><span>账号</span><span>项目</span><span>平台</span><span>流水</span><span>毛利</span><span>档期</span><span>备注</span>
+          </div>
+          <div v-for="(r,i) in parsedRecords" :key="'manage-preview-' + i" class="pp-row">
+            <span>{{ r.grp || inferGroupFromAccount(r.account) || currentGroupLabel }}</span>
+            <span>{{ r.account }}</span>
+            <span>{{ r.project }}</span>
+            <span>{{ r.platform }}</span>
+            <span class="fee">￥{{ Number(r.fee || 0).toLocaleString() }}</span>
+            <span class="fee accent">￥{{ Number(r.margin || 0).toLocaleString() }}</span>
+            <span>{{ r.schedule }}</span>
+            <span>{{ r.note }}</span>
+          </div>
+          <div class="pp-actions">
+            <button class="btn btn-primary" :disabled="profitWriting" @click="writeParsedRecords">{{ profitWriting ? '写入中...' : '增量写入数据库（' + parsedRecords.length + '条）' }}</button>
+            <button class="btn btn-ghost btn-sm" @click="parsedRecords=[]">取消</button>
+          </div>
+        </div>
+        <div v-if="parsedError" class="parsed-error">{{ parsedError }}</div>
+      </div>
+
+      <div v-if="dataManagePanel === 'export'" class="data-manage-export data-manage-panel">
+        <div>
+          <strong>导出字段</strong>
+          <span>已选 {{ selectedExportFieldCount }} / {{ DATA_MANAGE_EXPORT_FIELDS.length }} 个表头</span>
+        </div>
+        <div class="export-field-grid">
+          <label v-for="field in DATA_MANAGE_EXPORT_FIELDS" :key="field.key">
+            <input type="checkbox" v-model="exportFieldSelection[field.key]" />
+            <span>{{ field.label }}</span>
+          </label>
+        </div>
+        <div class="export-field-actions">
+          <button class="btn btn-ghost btn-sm" @click="selectAllExportFields">全选字段</button>
+          <button class="btn btn-ghost btn-sm" @click="resetExportFields">恢复常用字段</button>
+          <button class="btn btn-ghost btn-sm" @click="clearDataManageFilters">清空筛选</button>
+        </div>
+      </div>
+
+      <div class="data-manage-table">
+        <div class="data-manage-head">
+          <span>组别</span><span>档期</span><span>发布日期</span><span>项目</span><span>账号</span><span>类型</span><span>平台</span><span>流水</span><span>毛利</span><span>状态</span><span>链接</span><span>操作</span>
+        </div>
+        <div v-if="loadingDepartment && !departmentLoaded" class="loading-text">加载数据中...</div>
+        <template v-else-if="dataManageFilteredItems.length">
+          <div
+            v-for="item in dataManageFilteredItems"
+            :key="'manage-' + item.id"
+            class="data-manage-row editable-row"
+            :class="{ saving: quickSavingIds.has(item.id) }">
+            <span>
+              <select class="grid-edit" v-model="item.组别" @change="saveQuickEdit(item)">
+                <option v-for="group in GROUPS" :key="'row-group-' + group.id" :value="group.label">{{ group.label }}</option>
+              </select>
+            </span>
+            <span><input class="grid-edit" v-model="item.档期" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+            <span><input class="grid-edit" v-model="item.发布日期" placeholder="待发布" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+            <span class="proj-name" :title="item.项目"><input class="grid-edit" v-model="item.项目" placeholder="未命名项目" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+            <span><input class="grid-edit" v-model="item.账号" placeholder="账号" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+            <span>
+              <select class="grid-edit" v-model="item.类型" @change="saveQuickEdit(item)">
+                <option v-for="type in PROFIT_BUSINESS_TYPES" :key="'row-type-' + type" :value="type">{{ type }}</option>
+              </select>
+            </span>
+            <span>
+              <select class="grid-edit" v-model="item.平台" @change="saveQuickEdit(item)">
+                <option v-for="platform in PROFIT_PLATFORM_OPTIONS" :key="'row-platform-' + platform" :value="platform">{{ platform }}</option>
+              </select>
+            </span>
+            <span><input class="grid-edit amount-input" type="number" v-model.number="item.费用" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+            <span><input class="grid-edit amount-input accent" type="number" v-model.number="item.毛利" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+            <span>
+              <select class="grid-edit status-edit" v-model="item.执行状态" @change="saveQuickEdit(item)">
+                <option v-for="status in PROFIT_STATUS_OPTIONS" :key="'row-status-' + status" :value="status">{{ status }}</option>
+              </select>
+            </span>
+            <span><input class="grid-edit link-edit" v-model="item.链接" placeholder="发布链接" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+            <span class="pt-actions">
+              <button v-if="item.链接" class="btn-op btn-link" @click="openProfitLink(item.链接)">打开</button>
+              <button class="btn-op btn-edit" @click="openEditModal(item)">详情</button>
+              <button class="btn-op btn-del" @click="deleteItem(item.id)">删除</button>
+            </span>
+          </div>
+        </template>
+        <div v-else class="loading-text">当前筛选下暂无数据。</div>
+      </div>
+    </section>
+
+    <div v-else-if="isDepartmentView" class="department-board">
       <div class="department-hero">
         <div class="department-hero-main">
           <span class="dept-eyebrow">部门业绩总览</span>
@@ -52,7 +352,7 @@
           <div><span>总流水</span><strong>￥{{ departmentSummary.total.toLocaleString() }}</strong></div>
           <div><span>毛利率</span><strong>{{ departmentSummary.marginRate }}%</strong></div>
           <div><span>项目数</span><strong>{{ departmentSummary.projectCount }}</strong></div>
-          <div><span>记录数</span><strong>{{ departmentSummary.count }}</strong></div>
+          <div><span>商单数</span><strong>{{ departmentSummary.commercialOrderCount }}</strong></div>
         </div>
       </div>
       <div class="history-compare-strip">
@@ -62,6 +362,7 @@
           <em>{{ card.note }}</em>
         </article>
       </div>
+      <div class="history-compare-note">环比/同比按当前账号集合对齐历史数据；账号跨组时跟账号走。</div>
 
       <div class="dept-import-card">
         <div class="dept-import-copy">
@@ -100,25 +401,34 @@
         </div>
 
         <div class="department-grid">
-          <div class="dept-panel radar-panel">
-            <div class="dept-panel-title">各组流水雷达图</div>
-            <div class="radar-wrap">
-              <svg viewBox="0 0 260 244" class="radar-svg" role="img" aria-label="部门业绩六边形图">
-                <polygon class="radar-ring radar-ring-3" points="130,20 225,75 225,165 130,220 35,165 35,75" />
-                <polygon class="radar-ring radar-ring-2" points="130,53 196,91 196,149 130,187 64,149 64,91" />
-                <polygon class="radar-ring radar-ring-1" points="130,86 168,108 168,132 130,154 92,132 92,108" />
-                <line v-for="(axis, i) in departmentRadar" :key="'axis-' + axis.label" class="radar-axis" x1="130" y1="120" :x2="axis.outer.x" :y2="axis.outer.y" />
-                <polygon class="radar-area" :points="departmentRadarPoints" />
-                <circle v-for="axis in departmentRadar" :key="axis.label" class="radar-dot" :cx="axis.point.x" :cy="axis.point.y" r="3.5" />
-                <text v-for="axis in departmentRadar" :key="'label-' + axis.label" class="radar-label" :x="axis.labelPoint.x" :y="axis.labelPoint.y" text-anchor="middle">{{ axis.label }}</text>
-              </svg>
-              <div class="radar-score-list">
-                <div v-for="axis in departmentRadar" :key="'score-' + axis.label" class="radar-score">
-                  <span :title="axis.fullLabel">{{ axis.label }}</span>
-                  <strong>￥{{ axis.revenue.toLocaleString() }}</strong>
+          <div class="dept-panel podium-panel">
+          <div class="dept-panel-title">账号贡献颁奖台</div>
+            <div class="dept-podium" v-if="accountPodiumRows.length">
+              <div class="dept-podium-stage">
+                <img :src="podiumRankImage" alt="" />
+                <div
+                  v-for="item in accountPodiumRows.slice(0, 3)"
+                  :key="'podium-' + item.name"
+                  class="podium-nameplate"
+                  :class="'rank-' + item.rank">
+                  <strong :title="item.name">{{ item.shortName }}</strong>
+                  <span>￥{{ item.margin.toLocaleString() }}</span>
+                </div>
+                <div class="podium-static-name bottom-left">曹媛</div>
+                <div class="podium-static-name bottom-center">登魁</div>
+                <div class="podium-static-name bottom-right">鸿霆</div>
+              </div>
+              <div class="podium-mini-rank">
+                <div v-for="item in accountPodiumRows.slice(3, 10)" :key="item.name" class="podium-mini-row">
+                  <b>#{{ item.rank }}</b>
+                  <span :title="item.name">{{ item.name }}</span>
+                  <em>￥{{ item.margin.toLocaleString() }}</em>
+                  <small>{{ item.commercialCount }}单</small>
+                  <i><u :style="{ width: item.width + '%' }"></u></i>
                 </div>
               </div>
             </div>
+            <div v-else class="legend-empty">暂无数据</div>
           </div>
 
           <div class="dept-panel">
@@ -127,7 +437,7 @@
               <div v-for="item in groupPerformance" :key="item.group" class="dept-rank-row">
                 <div class="rank-main">
                   <strong>{{ item.group }}</strong>
-                  <span>{{ item.count }}条 / {{ item.projects }}个项目 / {{ item.marginRate }}%毛利率</span>
+                  <span>{{ item.commercialOrderCount }}单 / {{ item.projects }}个项目 / {{ item.marginRate }}%毛利率</span>
                 </div>
                 <div class="rank-money">￥{{ item.margin.toLocaleString() }}</div>
                 <div class="rank-bar"><i :style="{ width: item.pct + '%' }"></i></div>
@@ -175,11 +485,11 @@
           </div>
 
           <div class="dept-panel dept-list-panel">
-            <div class="dept-panel-title">账号毛利 Top 10</div>
+            <div class="dept-panel-title">账号毛利 / 商单 Top 10</div>
             <div class="dept-account-grid">
               <div v-for="item in accountRanking" :key="item.name" class="dept-account-row">
                 <strong :title="item.name">{{ item.name }}</strong>
-                <span>{{ item.group || '未分组' }}</span>
+                <span>{{ item.group || '未分组' }} · {{ item.commercialCount }}单</span>
                 <em>￥{{ item.margin.toLocaleString() }}</em>
               </div>
               <div v-if="accountRanking.length === 0" class="legend-empty">暂无数据</div>
@@ -212,9 +522,9 @@
         <em>毛利 / 流水</em>
       </div>
       <div class="kpi-card">
-        <span class="kpi-label">项目数</span>
-        <strong>{{ profitSummary.count }}</strong>
-        <em>按毛利降序查看明细</em>
+        <span class="kpi-label">账号商单条数</span>
+        <strong>{{ accountOrderSummary.totalOrders }}</strong>
+        <em>{{ accountOrderSummary.accountCount }} 个账号有商单</em>
       </div>
     </div>
 
@@ -225,6 +535,7 @@
         <em>{{ card.note }}</em>
       </article>
     </div>
+    <div class="history-compare-note">环比/同比按当前组账号集合对齐历史数据；账号跨组时跟账号走。</div>
 
     <div class="ops-grid">
       <!-- Card 1: 环形图 - 各业务占比 -->
@@ -250,12 +561,17 @@
 
       <!-- Card 2: 账号流水 -->
       <div class="ops-card">
-        <div class="card-title">👤 {{ currentGroupLabel }} 账号流水</div>
+        <div class="card-title">👤 {{ currentGroupLabel }} 账号流水 / 商单条数</div>
         <div class="account-list">
           <div v-for="(item, i) in accountBreakdown" :key="item.account" class="account-row">
             <span class="account-name">{{ item.account }}</span>
-            <span class="account-bar"><i :style="{ width: item.pct + '%' }"></i></span>
+            <span class="account-count">{{ item.commercialCount }}单</span>
             <span class="account-amount">￥{{ item.amount.toLocaleString() }}</span>
+            <span class="account-compare">
+              <em :class="compareClass(item.momRate)">环 {{ item.momLabel }}</em>
+              <em :class="compareClass(item.yoyRate)">同 {{ item.yoyLabel }}</em>
+            </span>
+            <span class="account-bar"><i :style="{ width: item.pct + '%' }"></i></span>
           </div>
           <div v-if="accountBreakdown.length === 0" class="account-empty">暂无数据</div>
         </div>
@@ -271,7 +587,8 @@
             <span class="inline-item">毛利目标 <em>￥{{ profitSummary.target.toLocaleString() }}</em></span>
             <span class="inline-item">当前毛利 <em class="accent">￥{{ profitSummary.margin.toLocaleString() }}</em></span>
             <span class="inline-item">总流水 <em>￥{{ profitSummary.total.toLocaleString() }}</em></span>
-            <span class="inline-item">项目数 <em>{{ profitSummary.count }}个</em></span>
+            <span class="inline-item">项目数 <em>{{ profitProjectCount }}个</em></span>
+            <span class="inline-item">账号商单 <em>{{ accountOrderSummary.totalOrders }}单</em></span>
           </div>
           <div class="progress-bar-wrap" style="margin:12px 0;">
             <div class="progress-bar">
@@ -314,6 +631,7 @@
           <button class="btn btn-ghost btn-sm" :class="{ active: profitImportMode === 'total' }" @click="profitImportMode = 'total'">总表导入</button>
           <button class="btn btn-primary btn-sm" @click="openCreateModal">手动新增</button>
           <button class="btn btn-ghost btn-sm" :disabled="feishuSyncing" @click="syncCurrentProfitsToFeishu">{{ feishuSyncing ? '同步中...' : '同步飞书' }}</button>
+          <button class="btn btn-ghost btn-sm" :disabled="feishuPulling" @click="pullCurrentProfitsFromFeishu">{{ feishuPulling ? '拉取中...' : '拉取飞书' }}</button>
           <button class="btn btn-ghost btn-sm" @click="openFeishuProfitTable">打开飞书</button>
         </div>
         <button class="entry-toggle" @click="entryExpanded = !entryExpanded">
@@ -325,8 +643,7 @@
             <div class="pi-label">📋 文本粘贴</div>
             <textarea v-model="profitText" class="inp pi-textarea" rows="5" placeholder="粘贴确认信息，如：&#10;逆水寒96条素材代做，16218元合计&#10;天机妹 逆水寒 3500元 5月"></textarea>
             <div class="parse-actions">
-              <button class="btn btn-ghost" :disabled="profitParsing" @click="parseProfitTextRule">{{ profitParsing && profitParseMode === 'rule' ? '规则解析中...' : '规则解析' }}</button>
-              <button class="btn btn-primary" :disabled="profitParsing" @click="parseProfitTextSmart">{{ profitParsing && profitParseMode === 'smart' ? '智能解析中...' : '智能解析' }}</button>
+              <button class="btn btn-primary" :disabled="profitParsing" @click="parseProfitTextRule">{{ profitParsing && profitParseMode === 'rule' ? '规则解析中...' : '规则解析' }}</button>
             </div>
           </div>
           <div class="pi-col">
@@ -368,7 +685,7 @@
     </template>
 
     <!-- 修改记录弹窗 -->
-    <div v-if="editModal.show" class="modal-mask" @click.self="editModal.show=false">
+    <div v-if="editModal.show && !isDataManageView" class="modal-mask" @click.self="closeEditModal">
       <div class="modal-box">
         <div class="modal-title">📝 {{ editModal.mode === 'create' ? '新增流水记录' : '修改流水记录' }}</div>
         <div class="modal-form">
@@ -384,6 +701,13 @@
               <option v-for="type in PROFIT_BUSINESS_TYPES" :key="type" :value="type">{{ type }}</option>
             </select>
           </div>
+          <div class="mf-row"><label>游戏/非游</label>
+            <select class="inp" v-model="editModal.data.产品线">
+              <option value="">未填写</option>
+              <option value="游戏">游戏</option>
+              <option value="非游">非游</option>
+            </select>
+          </div>
           <div class="mf-row"><label>平台</label>
             <select class="inp" v-model="editModal.data.平台">
               <option v-for="platform in PROFIT_PLATFORM_OPTIONS" :key="platform" :value="platform">{{ platform }}</option>
@@ -391,6 +715,7 @@
           </div>
           <div class="mf-row"><label>档期</label><input class="inp" v-model="editModal.data.档期"></div>
           <div class="mf-row"><label>下单金额（元）</label><input class="inp" type="number" v-model.number="editModal.data.下单金额"></div>
+          <div class="mf-row"><label>返点金额（元）</label><input class="inp" type="number" v-model.number="editModal.data.返点金额"></div>
           <div class="mf-row"><label>最终合作价/流水（元）</label><input class="inp" type="number" v-model.number="editModal.data.费用" @input="syncManualFinancials"></div>
           <div class="mf-row"><label>预估毛利（元）</label><input class="inp" type="number" v-model.number="editModal.data.毛利" @input="syncManualFinancials"></div>
           <div class="mf-row"><label>来源</label>
@@ -404,13 +729,20 @@
             <input type="checkbox" v-model="editModal.data.内部分成" @change="syncInternalSplitDefaults">
             <span>内部代做分成</span>
           </label>
-          <label class="mf-check">
-            <input type="checkbox" v-model="editModal.data.是否发布">
-            <span>已发布</span>
-          </label>
-          <div v-if="editModal.data.是否发布" class="mf-split-grid">
+          <div class="mf-row"><label>执行状态</label>
+            <select class="inp" v-model="editModal.data.执行状态" @change="syncPublishStatusFromExecution(editModal.data)">
+              <option v-for="status in PROFIT_STATUS_OPTIONS" :key="'modal-status-' + status" :value="status">{{ status }}</option>
+            </select>
+          </div>
+          <div class="mf-split-grid">
             <label><span>发布日期</span><input class="inp" v-model="editModal.data.发布日期" placeholder="例如 2026-06-10"></label>
             <label><span>发布链接</span><input class="inp" v-model="editModal.data.链接" placeholder="粘贴链接，表格只显示打开按钮"></label>
+          </div>
+          <div class="mf-split-grid">
+            <label><span>锁档日期</span><input class="inp" v-model="editModal.data.锁档日期" placeholder="例如 2026-06-10"></label>
+            <label><span>原ID</span><input class="inp" v-model="editModal.data.原ID" placeholder="飞书表原ID"></label>
+            <label><span>单号</span><input class="inp" v-model="editModal.data.单号" placeholder="单号"></label>
+            <label><span>CRM单号</span><input class="inp" v-model="editModal.data.CRM单号" placeholder="CRM单号"></label>
           </div>
           <div v-if="editModal.data.内部分成" class="mf-split-grid">
             <label><span>原组</span>
@@ -431,7 +763,7 @@
         </div>
         <div class="modal-actions">
           <button class="btn btn-primary" @click="doEditRecord">{{ editModal.mode === 'create' ? '新增' : '保存' }}</button>
-          <button class="btn btn-ghost btn-sm" @click="editModal.show=false">取消</button>
+          <button class="btn btn-ghost btn-sm" @click="closeEditModal">取消</button>
         </div>
       </div>
     </div>
@@ -468,18 +800,74 @@ import {
   listProfits,
   parseProfitFile,
   parseProfitText as parseProfitInput,
+  pullProfitsFromFeishu,
   syncProfitRecords,
   syncProfitsToFeishu,
   updateProfit
 } from '../api/profit'
 import { GROUPS, GROUP_TARGETS, PROFIT_BUSINESS_TYPES, PROFIT_PLATFORM_OPTIONS, PROFIT_RATES, PROFIT_TYPE_LABELS } from './ops/constants'
 import { arrayBufferToBase64, calcMargin, toProfitRow } from './ops/utils'
+import { parseProfitConfirmationText } from './ops/profitTextRules.mjs'
 import { callMiniMaxChat, getCurrentAuthUser } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { useToast } from '../composables/useToast'
+import podiumRankImage from '../assets/account-data/podium-rank.png'
 
 const confirmAction = useConfirm()
 const { showToast } = useToast()
+
+const DATA_MANAGE_EXPORT_FIELDS = [
+  { key: '锁档日期', label: '太闽锁档日期' },
+  { key: '档期', label: '锁定档期' },
+  { key: '发布日期', label: '实际发布日期' },
+  { key: '原ID', label: '原ID' },
+  { key: '类型', label: '产品' },
+  { key: '产品线', label: '游戏/非游' },
+  { key: '单号', label: '单号' },
+  { key: '平台', label: '平台' },
+  { key: '组别', label: '部门' },
+  { key: '账号', label: '账号' },
+  { key: '项目', label: '投放产品' },
+  { key: '链接', label: '链接' },
+  { key: '下单金额', label: '下单金额' },
+  { key: '返点金额', label: '返点金额' },
+  { key: '最终合作价', label: '最终合作价格' },
+  { key: '备注', label: '说明' },
+  { key: 'CRM单号', label: 'CRM单号' },
+  { key: '本地ID', label: '本地ID' },
+  { key: '来源', label: '来源' },
+  { key: '执行状态', label: '执行状态' },
+  { key: '是否发布', label: '是否发布' },
+  { key: '费用', label: '流水' },
+  { key: '毛利', label: '毛利' },
+  { key: '毛利率', label: '毛利率' },
+  { key: '预估毛利', label: '毛利预估' },
+  { key: '内部分成', label: '内部分成' },
+  { key: '原组', label: '原组' },
+  { key: '代做组', label: '代做组' },
+  { key: '原组比例', label: '原组比例' },
+  { key: '代做比例', label: '代做比例' }
+]
+const DEFAULT_EXPORT_FIELD_KEYS = [
+  '锁档日期',
+  '档期',
+  '发布日期',
+  '原ID',
+  '类型',
+  '产品线',
+  '单号',
+  '平台',
+  '组别',
+  '账号',
+  '项目',
+  '链接',
+  '下单金额',
+  '返点金额',
+  '最终合作价',
+  '备注',
+  'CRM单号'
+]
+const PROFIT_STATUS_OPTIONS = ['未发布', '已发布']
 
 function getTypeClass(type) {
   const t = type || '一口价'
@@ -494,9 +882,36 @@ function getTypeClass(type) {
 
 function openProfitLink(rawLink) {
   const link = String(rawLink || '').trim()
-  if (!link) return
+  if (!link || /^(未发|未发布|待发|延期|无|暂无|未上线)$/i.test(link)) return
   const url = /^https?:\/\//i.test(link) ? link : `https://${link}`
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+function normalizePublishLink(value) {
+  const text = String(value || '').trim()
+  if (!text || /^(未发|未发布|待发|延期|无|暂无|未上线)$/i.test(text)) return ''
+  return text
+}
+
+function normalizeExecutionStatus(value, draft = {}) {
+  const text = String(value || '').trim()
+  if (PROFIT_STATUS_OPTIONS.includes(text)) return text
+  if (/已完成|完成|结案|执行完成/.test(text)) return '已发布'
+  if (/未发布|未发|待发|延期|取消|否|false|0/i.test(text)) return '未发布'
+  if (/^(已发布|已发|发布|上线|已上线|是|true|1)$/i.test(text)) return '已发布'
+  if (draft.是否发布) return '已发布'
+  if (draft.发布日期 || normalizePublishLink(draft.链接)) return '已发布'
+  return '未发布'
+}
+
+function isExecutionPublished(status) {
+  return normalizeExecutionStatus(status) !== '未发布'
+}
+
+function syncPublishStatusFromExecution(draft) {
+  if (!draft) return
+  draft.执行状态 = normalizeExecutionStatus(draft.执行状态, draft)
+  draft.是否发布 = isExecutionPublished(draft.执行状态)
 }
 
 function normalizeGroupKey(value) {
@@ -538,10 +953,29 @@ const profitTargets = ref(loadProfitTargets())
 const targetDraft = ref(0)
 const profitImportMode = ref('single')
 const isDepartmentView = ref(!initialUserGroup)
+const isDataManageView = ref(false)
+const dataManagePanel = ref('')
 const deptImport = reactive({
   parsing: false,
   fileName: ''
 })
+const dataManageFilters = reactive({
+  group: '',
+  account: '',
+  keyword: '',
+  platform: '',
+  type: '',
+  publishStatus: '',
+  source: '',
+  revenueMin: '',
+  revenueMax: '',
+  marginMin: '',
+  marginMax: '',
+  sortBy: 'created_desc'
+})
+const exportFieldSelection = reactive(
+  Object.fromEntries(DATA_MANAGE_EXPORT_FIELDS.map(field => [field.key, DEFAULT_EXPORT_FIELD_KEYS.includes(field.key)]))
+)
 
 function targetKey(groupId = activeGroup.value, year = selectedYear.value, month = selectedMonth.value) {
   return `${groupId}:${year}:${month || 'all'}`
@@ -584,20 +1018,44 @@ function saveProfitTarget() {
 }
 
 function onFilterChange() {
-  // Filter is applied client-side via filteredItems computed
+  const previousYear = onFilterChange.lastYear || selectedYear.value
   syncTargetDraft()
+  if (Number(previousYear) !== Number(selectedYear.value)) {
+    departmentLoaded.value = false
+    GROUPS.forEach(group => {
+      profitLoadedGroups[group.id] = false
+      groupData[group.id] = []
+    })
+    if (isDepartmentView.value || isDataManageView.value) loadDepartmentData()
+    else loadProfitData()
+  }
+  onFilterChange.lastYear = selectedYear.value
 }
+onFilterChange.lastYear = selectedYear.value
 
 async function switchDepartment() {
+  isDataManageView.value = false
   isDepartmentView.value = true
-  await loadDepartmentData()
+  loadDepartmentData({ silent: departmentLoaded.value })
 }
 
 async function switchGroup(id) {
+  isDataManageView.value = false
   isDepartmentView.value = false
   activeGroup.value = id
   syncTargetDraft()
-  await loadProfitData()
+  loadProfitData({ silent: !!profitLoadedGroups[id] })
+}
+
+async function switchDataManage() {
+  isDepartmentView.value = false
+  isDataManageView.value = true
+  profitImportMode.value = 'total'
+  loadDepartmentData({ silent: departmentLoaded.value })
+}
+
+function toggleDataManagePanel(panel) {
+  dataManagePanel.value = dataManagePanel.value === panel ? '' : panel
 }
 
 watch([selectedYear, selectedMonth, activeGroup], syncTargetDraft)
@@ -629,21 +1087,34 @@ function saveLocal(gid, items) {
   try { localStorage.setItem(makeKey(gid), JSON.stringify(items)) } catch {}
 }
 const groupData = reactive(Object.fromEntries(GROUPS.map(g => [g.id, []])))
+const profitLoadedGroups = reactive(Object.fromEntries(GROUPS.map(g => [g.id, false])))
 const loadingProfit = ref(false)
 const departmentItems = ref([])
+const departmentLoaded = ref(false)
 const loadingDepartment = ref(false)
 const currentItems = computed(() => isDepartmentView.value ? departmentItems.value : (groupData[activeGroup.value] || []))
 
+function itemScheduleText(item) {
+  return String((item && (item['\u6863\u671f'] || item['\u5997\uff46\u6e6f'] || item.month || item.schedule)) || '')
+}
+
 function itemMonthNumber(item) {
-  const match = String(item?.档期 || '').match(/(^|[^\d])(1[0-2]|0?[1-9])\s*月/)
-  return match ? Number(match[2]) : 0
+  const raw = itemScheduleText(item)
+  const monthAfterYear = raw.match(/20\d{2}\s*(?:\u5e74|-|\/|\.)\s*(1[0-2]|0?[1-9])/)
+  if (monthAfterYear) return Number(monthAfterYear[1])
+  const shortYearMonth = raw.match(/(?:^|[^\d])(\d{2})\s*\.\s*(1[0-2]|0?[1-9])/)
+  if (shortYearMonth) return Number(shortYearMonth[2])
+  const anyMonth = raw.match(/(?:^|[^\d])(1[0-2]|0?[1-9])\s*(?:\u6708|$)/)
+  return anyMonth ? Number(anyMonth[1]) : 0
 }
 
 function itemYearNumber(item) {
-  const raw = String(item?.档期 || '')
-  const match = raw.match(/(20\d{2})\s*(?:年|-|\/|\.)/)
+  const raw = itemScheduleText(item)
+  const match = raw.match(/(20\d{2})/)
   if (match) return Number(match[1])
-  const created = Number(item?.创建时间) || 0
+  const shortYear = raw.match(/(?:^|[^\d])(\d{2})\s*\.\s*(1[0-2]|0?[1-9])/)
+  if (shortYear) return 2000 + Number(shortYear[1])
+  const created = Number(item && (item['\u521b\u5efa\u65f6\u95f4'] || item['\u9352\u6d98\u7f13\u93c3\u5815\u68ff'])) || 0
   if (created) return new Date(created * 1000).getFullYear()
   return currentYear
 }
@@ -677,6 +1148,56 @@ function splitDepartmentItem(item) {
 
 const departmentEffectiveItems = computed(() => departmentItems.value.flatMap(splitDepartmentItem))
 
+const dataManageBaseItems = computed(() => filterBySelectedPeriod(departmentItems.value))
+
+const dataManagePlatformOptions = computed(() => uniqueSortedOptions(dataManageBaseItems.value.map(item => item.平台)))
+const dataManageTypeOptions = computed(() => uniqueSortedOptions(dataManageBaseItems.value.map(item => item.类型 || '一口价')))
+const selectedExportFieldCount = computed(() => selectedExportFields().length)
+
+const dataManageFilteredItems = computed(() => {
+  const keyword = normalizeSearchText(dataManageFilters.keyword)
+  const account = normalizeSearchText(dataManageFilters.account)
+  const revenueMin = dataManageFilters.revenueMin === '' ? null : Number(dataManageFilters.revenueMin)
+  const revenueMax = dataManageFilters.revenueMax === '' ? null : Number(dataManageFilters.revenueMax)
+  const marginMin = dataManageFilters.marginMin === '' ? null : Number(dataManageFilters.marginMin)
+  const marginMax = dataManageFilters.marginMax === '' ? null : Number(dataManageFilters.marginMax)
+  const filtered = dataManageBaseItems.value.filter(item => {
+    if (dataManageFilters.group && item.组别 !== dataManageFilters.group) return false
+    if (dataManageFilters.platform && item.平台 !== dataManageFilters.platform) return false
+    if (dataManageFilters.type && (item.类型 || '一口价') !== dataManageFilters.type) return false
+    if (dataManageFilters.source && item.来源 !== dataManageFilters.source) return false
+    const executionStatus = normalizeExecutionStatus(item.执行状态, item)
+    if (dataManageFilters.publishStatus === 'published' && executionStatus !== '已发布') return false
+    if (dataManageFilters.publishStatus === 'unpublished' && executionStatus !== '未发布') return false
+    if (account && !normalizeSearchText([item.账号, item.组别].join(' ')).includes(account)) return false
+    if (keyword && !normalizeSearchText([item.项目, item.备注, item.单号, item.链接, item.产品线].join(' ')).includes(keyword)) return false
+    const revenue = Number(item.费用) || 0
+    const margin = Number(item.毛利) || 0
+    if (revenueMin !== null && revenue < revenueMin) return false
+    if (revenueMax !== null && revenue > revenueMax) return false
+    if (marginMin !== null && margin < marginMin) return false
+    if (marginMax !== null && margin > marginMax) return false
+    return true
+  })
+  return sortDataManageItems(filtered)
+})
+
+const dataManageSummary = computed(() => {
+  const items = dataManageFilteredItems.value
+  const revenue = items.reduce((sum, item) => sum + (Number(item.费用) || 0), 0)
+  const margin = items.reduce((sum, item) => sum + (Number(item.毛利) || 0), 0)
+  const published = items.filter(item => normalizeExecutionStatus(item.执行状态, item) === '已发布').length
+  const unpublished = items.filter(item => normalizeExecutionStatus(item.执行状态, item) === '未发布').length
+  return {
+    count: items.length,
+    revenue,
+    margin,
+    published,
+    unpublished,
+    marginRate: revenue ? Math.round(margin / revenue * 100) : 0
+  }
+})
+
 // Year/Month filtered items
 const filteredItems = computed(() => {
   return filterBySelectedPeriod(currentItems.value)
@@ -696,17 +1217,134 @@ const profitSummary = computed(() => {
   return { target, total, margin, rate: target > 0 ? Math.round(margin / target * 100) : 0, count: items.length, items }
 })
 
+const profitProjectCount = computed(() => {
+  const projects = new Set(filteredItems.value.map(item => item.项目).filter(Boolean))
+  return projects.size
+})
+
 const profitGap = computed(() => Math.max(0, profitSummary.value.target - profitSummary.value.margin))
 const marginRate = computed(() => {
   if (!profitSummary.value.total) return 0
   return Math.round(profitSummary.value.margin / profitSummary.value.total * 100)
 })
 
+function uniqueSortedOptions(values) {
+  return Array.from(new Set((values || []).map(value => String(value || '').trim()).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'))
+}
+
+function normalizeSearchText(value) {
+  return String(value || '').trim().toLowerCase().replace(/\s+/g, '')
+}
+
+function sortDataManageItems(items) {
+  const rows = [...items]
+  if (dataManageFilters.sortBy === 'revenue_desc') return rows.sort((a, b) => (Number(b.费用) || 0) - (Number(a.费用) || 0))
+  if (dataManageFilters.sortBy === 'margin_desc') return rows.sort((a, b) => (Number(b.毛利) || 0) - (Number(a.毛利) || 0))
+  if (dataManageFilters.sortBy === 'project_asc') return rows.sort((a, b) => String(a.项目 || '').localeCompare(String(b.项目 || ''), 'zh-CN'))
+  if (dataManageFilters.sortBy === 'group_asc') return rows.sort((a, b) => String(a.组别 || '').localeCompare(String(b.组别 || ''), 'zh-CN'))
+  return rows.sort((a, b) => (Number(b.创建时间) || 0) - (Number(a.创建时间) || 0))
+}
+
+function selectedExportFields() {
+  return DATA_MANAGE_EXPORT_FIELDS.filter(field => exportFieldSelection[field.key])
+}
+
+function selectAllExportFields() {
+  DATA_MANAGE_EXPORT_FIELDS.forEach(field => {
+    exportFieldSelection[field.key] = true
+  })
+}
+
+function resetExportFields() {
+  DATA_MANAGE_EXPORT_FIELDS.forEach(field => {
+    exportFieldSelection[field.key] = DEFAULT_EXPORT_FIELD_KEYS.includes(field.key)
+  })
+}
+
+function clearDataManageFilters() {
+  Object.assign(dataManageFilters, {
+    group: '',
+    account: '',
+    keyword: '',
+    platform: '',
+    type: '',
+    publishStatus: '',
+    source: '',
+    revenueMin: '',
+    revenueMax: '',
+    marginMin: '',
+    marginMax: '',
+    sortBy: 'created_desc'
+  })
+}
+
+function exportValueForField(item, key) {
+  if (key === '毛利率') {
+    const revenue = Number(item.费用) || 0
+    return revenue ? Math.round((Number(item.毛利) || 0) / revenue * 100) + '%' : '0%'
+  }
+  if (key === '执行状态') return normalizeExecutionStatus(item.执行状态, item)
+  if (key === '是否发布') return normalizeExecutionStatus(item.执行状态, item) !== '未发布' ? '是' : '否'
+  if (key === '内部分成') return item.内部分成 ? '是' : '否'
+  return item[key] ?? ''
+}
+
+function csvCell(value) {
+  const text = String(value ?? '')
+  return `"${text.replace(/"/g, '""')}"`
+}
+
+function exportManagedData() {
+  const fields = selectedExportFields()
+  if (!fields.length) {
+    showToast('请至少选择一个导出字段', 'error')
+    return
+  }
+  const rows = dataManageFilteredItems.value
+  if (!rows.length) {
+    showToast('当前筛选没有可导出的数据', 'error')
+    return
+  }
+  const csv = [
+    fields.map(field => csvCell(field.label)).join(','),
+    ...rows.map(item => fields.map(field => csvCell(exportValueForField(item, field.key))).join(','))
+  ].join('\n')
+  const blob = new Blob(['\ufeff' + csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  const monthLabel = selectedMonth.value ? `${selectedMonth.value}月` : '全部月份'
+  const groupLabel = dataManageFilters.group || '全量'
+  link.href = url
+  link.download = `流水数据_${groupLabel}_${selectedYear.value}年${monthLabel}_${new Date().toISOString().slice(0, 10)}.csv`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+  showToast('已导出当前筛选数据', 'success')
+}
+
 function toDepartmentRow(item) {
   return {
     ...toProfitRow(item),
     组别: item.grp || ''
   }
+}
+
+function isAccountCommercialOrder(item) {
+  const account = String(item?.账号 || '').trim()
+  if (!isReportableAccountName(account)) return false
+  const project = String(item?.项目 || '').trim()
+  const type = String(item?.类型 || '').trim()
+  const text = [project, type, item?.平台, item?.备注].filter(Boolean).join(' ')
+  if (!project || isGenericProjectLabel(project)) return false
+  if (/流量激励|平台收益|素材|内部代做|代做分成/.test(text)) return false
+  return (Number(item?.费用) || 0) > 0
+}
+
+function isReportableAccountName(account) {
+  const text = String(account || '').trim()
+  return !!text && !/平台收益|素材|未知/.test(text)
 }
 
 function isGenericProjectLabel(name) {
@@ -740,6 +1378,7 @@ function makeGroupMap() {
     revenue: 0,
     margin: 0,
     count: 0,
+    commercialOrderCount: 0,
     projects: new Set(),
     accounts: new Set()
   }]))
@@ -758,6 +1397,7 @@ const departmentSummary = computed(() => {
   const fallbackProjects = new Set()
   const accounts = new Set()
   const groups = new Set()
+  let commercialOrderCount = 0
   for (const item of items) {
     if (item.项目) {
       fallbackProjects.add(item.项目)
@@ -765,12 +1405,14 @@ const departmentSummary = computed(() => {
     }
     if (item.账号) accounts.add(item.账号)
     if (item.组别) groups.add(item.组别)
+    if (isAccountCommercialOrder(item)) commercialOrderCount += 1
   }
   const projectCount = projects.size || fallbackProjects.size
   return {
     total,
     margin,
     count: items.length,
+    commercialOrderCount,
     projectCount,
     accountCount: accounts.size,
     groupCount: groups.size,
@@ -788,6 +1430,7 @@ const groupPerformance = computed(() => {
     target.revenue += Number(item.费用) || 0
     target.margin += Number(item.毛利) || 0
     target.count += 1
+    if (isAccountCommercialOrder(item)) target.commercialOrderCount += 1
     if (item.项目) target.projects.add(item.项目)
     if (item.账号) target.accounts.add(item.账号)
   }
@@ -921,14 +1564,32 @@ const accountRanking = computed(() => {
   const map = new Map()
   for (const item of items) {
     const key = item.账号 || '未知账号'
-    const curr = map.get(key) || { name: key, group: item.组别 || '', revenue: 0, margin: 0, count: 0 }
+    if (!isReportableAccountName(key)) continue
+    const curr = map.get(key) || { name: key, group: item.组别 || '', revenue: 0, margin: 0, count: 0, commercialCount: 0 }
     curr.group = curr.group || item.组别 || ''
     curr.revenue += Number(item.费用) || 0
     curr.margin += Number(item.毛利) || 0
     curr.count += 1
+    if (isAccountCommercialOrder(item)) curr.commercialCount += 1
     map.set(key, curr)
   }
   return [...map.values()].sort((a, b) => b.margin - a.margin).slice(0, 10)
+})
+
+function shortPodiumName(name) {
+  const text = String(name || '').trim()
+  return text.length > 6 ? text.slice(0, 6) + '...' : text
+}
+
+const accountPodiumRows = computed(() => {
+  const rows = accountRanking.value
+  const maxMargin = Math.max(1, ...rows.map(item => Math.max(0, Number(item.margin) || 0)))
+  return rows.map((item, index) => ({
+    ...item,
+    rank: index + 1,
+    shortName: shortPodiumName(item.name),
+    width: Math.max(6, Math.round(Math.max(0, Number(item.margin) || 0) / maxMargin * 100))
+  }))
 })
 
 const deptPalette = ['#22c55e', '#f59e0b', '#06b6d4', '#ef4444', '#8b5cf6', '#14b8a6']
@@ -974,21 +1635,21 @@ const departmentRadarPoints = computed(() => {
 // Previous month comparison
 const prevMonthData = computed(() => {
   if (!selectedMonth.value) return null
-  const sourceItems = isDepartmentView.value ? departmentEffectiveItems.value : currentItems.value
-  let prevMonth = selectedMonth.value - 1
-  if (prevMonth <= 0) { prevMonth = 12 }
-  const prevYear = selectedMonth.value - 1 <= 0 ? Number(selectedYear.value) - 1 : Number(selectedYear.value)
-  const prevItems = filterBySelectedPeriod(sourceItems, prevMonth, prevYear)
-  if (prevItems.length === 0) return null
-  const total = prevItems.reduce((s, i) => s + (Number(i.费用) || 0), 0)
-  const margin = prevItems.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
-  return { total, margin }
+  const month = Number(selectedMonth.value) || 0
+  const year = Number(selectedYear.value) || currentYear
+  const accountKeys = currentComparisonAccountKeys(month, year)
+  const prev = previousPeriod(month, year)
+  const previous = summarizeAccountAlignedPeriod(prev.month, prev.year, accountKeys)
+  return previous.count ? previous : null
 })
 
 const prevMonthDiff = computed(() => {
   if (!prevMonthData.value) return 0
-  const currItems = filteredItems.value
-  const currTotal = currItems.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
+  const month = Number(selectedMonth.value) || 0
+  const year = Number(selectedYear.value) || currentYear
+  const accountKeys = currentComparisonAccountKeys(month, year)
+  const current = summarizeAccountAlignedPeriod(month, year, accountKeys)
+  const currTotal = current.margin
   const prevMargin = prevMonthData.value.margin
   if (prevMargin === 0) return currTotal > 0 ? 100 : 0
   return Math.round((currTotal - prevMargin) / prevMargin * 100)
@@ -1007,35 +1668,84 @@ function compareRate(current, base) {
   return Math.round((current - base) / base * 100)
 }
 
-const historyComparison = computed(() => {
-  const sourceItems = isDepartmentView.value ? departmentEffectiveItems.value : currentItems.value
-  const month = Number(selectedMonth.value) || 0
-  const year = Number(selectedYear.value) || currentYear
-  const current = summarizeProfitItems(filterBySelectedPeriod(sourceItems, month, year))
+function compareClass(rate) {
+  if (rate == null) return 'flat'
+  if (rate > 0) return 'up'
+  if (rate < 0) return 'down'
+  return 'flat'
+}
+
+function previousPeriod(month, year) {
   let prevMonth = month ? month - 1 : 0
   let prevYear = year
   if (month && prevMonth <= 0) {
     prevMonth = 12
     prevYear = year - 1
   }
-  const previous = month ? summarizeProfitItems(filterBySelectedPeriod(sourceItems, prevMonth, prevYear)) : null
-  const lastYear = month ? summarizeProfitItems(filterBySelectedPeriod(sourceItems, month, year - 1)) : null
+  return { month: prevMonth, year: prevYear }
+}
+
+function comparisonSourceItems() {
+  if (isDepartmentView.value) {
+    return departmentEffectiveItems.value.length ? departmentEffectiveItems.value : departmentItems.value
+  }
+  return departmentItems.value.length ? departmentItems.value : currentItems.value
+}
+
+function addAccountKey(target, account) {
+  if (!isReportableAccountName(account)) return
+  const key = normalizeAccountKey(account)
+  if (key) target.add(key)
+}
+
+function currentComparisonAccountKeys(month, year) {
+  const keys = new Set()
+  const baseAccounts = isDepartmentView.value ? allProfitAccounts() : currentGroupAccounts()
+  baseAccounts.forEach(account => addAccountKey(keys, account))
+  const currentRows = isDepartmentView.value
+    ? filterBySelectedPeriod(comparisonSourceItems(), month, year)
+    : filterBySelectedPeriod(currentItems.value, month, year)
+  currentRows.forEach(item => addAccountKey(keys, item.账号))
+  return keys
+}
+
+function summarizeAccountAlignedPeriod(month, year, accountKeys) {
+  const rows = filterBySelectedPeriod(comparisonSourceItems(), month, year)
+    .filter(item => accountKeys.has(normalizeAccountKey(item.账号)))
+  return summarizeProfitItems(rows)
+}
+
+function accountPeriodSummary(account, month, year) {
+  const key = normalizeAccountKey(account)
+  if (!key) return { total: 0, margin: 0, count: 0, projects: 0 }
+  return summarizeAccountAlignedPeriod(month, year, new Set([key]))
+}
+
+const historyComparison = computed(() => {
+  const month = Number(selectedMonth.value) || 0
+  const year = Number(selectedYear.value) || currentYear
+  const accountKeys = currentComparisonAccountKeys(month, year)
+  const current = summarizeAccountAlignedPeriod(month, year, accountKeys)
+  const prev = previousPeriod(month, year)
+  const previous = month ? summarizeAccountAlignedPeriod(prev.month, prev.year, accountKeys) : null
+  const lastYear = month ? summarizeAccountAlignedPeriod(month, year - 1, accountKeys) : null
   return {
     current,
     previous,
     lastYear,
+    accountCount: accountKeys.size,
     cards: [
       {
         key: 'mom',
         label: '环比上月',
         value: previous && previous.count ? `${compareRate(current.margin, previous.margin)}%` : '待补数据',
-        note: previous && previous.count ? `上月毛利 ￥${previous.margin.toLocaleString()}` : '导入上月数据后自动计算'
+        note: previous && previous.count ? `账号对齐 ${accountKeys.size} 个；上月毛利 ￥${previous.margin.toLocaleString()}` : '导入上月数据后自动计算'
       },
       {
         key: 'yoy',
         label: '同比去年',
         value: lastYear && lastYear.count ? `${compareRate(current.margin, lastYear.margin)}%` : '待补数据',
-        note: lastYear && lastYear.count ? `去年同月毛利 ￥${lastYear.margin.toLocaleString()}` : '等待补充去年同期数据'
+        note: lastYear && lastYear.count ? `账号对齐 ${accountKeys.size} 个；去年同月毛利 ￥${lastYear.margin.toLocaleString()}` : '等待补充去年同期数据'
       },
       {
         key: 'projects',
@@ -1050,8 +1760,7 @@ const circumference = 52 * 2 * Math.PI // r=52, 2πr
 const donutPerimeter = 2 * Math.PI * 70 // r=70
 
 const bizColors = ['#7b2fff', '#22c55e', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899']
-const FEISHU_PROFIT_TABLE_URL = 'https://tcnnt6cxkcat.feishu.cn/base/WKOmbG4ubaqYqUsH5ErcvwqSnMh?table=tblOZXJZyQ9LCx6k'
-
+const FEISHU_PROFIT_TABLE_URL = 'https://tcnnt6cxkcat.feishu.cn/sheets/Eha8sWY5GhDmVQtBHg5cthtenZb'
 function openFeishuProfitTable() {
   window.open(FEISHU_PROFIT_TABLE_URL, '_blank', 'noopener,noreferrer')
 }
@@ -1104,40 +1813,91 @@ const donutSegments = computed(() => {
 // 每个账号的流水
 const accountBreakdown = computed(() => {
   const items = filteredItems.value
-  const map = {}
+  const map = new Map()
   for (const item of items) {
     const acc = item.账号 || '未知'
-    map[acc] = (map[acc] || 0) + (Number(item.费用) || 0)
+    if (!isReportableAccountName(acc)) continue
+    const row = map.get(acc) || { account: acc, amount: 0, margin: 0, count: 0, commercialCount: 0 }
+    row.amount += Number(item.费用) || 0
+    row.margin += Number(item.毛利) || 0
+    row.count += 1
+    if (isAccountCommercialOrder(item)) row.commercialCount += 1
+    map.set(acc, row)
   }
-  const max = Math.max(1, ...Object.values(map))
-  return Object.entries(map)
-    .map(([account, amount]) => ({ account, amount, pct: Math.round(amount / max * 100) }))
+  const rows = [...map.values()]
+  const max = Math.max(1, ...rows.map(item => item.amount))
+  const month = Number(selectedMonth.value) || 0
+  const year = Number(selectedYear.value) || currentYear
+  const prev = previousPeriod(month, year)
+  return rows
+    .map(item => {
+      const previous = month ? accountPeriodSummary(item.account, prev.month, prev.year) : null
+      const lastYear = month ? accountPeriodSummary(item.account, month, year - 1) : null
+      const momRate = previous && previous.count ? compareRate(item.margin, previous.margin) : null
+      const yoyRate = lastYear && lastYear.count ? compareRate(item.margin, lastYear.margin) : null
+      return {
+        ...item,
+        pct: Math.round(item.amount / max * 100),
+        momRate,
+        yoyRate,
+        momLabel: previous && previous.count ? `${momRate >= 0 ? '+' : ''}${momRate}%` : '待补',
+        yoyLabel: lastYear && lastYear.count ? `${yoyRate >= 0 ? '+' : ''}${yoyRate}%` : '待补'
+      }
+    })
     .sort((a, b) => b.amount - a.amount)
 })
 
-async function loadProfitData() {
-  loadingProfit.value = true
-  try {
-    const grpLabel = GROUPS.find(g => g.id === activeGroup.value)?.label || '内容组1'
-    const d = await listProfits(grpLabel)
-    const items = (d.data || []).map(toProfitRow)
-    groupData[activeGroup.value] = items
-  } catch(e) {
-    showToast('加载失败: ' + e.message, 'error')
+const accountOrderSummary = computed(() => ({
+  totalOrders: accountBreakdown.value.reduce((sum, item) => sum + item.commercialCount, 0),
+  accountCount: accountBreakdown.value.filter(item => item.commercialCount > 0).length
+}))
+
+function seedGroupDataFromDepartment(items) {
+  const byGroup = new Map(GROUPS.map(group => [group.label, []]))
+  for (const item of items || []) {
+    const label = item.组别 || inferGroupFromAccount(item.账号) || ''
+    if (!byGroup.has(label)) continue
+    byGroup.get(label).push(item)
   }
-  loadingProfit.value = false
+  GROUPS.forEach(group => {
+    groupData[group.id] = byGroup.get(group.label) || []
+    profitLoadedGroups[group.id] = true
+  })
 }
 
-async function loadDepartmentData() {
+async function loadProfitData(options = {}) {
+  const hasCached = profitLoadedGroups[activeGroup.value] || (groupData[activeGroup.value] || []).length > 0
+  const showBlocking = !options.silent && !hasCached
+  if (showBlocking) loadingProfit.value = true
+  try {
+    const grpLabel = GROUPS.find(g => g.id === activeGroup.value)?.label || '???'
+    const years = Array.from(new Set([Number(selectedYear.value) || currentYear, (Number(selectedYear.value) || currentYear) - 1]))
+    const responses = await Promise.all(years.map(year => listProfits(grpLabel, { year })))
+    const items = responses.flatMap(d => (d.data || []).map(toProfitRow))
+    groupData[activeGroup.value] = items
+    profitLoadedGroups[activeGroup.value] = true
+  } catch(e) {
+    showToast('????: ' + e.message, 'error')
+  } finally {
+    if (showBlocking) loadingProfit.value = false
+  }
+}
+
+async function loadDepartmentData(options = {}) {
+  const showBlocking = !options.silent && !departmentLoaded.value
   loadingDepartment.value = true
   try {
-    const d = await listProfits()
-    const items = (d.data || []).map(toDepartmentRow)
+    const years = Array.from(new Set([Number(selectedYear.value) || currentYear, (Number(selectedYear.value) || currentYear) - 1]))
+    const responses = await Promise.all(years.map(year => listProfits(null, { year })))
+    const items = responses.flatMap(d => (d.data || []).map(toDepartmentRow))
     departmentItems.value = items
+    departmentLoaded.value = true
+    seedGroupDataFromDepartment(items)
   } catch (e) {
-    showToast('加载部门总览失败: ' + e.message, 'error')
+    showToast('????????: ' + e.message, 'error')
+  } finally {
+    loadingDepartment.value = false
   }
-  loadingDepartment.value = false
 }
 
 async function importFromFeishu() {
@@ -1171,6 +1931,7 @@ const profitText = ref('')
 const profitParsing = ref(false)
 const profitWriting = ref(false)
 const feishuSyncing = ref(false)
+const feishuPulling = ref(false)
 const profitDragOver = ref(false)
 const profitFileName = ref('')
 const parsedRecords = ref([])
@@ -1180,18 +1941,22 @@ const entryExpanded = ref(false)
 const profitParseMode = ref('')
 
 function defaultProfitSchedule() {
+  const year = Number(selectedYear.value) || currentYear
   const month = Number(selectedMonth.value) || new Date().getMonth() + 1
-  return month + '月'
+  return `${year}年${month}月`
 }
 
 function normalizeProfitSchedule(value) {
   const raw = String(value || '').trim()
+  const fallbackYear = Number(selectedYear.value) || currentYear
+  const yearMonthMatch = raw.match(/\b(20\d{2})\s*[-/.年]\s*(1[0-2]|0?[1-9])(?:\s*月|[-/.])/)
+  if (yearMonthMatch) return `${Number(yearMonthMatch[1])}年${Number(yearMonthMatch[2])}月`
+  const shortYearMatch = raw.match(/(^|[^\d])(\d{2})\s*\.\s*(1[0-2]|0?[1-9])\s*月?/)
+  if (shortYearMatch) return `${2000 + Number(shortYearMatch[2])}年${Number(shortYearMatch[3])}月`
   const cnMatch = raw.match(/(^|[^\d])(1[0-2]|0?[1-9])\s*月/)
-  if (cnMatch) return Number(cnMatch[2]) + '月'
-  const isoMatch = raw.match(/\b(?:20\d{2})[-/.年]\s*(1[0-2]|0?[1-9])(?:[-/.月])/)
-  if (isoMatch) return Number(isoMatch[1]) + '月'
+  if (cnMatch) return `${fallbackYear}年${Number(cnMatch[2])}月`
   const shortDateMatch = raw.match(/(^|[^\d])(1[0-2]|0?[1-9])\s*[/.]\s*\d{1,2}/)
-  if (shortDateMatch) return Number(shortDateMatch[2]) + '月'
+  if (shortDateMatch) return `${fallbackYear}年${Number(shortDateMatch[2])}月`
   return defaultProfitSchedule()
 }
 
@@ -1214,6 +1979,14 @@ function currentGroupAccounts() {
   return GROUPS.find(g => g.id === activeGroup.value)?.accounts || []
 }
 
+function allProfitAccounts() {
+  return Array.from(new Set(GROUPS.flatMap(group => group.accounts || []))).filter(Boolean)
+}
+
+function profitAccountScope() {
+  return (isDataManageView.value || profitImportMode.value === 'total') ? allProfitAccounts() : currentGroupAccounts()
+}
+
 function normalizeAccountKey(value) {
   return String(value || '')
     .trim()
@@ -1234,7 +2007,7 @@ function preserveSpecialProfitProject(text) {
 
 function extractProjectFromProfitText(text) {
   const raw = String(text || '')
-  const match = raw.match(/(?:合作产品|投放产品|推广产品|产品|项目|游戏)\s*[：:]\s*([^\n\r]+)/)
+  const match = raw.match(/(?:合作产品|投放产品|推广产品|标的|产品|项目|游戏)\s*[：:]\s*([^\n\r]+)/)
   return match ? match[1].trim() : ''
 }
 
@@ -1246,8 +2019,18 @@ function extractPlatformFromProfitText(text) {
 
 function extractScheduleFromProfitText(text) {
   const raw = String(text || '')
-  const match = raw.match(/(?:推广档期|档期)\s*[：:]\s*([^\n\r]+)/)
+  const match = raw.match(/(?:推广档期|档期|发布时间)\s*[：:]\s*([^\n\r]+)/)
   return match ? normalizeProfitSchedule(match[1]) : ''
+}
+
+function extractLockDateFromProfitText(text) {
+  const raw = String(text || '')
+  const match = raw.match(/(?:发布时间|推广档期|档期)\s*[：:]\s*(?:(20\d{2})\s*年\s*)?(1[0-2]|0?[1-9])\s*月\s*(\d{1,2})\s*日?/)
+  if (!match) return ''
+  const year = Number(match[1]) || Number(selectedYear.value) || currentYear
+  const month = String(Number(match[2])).padStart(2, '0')
+  const day = String(Number(match[3])).padStart(2, '0')
+  return `${year}-${month}-${day}`
 }
 
 function extractFeeSection(text) {
@@ -1260,29 +2043,54 @@ function parseFeeSectionProfitText(text) {
   const project = extractProjectFromProfitText(text) || '未命名项目'
   const platform = extractPlatformFromProfitText(text) || '抖音'
   const schedule = extractScheduleFromProfitText(text) || defaultProfitSchedule()
-  const accounts = currentGroupAccounts()
+  const lockDate = extractLockDateFromProfitText(text)
+  const accounts = profitAccountScope()
   const feeSection = extractFeeSection(text)
   const records = []
 
   for (const account of accounts) {
     if (!account || account === '素材') continue
     const escaped = account.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const re = new RegExp(escaped + '[^\\n\\r\\d¥￥]{0,20}[¥￥]?\\s*([\\d,]+(?:\\.\\d+)?)\\s*(?:元|块|rmb|RMB)?', 'i')
-    const match = feeSection.match(re)
-    if (!match) continue
-    const fee = Number(String(match[1]).replace(/,/g, '')) || 0
+    const lineMatch = feeSection.match(new RegExp('([^\\n\\r]*' + escaped + '[^\\n\\r]*)', 'i'))
+    const line = lineMatch ? lineMatch[1] : ''
+    if (!line) continue
+    const fee = extractActualCooperationAmount(line)
     if (fee <= 0) continue
+    const orderAmount = extractQuotedAmount(line)
+    const group = inferGroupFromAccount(account)
     records.push({
+      grp: group,
       account,
       project,
       platform,
       fee,
       margin: calcMargin(fee, platform),
       schedule,
-      note: `${account}${fee}元`
+      note: [line.trim(), lockDate ? `发布时间：${lockDate}` : ''].filter(Boolean).join('；'),
+      order_amount: orderAmount,
+      final_amount: fee,
+      lock_date: lockDate,
+      entry_source: 'ai'
     })
   }
   return records
+}
+
+function extractActualCooperationAmount(line) {
+  const raw = String(line || '').replace(/,/g, '')
+  const explicit = raw.match(/(?:实际合作金额|实际金额|合作金额|最终合作价|最终合作价格)[：:\s]*[^=\n\r]*=\s*(\d+(?:\.\d+)?)\s*(?:元|块|rmb|RMB)?/i)
+  if (explicit) return Math.round(Number(explicit[1]) || 0)
+  const named = raw.match(/(?:实际合作金额|实际金额|合作金额|最终合作价|最终合作价格)[：:\s]*(\d+(?:\.\d+)?)\s*(?:元|块|rmb|RMB)?/i)
+  if (named) return Math.round(Number(named[1]) || 0)
+  const yuan = [...raw.matchAll(/(\d+(?:\.\d+)?)\s*(?:元|块|rmb|RMB)/gi)]
+  if (yuan.length) return Math.round(Number(yuan[yuan.length - 1][1]) || 0)
+  return extractProfitAmount(raw)
+}
+
+function extractQuotedAmount(line) {
+  const raw = String(line || '').replace(/,/g, '')
+  const match = raw.match(/(?:报价|刊例价|下单金额)[：:\s]*(\d+(?:\.\d+)?)\s*(?:元|块|rmb|RMB)?/i)
+  return match ? Math.round(Number(match[1]) || 0) : 0
 }
 
 function extractProfitCount(text) {
@@ -1306,7 +2114,7 @@ function normalizeProfitAccount(account, sourceText = '', options = {}) {
   const text = String(sourceText || '')
   const raw = String(account || '').trim()
   if (options.preserveAccount && raw && !/^未知|未填写|无$/.test(raw)) return raw
-  const accounts = currentGroupAccounts()
+  const accounts = profitAccountScope()
   const hit = accounts.find(a => text.includes(a))
   if (hit) return hit
   if (/平台收益/.test(text)) return '平台收益'
@@ -1320,8 +2128,7 @@ function normalizeProfitProject(project, sourceText = '', options = {}) {
   const source = String(sourceText || '').trim()
   if (/(维护标准|总表|汇总|提报|模板|明细|清单|报表|台账|数据表)/.test(raw)) raw = ''
   if (!raw || raw.length > 24 || /元|合计|条/.test(raw)) raw = source
-  const group = GROUPS.find(g => g.id === activeGroup.value)
-  for (const acc of group?.accounts || []) raw = raw.replaceAll(acc, ' ')
+  for (const acc of profitAccountScope()) raw = raw.replaceAll(acc, ' ')
   raw = raw
     .replace(/(?:¥|￥)?\s*\d+(?:\.\d+)?\s*(?:元|块|rmb|RMB|合计)?/gi, ' ')
     .replace(/\d+\s*(?:条|篇|个|支|单)/g, ' ')
@@ -1395,7 +2202,11 @@ function normalizeProfitRecord(record, sourceText = '', options = {}) {
   const finalAmount = Number(String(record.final_amount ?? record.finalAmount ?? '').replace(/,/g, '')) || fee
   const projectedMargin = Number(String(record.projected_margin ?? record.projectedMargin ?? '').replace(/,/g, '')) || parsedMargin || calcMargin(fee, platform)
   const publishDate = record.publish_date || record.publishDate || ''
-  const link = record.link || record.url || ''
+  const link = normalizePublishLink(record.link || record.url || '')
+  const executionStatus = normalizeExecutionStatus(
+    record.execution_status || record.executionStatus || record.status || record.publish_status || record.publishStatus,
+    { 是否发布: record.is_published || record.isPublished || record.published, 发布日期: publishDate, 链接: record.link || record.url || '' }
+  )
   const businessType = inferBusinessType(record, source)
   const schedule = normalizeProfitSchedule(record.schedule || record.month)
   const account = normalizeProfitAccount(record.account, enrichedSource, { preserveAccount: options.preserveAccount })
@@ -1426,11 +2237,15 @@ function normalizeProfitRecord(record, sourceText = '', options = {}) {
     order_amount: orderAmount,
     final_amount: finalAmount,
     projected_margin: projectedMargin,
+    lock_date: record.lock_date || record.lockDate || '',
     publish_date: publishDate,
-    is_published: record.is_published || record.isPublished || record.published || publishDate ? 1 : 0,
+    execution_status: executionStatus,
+    is_published: executionStatus !== '未发布' ? 1 : 0,
+    original_id: record.original_id || record.originalId || '',
     product_line: record.product_line || record.productLine || '',
     link,
-    order_no: record.order_no || record.orderNo || ''
+    order_no: record.order_no || record.orderNo || '',
+    crm_order_no: record.crm_order_no || record.crmOrderNo || ''
   }
 }
 
@@ -1463,25 +2278,38 @@ function splitProfitInput(text) {
 }
 
 function localRuleParseProfitText(text) {
-  const feeSectionRecords = parseFeeSectionProfitText(text)
+  const confirmationRecords = parseProfitConfirmationText(text, {
+    groups: GROUPS,
+    selectedYear: selectedYear.value,
+    selectedMonth: selectedMonth.value
+  })
+  if (confirmationRecords.length) return confirmationRecords
+  const feeSectionRecords = parseFeeSectionProfitText(text).map(record => ({ ...record, entry_source: 'rule' }))
   if (feeSectionRecords.length) return feeSectionRecords
+  const accounts = profitAccountScope()
   return splitProfitInput(text)
     .map(chunk => normalizeProfitRecord({ raw: chunk }, chunk))
-    .filter(r => r.fee > 0 && currentGroupAccounts().includes(r.account))
+    .filter(r => r.fee > 0 && accounts.includes(r.account))
 }
 
 function applyParsedProfitRecords(records, mode, sourceText = profitText.value) {
-  const accounts = currentGroupAccounts()
+  const accounts = profitAccountScope()
   const sourceProject = extractProjectFromProfitText(sourceText)
   const sourceSchedule = extractScheduleFromProfitText(sourceText)
+  const lockDate = extractLockDateFromProfitText(sourceText)
   const normalized = (records || [])
     .map(r => normalizeProfitRecord({
       ...r,
       project: sourceProject && (!r.project || r.project === '未命名项目') ? sourceProject : r.project,
-      schedule: sourceSchedule || r.schedule || r.month
+      schedule: sourceSchedule || r.schedule || r.month,
+      lock_date: r.lock_date || r.lockDate || lockDate
     }, r.raw || r.source || r.note || sourceText))
     .filter(r => Number(r.fee) > 0)
     .filter(r => accounts.includes(r.account))
+    .map(r => ({
+      ...r,
+      grp: normalizeProfitGroup(r.grp || r.group) || inferGroupFromAccount(r.account)
+    }))
   parsedRecords.value = normalized
   if (normalized.length) {
     showToast((mode === 'smart' ? '智能解析' : '规则解析') + '出 ' + normalized.length + ' 条记录，确认后写入', 'success')
@@ -1501,7 +2329,7 @@ async function parseProfitTextRule() {
     const d = await parseProfitInput(profitText.value).catch(() => ({ records: [] }))
     const records = localRecords.length ? localRecords : (d.records || [])
     if (!applyParsedProfitRecords(records, 'rule')) {
-      parsedError.value = d.error || '规则解析没有识别到金额/项目，请换智能解析试试'
+      parsedError.value = d.error || '规则解析没有识别到金额/项目，请检查文本里是否包含达人、费用和档期'
       showToast('规则解析失败', 'error')
     }
   } catch (e) {
@@ -1538,16 +2366,17 @@ async function parseProfitTextSmart() {
   parsedRecords.value = []
   try {
     const group = GROUPS.find(g => g.id === activeGroup.value)
+    const globalMode = isDataManageView.value || profitImportMode.value === 'total'
     const response = await callMiniMaxChat([
       {
         role: 'system',
-        content: '你是毛利录入解析器。只返回 JSON，不要解释。只解析“费用/报价/达人金额”里的账号金额行，不要把推广需求、授权要求、备注条款、编号1/2/3/4/5/6/7解析成记录。只返回当前组 accounts 内的账号，其他组账号必须忽略。每条包含 account, project, platform, fee, schedule, note, count。platform 可用 抖音/B站/快手/星广/代做/小红书/视频号。素材代做类 account 用 素材，platform 用 代做。没有月份就用当前筛选月份。'
+        content: '你是毛利录入解析器。只返回 JSON，不要解释。只解析“费用/报价/达人金额”里的账号金额行，不要把推广需求、授权要求、备注条款、编号1/2/3/4/5/6/7解析成记录。若一行同时有报价和实际合作金额，fee 必须取实际合作金额；例如“20000*0.75=15000元”取 15000，order_amount 取 20000。每条包含 account, project, platform, fee, order_amount, schedule, lock_date, note, count。platform 可用 抖音/B站/快手/星广/代做/小红书/视频号。素材代做类 account 用 素材，platform 用 代做。没有月份就用当前筛选月份。'
       },
       {
         role: 'user',
         content: JSON.stringify({
-          group: group?.label || '',
-          accounts: group?.accounts || [],
+          group: globalMode ? '全量账号池' : (group?.label || ''),
+          accounts: globalMode ? allProfitAccounts() : (group?.accounts || []),
           defaultSchedule: defaultProfitSchedule(),
           input: profitText.value
         })
@@ -1571,7 +2400,7 @@ async function parseProfitTextSmart() {
   }
 }
 
-const parseProfitText = parseProfitTextSmart
+const parseProfitText = parseProfitTextRule
 
 function onProfitDrop(e) {
   profitDragOver.value = false
@@ -1670,7 +2499,7 @@ async function writeParsedRecords() {
   profitWriting.value = true
   try {
     let firstSchedule = ''
-    if (profitImportMode.value === 'total') {
+    if (profitImportMode.value === 'total' && !isDataManageView.value) {
       const records = parsedRecords.value.map(r => normalizeProfitRecord(r, r.raw || r.source || r.note || '', { preserveSpecialProject: true, preserveAccount: true, allowBlankProject: true }))
       for (const item of records) {
         if (!firstSchedule) firstSchedule = normalizeProfitSchedule(item.schedule || item.month)
@@ -1697,9 +2526,12 @@ async function writeParsedRecords() {
         const platform = r.platform || '抖音'
         const schedule = normalizeProfitSchedule(r.schedule)
         const margin = Number(r.margin ?? r.profit ?? '') || calcMargin(fee, platform)
+        const rowGroup = isDataManageView.value
+          ? (normalizeProfitGroup(r.grp || r.group) || inferGroupFromAccount(r.account) || grpLabel)
+          : grpLabel
         if (!firstSchedule) firstSchedule = schedule
         await addProfit({
-          grp: grpLabel,
+          grp: rowGroup,
           project: r.project || '',
           platform,
           account: r.account || '',
@@ -1716,13 +2548,18 @@ async function writeParsedRecords() {
           producer_share: Number(r.producer_share) || 70,
           split_enabled: r.split_enabled ? 1 : 0,
           order_amount: Number(r.order_amount) || 0,
+          rebate_amount: Number(r.rebate_amount) || 0,
           final_amount: Number(r.final_amount) || fee,
           projected_margin: Number(r.projected_margin) || margin,
+          lock_date: r.lock_date || '',
           publish_date: r.publish_date || '',
+          execution_status: r.execution_status || normalizeExecutionStatus('', { 是否发布: r.is_published, 发布日期: r.publish_date, 链接: r.link }),
           is_published: r.is_published ? 1 : 0,
+          original_id: r.original_id || '',
           product_line: r.product_line || '',
           link: r.link || '',
-          order_no: r.order_no || ''
+          order_no: r.order_no || '',
+          crm_order_no: r.crm_order_no || ''
         })
       }
       const month = getScheduleMonthNumber(firstSchedule)
@@ -1732,7 +2569,8 @@ async function writeParsedRecords() {
     parsedRecords.value = []
     profitText.value = ''
     profitFileName.value = ''
-    await loadProfitData()
+    if (isDataManageView.value || isDepartmentView.value) await loadDepartmentData()
+    else await loadProfitData()
   } catch(e) {
     showToast('写入失败: ' + e.message, 'error')
   }
@@ -1755,13 +2593,57 @@ async function syncCurrentProfitsToFeishu() {
       throw new Error(result.error || result.msg || '飞书同步失败')
     }
     const written = Number(result.created || 0) + Number(result.updated || 0)
-    showToast(`飞书同步完成：${written} 条，失败 ${Number(result.failed || 0)} 条`, result.failed ? 'warning' : 'success')
+    const skippedHistorical = Number(result.skipped_historical || 0)
+    const hiddenHistorical = Number(result.hidden_historical_sheets || 0)
+    const styleWarnings = Array.isArray(result.style_errors) ? result.style_errors.length : 0
+    const extra = [
+      skippedHistorical ? `跳过历史 ${skippedHistorical} 条` : '',
+      hiddenHistorical ? `隐藏历史表 ${hiddenHistorical} 个` : '',
+      styleWarnings ? `样式警告 ${styleWarnings} 个` : ''
+    ].filter(Boolean).join('，')
+    showToast(
+      `飞书同步完成：${written} 条，失败 ${Number(result.failed || 0)} 条${extra ? '，' + extra : ''}`,
+      result.failed || styleWarnings ? 'warning' : 'success'
+    )
     if (isDepartmentView.value) await loadDepartmentData()
     else await loadProfitData()
   } catch (e) {
     showToast('飞书同步失败: ' + e.message, 'error')
   }
   feishuSyncing.value = false
+}
+
+async function pullCurrentProfitsFromFeishu() {
+  if (feishuPulling.value) return
+  const monthText = selectedMonth.value ? `${selectedYear.value}年${selectedMonth.value}月` : `${selectedYear.value}年全部月份`
+  const ok = await confirmAction({
+    title: '拉取飞书流水',
+    message: `将从飞书锁档执行表拉取「${monthText}」数据，并合并更新到本地流水库。\n会新增飞书新增的行，也会更新已有行的状态、发布日期、链接等字段；不会删除本地已有但飞书没有的记录。`,
+    confirmText: '开始拉取',
+    type: 'info'
+  })
+  if (!ok) return
+  feishuPulling.value = true
+  try {
+    const result = await pullProfitsFromFeishu({
+      year: selectedYear.value,
+      month: selectedMonth.value || 0,
+      mode: 'merge'
+    })
+    if (result.error || (result.code && !result.success)) {
+      throw new Error(result.error || result.msg || '飞书拉取失败')
+    }
+    showToast(
+      `飞书拉取完成：读取 ${Number(result.feishu_total || result.total || 0)} 条，新增 ${Number(result.inserted || 0)} 条，更新 ${Number(result.updated || 0)} 条`,
+      result.errors && result.errors.length ? 'warning' : 'success'
+    )
+    if (isDepartmentView.value || isDataManageView.value) await loadDepartmentData({ silent: true })
+    else await loadProfitData({ silent: true })
+  } catch (e) {
+    showToast('飞书拉取失败: ' + (e.message || '未知错误'), 'error')
+  } finally {
+    feishuPulling.value = false
+  }
 }
 
 const handledAgentActionIds = new Set()
@@ -1840,8 +2722,12 @@ onMounted(() => {
     isDepartmentView.value = true
   }
   syncTargetDraft()
-  if (isDepartmentView.value) loadDepartmentData()
-  else loadProfitData()
+  if (isDepartmentView.value) {
+    loadDepartmentData()
+  } else {
+    loadProfitData()
+    loadDepartmentData({ silent: true })
+  }
   window.addEventListener('usagi:agent-action', handleAgentAction)
   consumePendingAgentAction()
 })
@@ -1870,12 +2756,18 @@ function makeProfitDraft(overrides = {}) {
     费用: fee,
     毛利: Number(overrides.毛利) || calcMargin(fee, platform),
     下单金额: Number(overrides.下单金额) || 0,
+    返点金额: Number(overrides.返点金额) || 0,
     最终合作价: Number(overrides.最终合作价) || fee,
     预估毛利: Number(overrides.预估毛利) || Number(overrides.毛利) || calcMargin(fee, platform),
+    执行状态: '未发布',
     是否发布: false,
+    原ID: '',
+    锁档日期: '',
     发布日期: '',
     链接: '',
     产品线: '',
+    单号: '',
+    CRM单号: '',
     备注: '',
     来源: 'manual',
     原组: groupLabel,
@@ -1888,6 +2780,11 @@ function makeProfitDraft(overrides = {}) {
 }
 
 const editModal = reactive({ show: false, mode: 'edit', data: makeProfitDraft(), index: -1 })
+const quickSavingIds = ref(new Set())
+
+function closeEditModal() {
+  editModal.show = false
+}
 
 function syncManualFinancials() {
   if (!editModal.show) return
@@ -1928,49 +2825,112 @@ function openEditModal(item) {
     代做比例: Number(item.代做比例) || 70,
     内部分成: !!item.内部分成,
     下单金额: Number(item.下单金额) || 0,
-    最终合作价: Number(item.最终合作价) || Number(item.费用) || 0,
+    返点金额: Number(item.返点金额) || 0,
+    最终合作价: Number(item.费用) || 0,
     预估毛利: Number(item.预估毛利) || Number(item.毛利) || 0,
-    是否发布: !!item.是否发布,
+    执行状态: normalizeExecutionStatus(item.执行状态, item),
+    是否发布: normalizeExecutionStatus(item.执行状态, item) !== '未发布',
+    原ID: item.原ID || '',
+    锁档日期: item.锁档日期 || '',
     发布日期: item.发布日期 || '',
     链接: item.链接 || '',
-    产品线: item.产品线 || ''
+    产品线: item.产品线 || '',
+    单号: item.单号 || '',
+    CRM单号: item.CRM单号 || ''
   })
   editModal.index = idx
   editModal.show = true
 }
 
-function buildProfitPayloadFromModal() {
-  const fee = Number(editModal.data.费用) || 0
-  const platform = editModal.data.平台 || '抖音一口价'
-  const businessType = editModal.data.类型 || '一口价'
-  const margin = Number(editModal.data.毛利) || calcMargin(fee, platform)
-  const splitEnabled = !!editModal.data.内部分成
-  const originShare = Math.max(0, Math.min(100, Number(editModal.data.原组比例) || 30))
-  const producerShare = Math.max(0, Math.min(100, Number(editModal.data.代做比例) || (100 - originShare)))
+function buildProfitPayloadFromDraft(draft) {
+  const fee = Number(draft.费用) || 0
+  const platform = draft.平台 || '抖音一口价'
+  const businessType = draft.类型 || '一口价'
+  const margin = Number(draft.毛利) || calcMargin(fee, platform)
+  const splitEnabled = !!draft.内部分成
+  const originShare = Math.max(0, Math.min(100, Number(draft.原组比例) || 30))
+  const producerShare = Math.max(0, Math.min(100, Number(draft.代做比例) || (100 - originShare)))
+  const executionStatus = normalizeExecutionStatus(draft.执行状态, draft)
+  const isPublished = isExecutionPublished(executionStatus)
+  const link = normalizePublishLink(draft.链接)
   return {
-    grp: editModal.data.组别 || currentGroupOption(),
-    project: editModal.data.项目 || '',
+    grp: draft.组别 || currentGroupOption(),
+    project: draft.项目 || '',
     platform,
-    account: editModal.data.账号 || '',
+    account: draft.账号 || '',
     revenue: fee,
     margin,
-    month: normalizeProfitSchedule(editModal.data.档期),
-    remark: editModal.data.备注 || '',
+    month: normalizeProfitSchedule(draft.档期),
+    remark: draft.备注 || '',
     category: businessType,
     business_type: businessType,
-    entry_source: editModal.data.来源 || 'manual',
-    origin_group: splitEnabled ? (editModal.data.原组 || editModal.data.组别 || currentGroupOption()) : '',
-    producer_group: splitEnabled ? (editModal.data.代做组 || '') : '',
+    entry_source: draft.来源 || 'manual',
+    origin_group: splitEnabled ? (draft.原组 || draft.组别 || currentGroupOption()) : '',
+    producer_group: splitEnabled ? (draft.代做组 || '') : '',
     origin_share: originShare,
     producer_share: producerShare,
     split_enabled: splitEnabled ? 1 : 0,
-    order_amount: Number(editModal.data.下单金额) || 0,
-    final_amount: Number(editModal.data.最终合作价) || fee,
-    projected_margin: Number(editModal.data.预估毛利) || margin,
-    publish_date: editModal.data.是否发布 ? (editModal.data.发布日期 || '') : '',
-    is_published: editModal.data.是否发布 ? 1 : 0,
-    link: editModal.data.是否发布 ? (editModal.data.链接 || '') : '',
-    product_line: editModal.data.产品线 || ''
+    order_amount: Number(draft.下单金额) || 0,
+    rebate_amount: Number(draft.返点金额) || 0,
+    final_amount: Number(draft.最终合作价) || fee,
+    projected_margin: Number(draft.预估毛利) || margin,
+    lock_date: draft.锁档日期 || '',
+    publish_date: draft.发布日期 || '',
+    execution_status: executionStatus,
+    is_published: isPublished ? 1 : 0,
+    original_id: draft.原ID || '',
+    link,
+    product_line: draft.产品线 || '',
+    order_no: draft.单号 || '',
+    crm_order_no: draft.CRM单号 || ''
+  }
+}
+
+function buildProfitPayloadFromModal() {
+  return buildProfitPayloadFromDraft(editModal.data)
+}
+
+function buildProfitPayloadFromRow(item) {
+  return buildProfitPayloadFromDraft(makeProfitDraft({
+    ...item,
+    组别: item.组别 || currentGroupOption(),
+    类型: item.类型 || '一口价',
+    来源: item.来源 || 'manual',
+    原组: item.原组 || item.组别 || currentGroupOption(),
+    代做组: item.代做组 || '',
+    原组比例: Number(item.原组比例) || 30,
+    代做比例: Number(item.代做比例) || 70,
+    内部分成: !!item.内部分成,
+    下单金额: Number(item.下单金额) || 0,
+    返点金额: Number(item.返点金额) || 0,
+    最终合作价: Number(item.最终合作价) || Number(item.费用) || 0,
+    预估毛利: Number(item.预估毛利) || Number(item.毛利) || 0,
+    执行状态: normalizeExecutionStatus(item.执行状态, item),
+    是否发布: normalizeExecutionStatus(item.执行状态, item) !== '未发布',
+    原ID: item.原ID || '',
+    锁档日期: item.锁档日期 || '',
+    发布日期: item.发布日期 || '',
+    链接: item.链接 || '',
+    产品线: item.产品线 || '',
+    单号: item.单号 || '',
+    CRM单号: item.CRM单号 || ''
+  }))
+}
+
+async function saveQuickEdit(item) {
+  if (!item?.id || quickSavingIds.value.has(item.id)) return
+  syncPublishStatusFromExecution(item)
+  quickSavingIds.value = new Set([...quickSavingIds.value, item.id])
+  try {
+    await updateProfit(item.id, buildProfitPayloadFromRow(item))
+    seedGroupDataFromDepartment(departmentItems.value)
+  } catch (e) {
+    showToast('保存失败: ' + e.message, 'error')
+    loadDepartmentData({ silent: true })
+  } finally {
+    const next = new Set(quickSavingIds.value)
+    next.delete(item.id)
+    quickSavingIds.value = next
   }
 }
 
@@ -1978,10 +2938,6 @@ async function doEditRecord() {
   const payload = buildProfitPayloadFromModal()
   if (!payload.account && !payload.project) {
     showToast('请至少填写账号或项目', 'error')
-    return
-  }
-  if (payload.is_published && (!payload.publish_date || !payload.link)) {
-    showToast('已发布记录需要填写发布日期和发布链接', 'error')
     return
   }
   try {
@@ -1992,7 +2948,7 @@ async function doEditRecord() {
     }
     editModal.show = false
     showToast(editModal.mode === 'create' ? '新增成功' : '修改成功', 'success')
-    if (isDepartmentView.value) await loadDepartmentData()
+    if (isDepartmentView.value || isDataManageView.value) await loadDepartmentData()
     else await loadProfitData()
   } catch(e) {
     showToast('保存失败: ' + e.message, 'error')
@@ -2010,7 +2966,8 @@ async function deleteItem(id) {
   try {
     await deleteProfit(id)
     showToast('已删除', 'success')
-    await loadProfitData()
+    if (isDepartmentView.value || isDataManageView.value) await loadDepartmentData()
+    else await loadProfitData()
   } catch(e) {
     showToast('删除失败: ' + e.message, 'error')
   }
@@ -2124,6 +3081,12 @@ async function sendAiChat() {
 .history-compare-strip span { font-size: 11px; color: var(--text-muted); }
 .history-compare-strip strong { font-size: 16px; color: #67e8f9; }
 .history-compare-strip em { font-size: 11px; font-style: normal; color: var(--text-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-compare-note {
+  margin-top: -4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
 .dept-import-card {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -2183,6 +3146,95 @@ async function sendAiChat() {
 .dept-panel.wide { grid-column: 1 / -1; }
 .dept-list-panel { min-height: 0; display: flex; flex-direction: column; }
 .dept-panel-title { margin-bottom: 6px; font-size: 12px; font-weight: 700; color: var(--primary-light, #b47fff); }
+.podium-panel { min-height: 376px; padding-bottom: 18px; }
+.dept-podium { display: grid; grid-template-columns: minmax(0, 1.18fr) minmax(150px, 0.82fr); gap: 8px; align-items: stretch; }
+.dept-podium-stage {
+  position: relative;
+  min-height: 310px;
+  overflow: hidden;
+  border-radius: 8px;
+  background: var(--bg-card, #12122a);
+  border: 1px solid rgba(148,163,184,0.16);
+}
+.dept-podium-stage img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  object-position: center bottom;
+  pointer-events: none;
+}
+.podium-nameplate {
+  position: absolute;
+  z-index: 1;
+  width: 15.5%;
+  min-width: 62px;
+  min-height: 28px;
+  display: grid;
+  place-items: center;
+  padding: 3px 6px;
+  border: 1px solid rgba(255,255,255,0.72);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.76);
+  box-shadow: 0 6px 16px rgba(35,23,12,0.12);
+  text-align: center;
+  pointer-events: none;
+}
+.podium-nameplate.rank-1 { left: 42.8%; top: 34%; }
+.podium-nameplate.rank-2 { left: 26.2%; top: 44%; }
+.podium-nameplate.rank-3 { right: 24.6%; top: 44%; }
+.podium-nameplate strong,
+.podium-nameplate span,
+.podium-mini-row span {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.podium-nameplate strong { color: #3a2418; font-size: 11px; line-height: 1.15; }
+.podium-nameplate span { color: #c77913; font-size: 9px; font-weight: 800; }
+.podium-static-name {
+  position: absolute;
+  z-index: 1;
+  width: 15%;
+  min-width: 58px;
+  min-height: 24px;
+  display: grid;
+  place-items: center;
+  padding: 3px 6px;
+  border: 1px solid rgba(255,255,255,0.72);
+  border-radius: 11px;
+  background: rgba(255,255,255,0.78);
+  box-shadow: 0 6px 14px rgba(35,23,12,0.1);
+  color: #3a2418;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.15;
+  text-align: center;
+  pointer-events: none;
+}
+.podium-static-name.bottom-left { left: 20.5%; top: 63%; }
+.podium-static-name.bottom-center { left: 42.7%; top: 60.5%; }
+.podium-static-name.bottom-right { right: 19.5%; top: 62%; }
+.podium-mini-rank { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
+.podium-mini-row {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  gap: 5px 7px;
+  align-items: center;
+  padding: 6px 7px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 7px;
+  background: var(--bg-card, #12122a);
+}
+.podium-mini-row b { color: #facc15; font-size: 11px; }
+.podium-mini-row span { color: var(--text, #e0d8ff); font-size: 12px; font-weight: 700; }
+.podium-mini-row em { color: #22c55e; font-size: 11px; font-style: normal; font-weight: 800; white-space: nowrap; }
+.podium-mini-row small { color: #facc15; font-size: 10px; font-weight: 800; white-space: nowrap; }
+.podium-mini-row i { grid-column: 1 / -1; height: 5px; overflow: hidden; border-radius: 999px; background: var(--surface2, #1e1e3a); }
+.podium-mini-row u { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #facc15, #22c55e); }
 .radar-wrap { display: grid; grid-template-columns: minmax(0, 1fr) 118px; gap: 8px; align-items: center; }
 .radar-svg { width: 100%; max-width: 230px; height: auto; display: block; margin: 0 auto; }
 .radar-ring { fill: none; stroke-width: 1; stroke: rgba(148,163,184,0.15); }
@@ -2363,6 +3415,8 @@ async function sendAiChat() {
 .group-tab { padding: 6px 14px; border-radius: 7px; border: 1px solid var(--border, #2a2a4a); background: var(--surface, #1a1a2e); color: var(--text-dim, #9d98b0); font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit; transition: all 0.15s; }
 .group-tab:hover { border-color: var(--primary, #7b2fff); color: var(--primary-light, #b47fff); }
 .group-tab.active { background: var(--primary, #7b2fff); border-color: var(--primary, #7b2fff); color: #fff; }
+.manage-tab { margin-left: auto; border-color: rgba(34,197,94,0.32); color: #22c55e; }
+.manage-tab.active { background: linear-gradient(135deg, #16a34a, #06b6d4); border-color: transparent; color: #07140f; }
 .year-month-bar {
   display: flex;
   gap: 6px;
@@ -2416,6 +3470,400 @@ async function sendAiChat() {
   font-size: 12px;
   text-align: right;
 }
+.data-manage-board {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+.data-manage-toolbar,
+.data-manage-quickbar,
+.data-manage-import,
+.data-manage-export,
+.data-manage-editor,
+.data-manage-table {
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 10px;
+  background: var(--surface, #1a1a2e);
+}
+.data-manage-toolbar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto minmax(360px, auto);
+  align-items: center;
+  gap: 12px;
+  padding: 8px 10px;
+}
+.data-manage-title {
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.data-manage-title span {
+  color: #22c55e;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+.data-manage-title strong {
+  color: var(--text, #e0d8ff);
+  font-size: 16px;
+}
+.data-manage-title em,
+.data-manage-import-head span,
+.data-manage-export > div:first-child span {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-style: normal;
+}
+.data-manage-compact-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.data-manage-compact-stats span {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 8px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 999px;
+  background: var(--bg-card, #12122a);
+  color: var(--text-muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.data-manage-compact-stats b {
+  color: #22c55e;
+  font-size: 12px;
+}
+.data-manage-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.data-manage-actions .btn.active {
+  background: var(--primary, #7b2fff);
+  border-color: var(--primary, #7b2fff);
+  color: #fff;
+}
+.data-manage-quickbar {
+  display: grid;
+  grid-template-columns: 130px minmax(220px, 1fr) 130px 120px 132px auto;
+  gap: 8px;
+  align-items: end;
+  padding: 8px 10px;
+}
+.data-manage-quickbar label {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+.data-manage-quickbar label span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.data-manage-quickbar .inp {
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.data-manage-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.data-manage-summary article {
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 10px;
+  background: var(--bg-card, #12122a);
+  display: grid;
+  gap: 4px;
+}
+.data-manage-summary span {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.data-manage-summary strong {
+  overflow: hidden;
+  color: #22c55e;
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.data-manage-filters {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(132px, 1fr));
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 12px;
+  background: var(--surface, #1a1a2e);
+}
+.data-manage-panel {
+  box-shadow: inset 0 1px rgba(255,255,255,0.04);
+}
+.data-manage-editor {
+  padding: 10px;
+}
+.data-manage-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.data-manage-editor-head > div {
+  display: grid;
+  gap: 3px;
+}
+.data-manage-editor-head span {
+  color: #22c55e;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+.data-manage-editor-head strong {
+  color: var(--text, #e0d8ff);
+  font-size: 15px;
+}
+.modal-form.inline-profit-form {
+  display: grid;
+  grid-template-columns: 118px 140px minmax(180px, 1fr) repeat(3, minmax(120px, .75fr));
+  gap: 9px;
+}
+.inline-profit-form .mf-row,
+.inline-profit-form .mf-split-grid {
+  min-width: 0;
+}
+.inline-profit-form .mf-wide {
+  grid-column: span 2;
+}
+.inline-profit-form .inp {
+  min-height: 32px;
+  padding: 6px 8px;
+  font-size: 12px;
+}
+.inline-check {
+  min-height: 32px;
+  align-self: end;
+  padding: 0 8px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 8px;
+  background: var(--bg-card, #12122a);
+}
+.inline-actions {
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+.data-manage-filters label,
+.data-manage-import-head,
+.data-manage-export > div:first-child {
+  min-width: 0;
+}
+.data-manage-filters label {
+  display: grid;
+  gap: 5px;
+}
+.data-manage-filters label span,
+.data-manage-import-head strong,
+.data-manage-export > div:first-child strong {
+  color: var(--primary-light, #b47fff);
+  font-size: 12px;
+  font-weight: 800;
+}
+.range-inputs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.data-manage-filter-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-self: end;
+}
+.data-manage-filter-summary span {
+  min-height: 32px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: var(--bg-card, #12122a);
+  font-size: 11px;
+}
+.data-manage-import {
+  padding: 10px;
+}
+.data-manage-import-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.data-manage-import-head > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+.data-manage-textarea {
+  min-height: 108px;
+  resize: vertical;
+  line-height: 1.6;
+}
+.manage-preview {
+  margin-top: 10px;
+}
+.data-manage-export {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+}
+.export-field-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+}
+.export-field-grid label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 8px;
+  background: var(--bg-card, #12122a);
+  color: var(--text, #e0d8ff);
+  font-size: 12px;
+}
+.export-field-grid input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--primary, #7b2fff);
+}
+.export-field-grid span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.export-field-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.data-manage-table {
+  overflow-x: auto;
+  min-height: 58vh;
+  max-height: calc(100vh - 250px);
+  overflow-y: auto;
+}
+.data-manage-head,
+.data-manage-row {
+  display: grid;
+  grid-template-columns: 88px 78px 92px minmax(170px, 1.1fr) 92px 98px 84px 92px 92px 92px minmax(150px, .85fr) 132px;
+  gap: 8px;
+  align-items: center;
+  min-width: 1320px;
+  padding: 10px 12px;
+}
+.data-manage-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  border-bottom: 1px solid var(--border, #2a2a4a);
+  background: var(--surface2, #1e1e3a);
+  color: var(--primary-light, #b47fff);
+  font-size: 12px;
+  font-weight: 800;
+}
+.data-manage-row {
+  border-bottom: 1px solid rgba(42,42,74,0.42);
+  color: var(--text, #e0d8ff);
+  font-size: 12px;
+}
+.data-manage-row:last-child { border-bottom: 0; }
+.data-manage-row:hover { background: rgba(255,255,255,0.03); }
+.data-manage-row.saving {
+  background: rgba(34,197,94,0.06);
+}
+.data-manage-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editable-row > span {
+  overflow: visible;
+}
+.grid-edit {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 5px 7px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text, #e0d8ff);
+  font: inherit;
+  outline: none;
+}
+.grid-edit:hover,
+.grid-edit:focus {
+  border-color: rgba(124,47,255,0.45);
+  background: var(--bg-card, #12122a);
+}
+.grid-edit.amount-input {
+  color: var(--success-text);
+  font-weight: 800;
+  text-align: right;
+}
+.grid-edit.amount-input.accent {
+  color: #fbbf24;
+}
+.grid-edit.status-edit {
+  color: var(--text, #e0d8ff);
+}
+.grid-edit.link-edit {
+  font-size: 11px;
+}
+.data-manage-row .amount {
+  color: var(--success-text);
+  font-weight: 800;
+  text-align: right;
+}
+.data-manage-row .amount.accent {
+  color: #fbbf24;
+}
+.publish-ok,
+.publish-pending {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 52px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+}
+.publish-ok {
+  background: rgba(34,197,94,0.14);
+  color: #22c55e;
+}
+.publish-pending {
+  background: rgba(245,158,11,0.13);
+  color: #f59e0b;
+}
 @media (max-width: 760px) {
   .ym-select {
     flex: 0 0 auto;
@@ -2438,6 +3886,7 @@ async function sendAiChat() {
   .profit-input-area,
   .department-hero,
   .department-grid,
+  .dept-podium,
   .radar-wrap {
     grid-template-columns: 1fr;
   }
@@ -2447,6 +3896,25 @@ async function sendAiChat() {
   .dept-panel.wide { grid-column: auto; }
   .platform-matrix { grid-template-columns: 1fr 1fr; }
   .matrix-money { font-size: 16px; }
+  .manage-tab { margin-left: 0; }
+  .data-manage-toolbar,
+  .data-manage-import-head {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .data-manage-toolbar,
+  .data-manage-quickbar,
+  .inline-profit-form {
+    grid-template-columns: 1fr;
+  }
+  .inline-profit-form .mf-wide {
+    grid-column: auto;
+  }
+  .data-manage-summary,
+  .data-manage-filters,
+  .export-field-grid {
+    grid-template-columns: 1fr;
+  }
 }
 .diff-up { color: var(--success-text); font-weight: 700; }
 .diff-down { color: #f87171; font-weight: 700; }
@@ -2553,8 +4021,8 @@ select.inp { cursor: pointer; }
 .profit-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary, #7b2fff), var(--success-text)); border-radius: 4px; transition: width 0.4s ease; }
 .profit-bar-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
 .profit-table { display: flex; flex-direction: column; background: var(--panel-bg, #12122a); border-radius: 6px; min-width: 0; }
-.pt-head { display: grid; grid-template-columns: 2fr 1fr 80px 60px 100px 100px 112px; gap: 10px; padding: 10px 14px; font-size: 13px; font-weight: 600; color: var(--primary-light, #b47fff); border-bottom: 1px solid var(--border, #2a2a4a); background: var(--surface2, #1e1e3a); }
-.pt-row { display: grid; grid-template-columns: 2fr 1fr 80px 60px 100px 100px 112px; gap: 10px; padding: 10px 14px; font-size: 13px; color: var(--text, #e0d8ff); border-bottom: 1px solid rgba(42,42,74,0.4); align-items: center; }
+.pt-head { display: grid; grid-template-columns: minmax(170px, 1.15fr) minmax(92px, .7fr) 80px 60px 96px 96px 112px; gap: 8px; padding: 10px 12px; font-size: 13px; font-weight: 600; color: var(--primary-light, #b47fff); border-bottom: 1px solid var(--border, #2a2a4a); background: var(--surface2, #1e1e3a); }
+.pt-row { display: grid; grid-template-columns: minmax(170px, 1.15fr) minmax(92px, .7fr) 80px 60px 96px 96px 112px; gap: 8px; padding: 10px 12px; font-size: 13px; color: var(--text, #e0d8ff); border-bottom: 1px solid rgba(42,42,74,0.4); align-items: center; }
 .pt-row:last-child { border-bottom: none; }
 .pt-row:hover { background: rgba(255,255,255,0.03); }
 .pt-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -2846,7 +4314,7 @@ select.inp { cursor: pointer; }
 }
 .account-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 7px 10px;
   padding: 8px 12px;
@@ -2863,6 +4331,43 @@ select.inp { cursor: pointer; }
   font-size: 14px;
   font-weight: 700;
   color: var(--success-text);
+  text-align: right;
+}
+.account-count {
+  padding: 2px 7px;
+  border: 1px solid rgba(34,197,94,0.24);
+  border-radius: 999px;
+  color: #22c55e;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+.account-compare {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.account-compare em {
+  font-style: normal;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 7px;
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.04);
+  white-space: nowrap;
+}
+.account-compare em.up {
+  color: #22c55e;
+  background: rgba(34,197,94,0.12);
+}
+.account-compare em.down {
+  color: #f87171;
+  background: rgba(248,113,113,0.12);
+}
+.account-compare em.flat {
+  color: var(--text-muted);
 }
 .account-bar {
   grid-column: 1 / -1;

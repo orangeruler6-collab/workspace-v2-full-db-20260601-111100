@@ -733,6 +733,34 @@ module.exports = function createDailyHotRoutes(deps) {
     return [];
   }
 
+  function latestDateWithItems(store, excludeDate) {
+    return visibleItems(store.items)
+      .filter(function(item) { return item.date && item.date !== excludeDate; })
+      .map(function(item) { return item.date; })
+      .sort()
+      .pop() || '';
+  }
+
+  function rawItemsFromStoredItems(items) {
+    const rawItems = [];
+    (items || []).forEach(function(item) {
+      if (Array.isArray(item.sources) && item.sources.length) {
+        item.sources.forEach(function(source) {
+          rawItems.push(Object.assign({}, source, {
+            category: item.category,
+            source: source.source || item.source,
+            sourceLabel: source.sourceLabel || item.sourceLabel,
+            sourceWeight: source.sourceWeight || item.sourceWeight,
+            publishedAt: source.publishedAt || item.publishedAt
+          }));
+        });
+        return;
+      }
+      rawItems.push(Object.assign({}, item));
+    });
+    return rawItems;
+  }
+
   function sourceCapFor(item) {
     const sourceKey = item.sourceLabel || item.source || '未知来源';
     if (sourceKey === 'B站排行榜' || sourceKey === 'B站热门') return BILI_SOURCE_CAP;
@@ -1181,6 +1209,18 @@ module.exports = function createDailyHotRoutes(deps) {
       }
     }
 
+    if (!articleItems.length && !openCliItems.length) {
+      const store = readStore();
+      const fallbackDate = latestDateWithItems(store, date);
+      if (fallbackDate) {
+        const fallbackItems = visibleItems(store.items)
+          .filter(function(item) { return item.date === fallbackDate && !isOpenCliItem(item); })
+          .sort(function(a, b) { return (a.dailyRank || 9999) - (b.dailyRank || 9999); });
+        articleItems.push.apply(articleItems, rawItemsFromStoredItems(fallbackItems));
+        errors.push('本次未抓到新热点，已沿用 ' + fallbackDate + ' 的最近有效热点');
+      }
+    }
+
     const result = mergeSnapshot(date, articleItems.concat(openCliItems));
     return {
       date: date,
@@ -1270,16 +1310,28 @@ module.exports = function createDailyHotRoutes(deps) {
   function listDailyHot(body) {
     const date = body.date || dateKey();
     const store = readStore();
-    const items = visibleItems(store.items)
+    let usedDate = date;
+    let items = visibleItems(store.items)
       .filter(function(item) { return item.date === date; })
       .sort(function(a, b) { return (a.dailyRank || 9999) - (b.dailyRank || 9999); });
-    const refreshedAt = Number(store.refreshes && store.refreshes[date]) || latestCapturedAt(items);
+    if (!items.length) {
+      const fallbackDate = latestDateWithItems(store, date);
+      if (fallbackDate) {
+        usedDate = fallbackDate;
+        items = visibleItems(store.items)
+          .filter(function(item) { return item.date === fallbackDate; })
+          .sort(function(a, b) { return (a.dailyRank || 9999) - (b.dailyRank || 9999); });
+      }
+    }
+    const refreshedAt = Number(store.refreshes && store.refreshes[usedDate]) || latestCapturedAt(items);
     return {
-      date: date,
+      date: usedDate,
+      requestedDate: date,
+      fallbackDate: usedDate !== date ? usedDate : '',
       items: items,
       stats: Object.assign(statsFor(items), { refreshedAt: refreshedAt }),
       refreshedAt: refreshedAt,
-      analysis: store.analyses[date] || null
+      analysis: store.analyses[usedDate] || null
     };
   }
 

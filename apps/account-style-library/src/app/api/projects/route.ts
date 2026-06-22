@@ -21,7 +21,8 @@ export async function GET(request: Request) {
     });
     return NextResponse.json(
       await getProjectDetail(input.projectId, {
-        includeStyle: parseBooleanFlag(searchParams.get("includeStyle"))
+        includeStyle: parseBooleanFlag(searchParams.get("includeStyle")),
+        styleOnly: parseBooleanFlag(searchParams.get("styleOnly"))
       })
     );
   } catch (error) {

@@ -8,6 +8,7 @@ const styleRoot = path.join(root, 'apps', 'account-style-library');
 const isWindows = process.platform === 'win32';
 const viteBin = path.join(root, 'node_modules', '.bin', isWindows ? 'vite.cmd' : 'vite');
 const styleDevBin = path.join(root, 'scripts', 'style-dev.cjs');
+const contentBoardProxyBin = path.join(root, 'scripts', 'content-board-proxy.cjs');
 const workspacePython = path.join(root, '.venv', isWindows ? 'Scripts\\python.exe' : 'bin/python');
 const douyinPython = path.join(root, 'tools', 'douyin-downloader', '.venv', isWindows ? 'Scripts\\python.exe' : 'bin/python');
 const bilibiliPython = path.join(root, 'tools', 'bilibili-cli', '.venv', isWindows ? 'Scripts\\python.exe' : 'bin/python');
@@ -82,6 +83,29 @@ function run(name, command, args, cwd) {
   });
 }
 
+function runOptional(name, command, args, cwd) {
+  const useShell = isWindows && /\.cmd$/i.test(command);
+  const child = spawn(command, args, {
+    cwd: cwd || root,
+    env: cleanEnv(),
+    stdio: 'inherit',
+    shell: useShell
+  });
+
+  children.push({ name, child });
+
+  child.on('error', function(error) {
+    if (shuttingDown) return;
+    console.warn('[dev] optional ' + name + ' failed to start:', error.message);
+  });
+
+  child.on('exit', function(code, signal) {
+    if (shuttingDown) return;
+    const reason = signal ? 'signal ' + signal : 'code ' + code;
+    console.warn('[dev] optional ' + name + ' exited with ' + reason);
+  });
+}
+
 function shutdown(code) {
   shuttingDown = true;
   children.forEach(function(entry) {
@@ -100,4 +124,7 @@ process.on('SIGTERM', function() { shutdown(0); });
 
 run('api', process.execPath, ['server/index.cjs']);
 run('vite', viteBin, []);
+if (process.env.CONTENT_BOARD_PROXY !== '0') {
+  runOptional('content-board-proxy', process.execPath, [contentBoardProxyBin]);
+}
 run('style-workbench', process.execPath, [styleDevBin], styleRoot);

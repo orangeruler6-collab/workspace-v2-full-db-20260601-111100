@@ -163,6 +163,27 @@
   justify-content: space-between;
 }
 
+.writer-source-import-row {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.writer-source-import-row input[type="file"] {
+  display: none;
+}
+
+.writer-source-import-row > span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .writer-source-footer {
   justify-content: space-between;
   color: var(--muted);

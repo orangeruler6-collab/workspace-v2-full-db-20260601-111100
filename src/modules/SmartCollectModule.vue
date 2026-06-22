@@ -13,6 +13,24 @@
         <span class="module-page-pill">{{ projectId ? '项目 ' + projectId : '半自动粗剪 V1' }}</span>
         <button class="btn btn-ghost btn-sm" @click="openMaterialFolder">打开素材库</button>
       </div>
+      <div class="edit-hero-ui" aria-hidden="true">
+        <div class="hero-ui-top">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+        <div class="hero-ui-wave">
+          <i v-for="n in 24" :key="n" :style="{ height: 10 + ((n * 7) % 24) + 'px' }"></i>
+        </div>
+        <div class="hero-ui-scenes">
+          <span v-for="n in 4" :key="n"></span>
+        </div>
+        <div class="hero-ui-timeline">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
     </header>
 
     <section class="edit-layout">
@@ -1093,6 +1111,31 @@ function openMaterialFolder() {
   gap: 14px;
 }
 
+.edit-header {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(320px, 1fr) auto minmax(260px, 420px);
+  align-items: center;
+  gap: 18px;
+  overflow: hidden;
+  padding: 18px;
+}
+
+.edit-header::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 72% 20%, rgba(56, 189, 248, 0.12), transparent 30%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.02), rgba(124, 58, 237, 0.07));
+}
+
+.edit-header > * {
+  position: relative;
+  z-index: 1;
+}
+
 .edit-header .module-page-copy p {
   margin: 4px 0 0;
   color: var(--text-muted);
@@ -1103,6 +1146,78 @@ function openMaterialFolder() {
   font-size: 18px;
   font-weight: 900;
 }
+
+.edit-hero-ui {
+  min-width: 0;
+  height: 132px;
+  border: 1px solid rgba(56, 189, 248, 0.22);
+  border-radius: 16px;
+  padding: 12px;
+  display: grid;
+  grid-template-rows: 12px 1fr 30px 14px;
+  gap: 9px;
+  overflow: hidden;
+  background:
+    radial-gradient(circle at 78% 18%, rgba(56, 189, 248, 0.18), transparent 34%),
+    linear-gradient(135deg, rgba(15, 23, 42, 0.92), rgba(2, 6, 23, 0.96));
+  box-shadow: 0 18px 44px rgba(15, 23, 42, 0.32);
+}
+
+.hero-ui-top,
+.hero-ui-scenes,
+.hero-ui-timeline {
+  display: flex;
+  gap: 8px;
+  min-width: 0;
+}
+
+.hero-ui-top span {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.24);
+}
+
+.hero-ui-top span:nth-child(1) { width: 34%; }
+.hero-ui-top span:nth-child(2) { width: 18%; }
+.hero-ui-top span:nth-child(3) { width: 26%; margin-left: auto; background: rgba(34, 211, 238, 0.32); }
+
+.hero-ui-wave {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 0 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(99, 102, 241, 0.32);
+  background: rgba(30, 41, 59, 0.55);
+}
+
+.hero-ui-wave i {
+  width: 3px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #67e8f9, #8b5cf6);
+}
+
+.hero-ui-scenes span {
+  flex: 1;
+  border-radius: 9px;
+  border: 1px solid rgba(56, 189, 248, 0.34);
+  background:
+    linear-gradient(135deg, rgba(34, 211, 238, 0.2), transparent),
+    rgba(15, 23, 42, 0.82);
+}
+
+.hero-ui-scenes span:nth-child(2) { border-color: rgba(139, 92, 246, 0.48); }
+.hero-ui-scenes span:nth-child(4) { border-color: rgba(245, 158, 11, 0.5); }
+
+.hero-ui-timeline span {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.36);
+}
+
+.hero-ui-timeline span:nth-child(1) { flex: 1.4; }
+.hero-ui-timeline span:nth-child(2) { flex: 0.9; background: rgba(139, 92, 246, 0.42); }
+.hero-ui-timeline span:nth-child(3) { flex: 1.1; background: rgba(245, 158, 11, 0.45); }
 
 .edit-layout {
   min-height: 0;
@@ -2136,6 +2251,14 @@ function openMaterialFolder() {
 }
 
 @media (max-width: 980px) {
+  .edit-header {
+    grid-template-columns: 1fr;
+  }
+
+  .edit-hero-ui {
+    height: 150px;
+  }
+
   .edit-layout {
     grid-template-columns: 1fr;
   }

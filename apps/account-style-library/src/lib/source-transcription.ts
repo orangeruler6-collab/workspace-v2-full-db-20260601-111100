@@ -5,7 +5,7 @@ import path from "path";
 import { promisify } from "util";
 import { isFeishuDocumentUrl, readFeishuDocument } from "./feishu";
 import { extractRewriteSourceMaterial, RewriteSourceExtraction, SourceMaterial } from "./source-extraction";
-import { transcribeLinkSource, LinkTranscriptionResult } from "./transcription";
+import type { LinkTranscriptionResult } from "./transcription";
 
 const execFileAsync = promisify(execFile);
 
@@ -68,10 +68,7 @@ async function transcribeLink(url: string, titleHint?: string): Promise<LinkTran
   const platform = detectToolsPlatform(url);
   if (platform) return transcribeWithToolsBackend(platform, url, titleHint);
 
-  return transcribeLinkSource({
-    url,
-    titleHint
-  });
+  throw new Error("暂不支持的链接类型，已阻止进入视频转写");
 }
 
 async function transcribeWithToolsBackend(

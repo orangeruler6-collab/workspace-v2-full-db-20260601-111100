@@ -17,12 +17,15 @@ export function arrayBufferToBase64(buffer) {
 }
 
 export function toProfitRow(item) {
+  const executionStatus = item.execution_status || (Number(item.is_published) ? '已发布' : '未发布')
   return {
     id: item.id,
+    本地ID: item.id,
     项目: item.project || '',
     平台: item.platform || '',
     类型: item.business_type || item.category || '',
     账号: item.account || '',
+    原ID: item.original_id || '',
     档期: item.month || '',
     费用: Number(item.revenue) || 0,
     毛利: Number(item.margin) || 0,
@@ -35,14 +38,17 @@ export function toProfitRow(item) {
     代做比例: Number(item.producer_share) || 70,
     内部分成: !!Number(item.split_enabled || 0),
     下单金额: Number(item.order_amount) || 0,
+    返点金额: Number(item.rebate_amount) || 0,
     最终合作价: Number(item.final_amount) || Number(item.revenue) || 0,
     预估毛利: Number(item.projected_margin) || Number(item.margin) || 0,
     锁档日期: item.lock_date || '',
     发布日期: item.publish_date || '',
-    是否发布: !!Number(item.is_published || 0),
+    执行状态: executionStatus,
+    是否发布: executionStatus !== '未发布' || !!Number(item.is_published || 0),
     产品线: item.product_line || '',
     链接: item.link || '',
     单号: item.order_no || '',
+    CRM单号: item.crm_order_no || '',
     创建时间: Number(item.created_at) || 0
   }
 }

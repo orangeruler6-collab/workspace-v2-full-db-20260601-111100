@@ -4,11 +4,11 @@ const sqlite3 = require('sqlite3');
 const PROFIT_DB_PATH = path.join(__dirname, '..', '..', 'data', 'profit.db');
 
 const PROFIT_ACCOUNTS = [
-  '花无缺', '葵仔不想肝', '最翁说游', '薛定谔的机', '跑腿的包子', '李野王SG', '游电工厂', '硬件侠',
+  '花无缺', '葵仔不想肝', '最翁Damnnn', '薛定谔的机', '跑腿的包子', '李野王SG', '游电工厂', '硬件侠',
   '痞仔伯爵', '暴走星号键', '雷鸭Fist', '报告砖家', '沙雕101', '灵梦小师妹', '网瘾少女一条',
-  '苏大强', '饭十七', '皮皮说游戏', '中二探长', '团子好贵',
-  '天机妹', '麦晓花', '花蛮楼', '有事找学姐', '夏天丶cat',
-  '游小妹', '游热娃子', '超玩教授', 'Lee小强', '尼大木', '麦冬冬',
+  '策划克星阿强', '饭十七', '皮皮说游戏', '中二探长', '团子好贵',
+  '天机妹', '麦小雯', '花蛮楼', '有事找学姐', '夏天丶cat',
+  '游小妹', '游热娃子', '超玩教授', 'Lee小强', '木游话说', '麦冬冬',
   '不玩就分手', '游点慌', '游戏永动机', '畅玩百晓生', '夏洛', '游侠蹦蹦', '王路飞cp', '上官北丶', '情风师兄',
   '素材'
 ];
@@ -212,12 +212,13 @@ function makeWorkbookColumnIndex(headers) {
     group: findHeaderIndex(headers, ['部门', '组别', '小组']),
     currentGroup: findHeaderIndex(headers, ['现账号归属']),
     account: findHeaderIndex(headers, ['账号名称', '账号昵称', '账号', '达人', '博主']),
+    originalId: findExactHeaderIndex(headers, ['原ID', '原id']),
     project: findProjectHeaderIndex(headers),
     category: findCategoryHeaderIndex(headers),
     platform: findPlatformHeaderIndex(headers),
     fee: findPreferredAmountHeaderIndex(headers),
     margin: findHeaderIndex(headers, ['部门毛利', '集团毛利值', '毛利']),
-    schedule: findHeaderIndex(headers, ['实际发布日期', '锁定档期', '月份', '档期', '月']),
+    schedule: findHeaderIndex(headers, ['锁定档期', '档期', '月份', '月']),
     note: findHeaderIndex(headers, ['说明', '备注', '链接']),
     groupRevenue: findExactHeaderIndex(headers, ['集团流水']),
     taxRevenue: findExactHeaderIndex(headers, ['税后集团流水']),
@@ -230,9 +231,11 @@ function makeWorkbookColumnIndex(headers) {
     projectedMargin: findHeaderIndex(headers, ['毛利预估']),
     lockDate: findHeaderIndex(headers, ['锁档日期', '锁定档期']),
     publishDate: findHeaderIndex(headers, ['实际发布日期']),
+    status: findHeaderIndex(headers, ['执行状态', '项目状态', '发布状态', '状态', '是否发布']),
     productLine: findHeaderIndex(headers, ['游戏/非游']),
     link: findHeaderIndex(headers, ['链接', '发布链接']),
-    orderNo: findHeaderIndex(headers, ['单号'])
+    orderNo: findExactHeaderIndex(headers, ['单号']),
+    crmOrderNo: findExactHeaderIndex(headers, ['CRM单号', 'crm单号'])
   };
 }
 
@@ -300,6 +303,32 @@ function normalizePublishFlag(value, publishDate) {
   return publishDate ? 1 : 0;
 }
 
+function normalizePublishLink(value) {
+  var text = String(value || '').trim();
+  if (!text || /^(未发|未发布|待发|延期|无|暂无|未上线)$/i.test(text)) return '';
+  return text;
+}
+
+function normalizeExecutionStatus(value, publishDate, link) {
+  var text = String(value == null ? '' : value).trim();
+  if (/已完成|完成|结案|执行完成/.test(text)) return '已发布';
+  if (/^(1|true|yes|y|已|是|发布|已发布|已发|上线|已上线)$/i.test(text)) return '已发布';
+  if (/未发布|未发|待发|未上线|延期|取消|^(0|false|no|n|否|未)$/i.test(text)) return '未发布';
+  var linkText = String(link || '').trim();
+  if (/未发布|未发|待发|未上线|延期|取消/.test(linkText)) return '未发布';
+  if (publishDate || normalizePublishLink(linkText)) return '已发布';
+  return '未发布';
+}
+
+function firstNonBlank() {
+  for (var i = 0; i < arguments.length; i += 1) {
+    var value = arguments[i];
+    if (value == null) continue;
+    if (String(value).trim() !== '') return value;
+  }
+  return '';
+}
+
 function parseWorkbookRow(row, idx, fallbackMonth, fallbackProject, fallbackPlatform) {
   if (!row || row.every(function(value) { return String(value || '').trim() === ''; })) return null;
   var groupRevenue = cellAmount(row, idx.groupRevenue);
@@ -320,16 +349,19 @@ function parseWorkbookRow(row, idx, fallbackMonth, fallbackProject, fallbackPlat
   var project = idx.project >= 0 ? String(row[idx.project] || '').trim() : '';
   if (!project) project = category || fallbackProject || '';
   var publishDate = cellText(row, idx.publishDate);
+  var rawLink = cellText(row, idx.link);
+  var executionStatus = normalizeExecutionStatus(cellText(row, idx.status), publishDate, rawLink);
   return {
     grp: idx.currentGroup >= 0 ? normalizeWorkbookGroup(row[idx.currentGroup]) : (idx.group >= 0 ? normalizeWorkbookGroup(row[idx.group]) : ''),
     account: idx.account >= 0 ? String(row[idx.account] || '').trim() : '',
+    original_id: cellText(row, idx.originalId),
     project: project,
     category: category,
     business_type: category,
     platform: platform,
     fee: fee,
     margin: margin || calcMargin(fee, platform),
-    schedule: fallbackMonth || (idx.schedule >= 0 ? String(row[idx.schedule] || '').trim() : ''),
+    schedule: (idx.schedule >= 0 ? String(row[idx.schedule] || '').trim() : '') || fallbackMonth,
     note: idx.note >= 0 ? String(row[idx.note] || '').trim() : '',
     group_revenue: groupRevenue,
     tax_revenue: taxRevenue,
@@ -342,10 +374,12 @@ function parseWorkbookRow(row, idx, fallbackMonth, fallbackProject, fallbackPlat
     projected_margin: projectedMargin,
     lock_date: cellText(row, idx.lockDate),
     publish_date: publishDate,
-    is_published: normalizePublishFlag(null, publishDate),
+    execution_status: executionStatus,
+    is_published: executionStatus === '未发布' ? 0 : 1,
     product_line: cellText(row, idx.productLine),
-    link: cellText(row, idx.link),
-    order_no: cellText(row, idx.orderNo)
+    link: normalizePublishLink(rawLink),
+    order_no: cellText(row, idx.orderNo),
+    crm_order_no: cellText(row, idx.crmOrderNo)
   };
 }
 
@@ -473,16 +507,20 @@ function initProfitDb(db, cb) {
     db.run('ALTER TABLE profits ADD COLUMN projected_margin INTEGER DEFAULT 0', function() {});
     db.run('ALTER TABLE profits ADD COLUMN lock_date TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN publish_date TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN execution_status TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN is_published INTEGER DEFAULT 0', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN original_id TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN product_line TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN link TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN order_no TEXT', function() {});
+    db.run('ALTER TABLE profits ADD COLUMN crm_order_no TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN feishu_record_id TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN feishu_sync_status TEXT', function() {});
     db.run('ALTER TABLE profits ADD COLUMN feishu_synced_at INTEGER DEFAULT 0', function() {});
     db.run('ALTER TABLE profits ADD COLUMN feishu_sync_error TEXT', function() {});
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_grp ON profits(grp)');
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_month ON profits(month)');
+    db.run('CREATE INDEX IF NOT EXISTS idx_profits_grp_month ON profits(grp, month)');
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_created ON profits(created_at)', cb);
   });
 }
@@ -529,6 +567,9 @@ function isPreservedSyncRecord(record) {
 
 function normalizeProfitMeta(record) {
   var publishDate = String(record.publish_date || record.publishDate || '').trim();
+  var rawLink = String(record.link || record.url || '').trim();
+  var statusSource = firstNonBlank(record.execution_status, record.executionStatus, record.status, record.project_status, record.projectStatus, record.publish_status, record.publishStatus, record.is_published, record.isPublished, record.published);
+  var executionStatus = normalizeExecutionStatus(statusSource, publishDate, rawLink);
   return {
     business_type: String(record.business_type || record.businessType || record.category || '').trim(),
     entry_source: String(record.entry_source || record.entrySource || '').trim(),
@@ -548,10 +589,13 @@ function normalizeProfitMeta(record) {
     projected_margin: Math.round(Number(record.projected_margin ?? record.projectedMargin ?? 0) || 0),
     lock_date: String(record.lock_date || record.lockDate || '').trim(),
     publish_date: publishDate,
-    is_published: normalizePublishFlag(record.is_published ?? record.isPublished ?? record.published, publishDate),
+    execution_status: executionStatus,
+    is_published: executionStatus === '未发布' ? 0 : 1,
+    original_id: String(record.original_id || record.originalId || '').trim(),
     product_line: String(record.product_line || record.productLine || '').trim(),
-    link: String(record.link || record.url || '').trim(),
-    order_no: String(record.order_no || record.orderNo || '').trim()
+    link: normalizePublishLink(rawLink),
+    order_no: String(record.order_no || record.orderNo || '').trim(),
+    crm_order_no: String(record.crm_order_no || record.crmOrderNo || '').trim()
   };
 }
 
@@ -566,6 +610,7 @@ function normalizeSyncRecord(record) {
   if (!account && /代做|素材代做|素材/.test(source)) account = '素材';
   var meta = normalizeProfitMeta(record);
   return {
+    local_id: Math.round(Number(record.local_id ?? record.localId ?? 0) || 0),
     grp: grp,
     project: String(record.project || '').trim(),
     platform: String(record.platform || '').trim(),
@@ -593,10 +638,13 @@ function normalizeSyncRecord(record) {
     projected_margin: meta.projected_margin,
     lock_date: meta.lock_date,
     publish_date: meta.publish_date,
+    execution_status: meta.execution_status,
     is_published: meta.is_published,
+    original_id: meta.original_id,
     product_line: meta.product_line,
     link: meta.link,
-    order_no: meta.order_no
+    order_no: meta.order_no,
+    crm_order_no: meta.crm_order_no
   };
 }
 
@@ -622,12 +670,37 @@ module.exports = function createProfitRoutes(deps) {
     runPython('feishu_profit.py', 'upsert_profit', { id: id }, 90).catch(function() {});
   }
 
+  function appendDateFilters(where, params, year, month) {
+    var normalizedYear = Number(year || 0) || 0;
+    var normalizedMonth = Number(month || 0) || 0;
+    if (normalizedYear) {
+      where.push('month LIKE ?');
+      params.push(String(normalizedYear) + '%');
+    }
+    if (normalizedMonth) {
+      var monthText = String(normalizedMonth);
+      var paddedMonthText = String(normalizedMonth).padStart(2, '0');
+      where.push('(month LIKE ? OR month LIKE ? OR month LIKE ?)');
+      params.push((normalizedYear ? String(normalizedYear) + '\u5e74' : '%') + monthText + '\u6708%');
+      params.push((normalizedYear ? String(normalizedYear) + '\u5e74' : '%') + paddedMonthText + '\u6708%');
+      params.push('%' + monthText + '\u6708%');
+    }
+  }
+
   function list(body, cb) {
     var grp = normalizeGroup(body.grp);
+    var year = Number(body.year || 0) || 0;
+    var month = Number(body.month || 0) || 0;
     withProfitDb(function(err, db) {
       if (err) { cb({ error: err.message }); return; }
-      var sql = grp ? 'SELECT * FROM profits WHERE grp=? ORDER BY id DESC' : 'SELECT * FROM profits ORDER BY id DESC';
-      var params = grp ? [grp] : [];
+      var where = [];
+      var params = [];
+      if (grp) {
+        where.push('grp=?');
+        params.push(grp);
+      }
+      appendDateFilters(where, params, year, month);
+      var sql = 'SELECT * FROM profits' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY id DESC';
       db.all(sql, params, function(queryErr, rows) {
         db.close();
         if (queryErr) { cb({ error: queryErr.message }); return; }
@@ -638,12 +711,19 @@ module.exports = function createProfitRoutes(deps) {
 
   function stats(body, cb) {
     var grp = normalizeGroup(body.grp);
+    var year = Number(body.year || 0) || 0;
+    var month = Number(body.month || 0) || 0;
     withProfitDb(function(err, db) {
       if (err) { cb({ error: err.message }); return; }
-      var sql = grp
-        ? 'SELECT SUM(revenue) as total_revenue, SUM(margin) as total_margin, COUNT(*) as count FROM profits WHERE grp=?'
-        : 'SELECT SUM(revenue) as total_revenue, SUM(margin) as total_margin, COUNT(*) as count FROM profits';
-      var params = grp ? [grp] : [];
+      var where = [];
+      var params = [];
+      if (grp) {
+        where.push('grp=?');
+        params.push(grp);
+      }
+      appendDateFilters(where, params, year, month);
+      var sql = 'SELECT SUM(revenue) as total_revenue, SUM(margin) as total_margin, COUNT(*) as count FROM profits'
+        + (where.length ? ' WHERE ' + where.join(' AND ') : '');
       db.get(sql, params, function(queryErr, row) {
         db.close();
         if (queryErr) { cb({ error: queryErr.message }); return; }
@@ -665,8 +745,8 @@ module.exports = function createProfitRoutes(deps) {
           grp,project,platform,account,revenue,margin,month,remark,created_at,category,
           business_type,entry_source,origin_group,producer_group,origin_share,producer_share,split_enabled,
           group_revenue,tax_revenue,group_margin,department_margin,order_amount,rebate_amount,final_amount,
-          cost_total,projected_margin,lock_date,publish_date,is_published,product_line,link,order_no
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+          cost_total,projected_margin,lock_date,publish_date,execution_status,is_published,original_id,product_line,link,order_no,crm_order_no
+        ) VALUES (${Array(35).fill('?').join(',')})`,
         [
           body.grp || '',
           body.project || '',
@@ -696,10 +776,13 @@ module.exports = function createProfitRoutes(deps) {
           meta.projected_margin,
           meta.lock_date,
           meta.publish_date,
+          meta.execution_status,
           meta.is_published,
+          meta.original_id,
           meta.product_line,
           meta.link,
-          meta.order_no
+          meta.order_no,
+          meta.crm_order_no
         ],
         function(insertErr) {
           var insertedId = this && this.lastID;
@@ -723,7 +806,7 @@ module.exports = function createProfitRoutes(deps) {
           grp=?,project=?,platform=?,account=?,revenue=?,margin=?,month=?,remark=?,category=?,
           business_type=?,entry_source=?,origin_group=?,producer_group=?,origin_share=?,producer_share=?,split_enabled=?,
           group_revenue=?,tax_revenue=?,group_margin=?,department_margin=?,order_amount=?,rebate_amount=?,final_amount=?,
-          cost_total=?,projected_margin=?,lock_date=?,publish_date=?,is_published=?,product_line=?,link=?,order_no=?
+          cost_total=?,projected_margin=?,lock_date=?,publish_date=?,execution_status=?,is_published=?,original_id=?,product_line=?,link=?,order_no=?,crm_order_no=?
          WHERE id=?`,
         [
           body.grp || '',
@@ -753,10 +836,13 @@ module.exports = function createProfitRoutes(deps) {
           meta.projected_margin,
           meta.lock_date,
           meta.publish_date,
+          meta.execution_status,
           meta.is_published,
+          meta.original_id,
           meta.product_line,
           meta.link,
           meta.order_no,
+          meta.crm_order_no,
           id
         ],
         function(updateErr) {
@@ -793,6 +879,7 @@ module.exports = function createProfitRoutes(deps) {
   function sync(body, cb) {
     var syncMode = String(body.mode || 'sync').toLowerCase();
     var incrementalMode = syncMode === 'incremental' || syncMode === 'append';
+    var mergeMode = syncMode === 'merge' || syncMode === 'pull';
     var sourceRecords = Array.isArray(body.records) ? body.records : [];
     var normalized = sourceRecords
       .map(normalizeSyncRecord)
@@ -879,9 +966,115 @@ module.exports = function createProfitRoutes(deps) {
           if (!resolvedProject) return record;
           return Object.assign({}, record, { project: resolvedProject });
         });
+        var normalizedTotal = normalized.length;
 
         var grouped = new Map();
         var stats = { inserted: 0, updated: 0, deleted: 0, preserved: 0, skipped: 0 };
+        var directIdRecords = [];
+
+        function updateStoredRecord(record, id) {
+          return run(
+            `UPDATE profits SET
+              grp=?, project=?, platform=?, account=?, revenue=?, margin=?, month=?, remark=?, category=?,
+              business_type=?, entry_source=?, origin_group=?, producer_group=?, origin_share=?, producer_share=?, split_enabled=?,
+              group_revenue=?, tax_revenue=?, group_margin=?, department_margin=?, order_amount=?, rebate_amount=?, final_amount=?,
+              cost_total=?, projected_margin=?, lock_date=?, publish_date=?, execution_status=?, is_published=?, original_id=?, product_line=?, link=?, order_no=?, crm_order_no=?
+             WHERE id=?`,
+            [
+              record.grp,
+              record.project,
+              record.platform,
+              record.account,
+              record.revenue,
+              record.margin,
+              record.month,
+              record.remark,
+              record.category,
+              record.business_type,
+              record.entry_source,
+              record.origin_group,
+              record.producer_group,
+              record.origin_share,
+              record.producer_share,
+              record.split_enabled,
+              record.group_revenue,
+              record.tax_revenue,
+              record.group_margin,
+              record.department_margin,
+              record.order_amount,
+              record.rebate_amount,
+              record.final_amount,
+              record.cost_total,
+              record.projected_margin,
+              record.lock_date,
+              record.publish_date,
+              record.execution_status,
+              record.is_published,
+              record.original_id,
+              record.product_line,
+              record.link,
+              record.order_no,
+              record.crm_order_no,
+              id
+            ]
+          );
+        }
+
+        function insertStoredRecord(record) {
+          return run(
+            `INSERT INTO profits (
+              grp, project, platform, account, revenue, margin, month, remark, created_at, category,
+              business_type, entry_source, origin_group, producer_group, origin_share, producer_share, split_enabled,
+              group_revenue, tax_revenue, group_margin, department_margin, order_amount, rebate_amount, final_amount,
+              cost_total, projected_margin, lock_date, publish_date, execution_status, is_published, original_id, product_line, link, order_no, crm_order_no
+            ) VALUES (${Array(35).fill('?').join(', ')})`,
+            [
+              record.grp,
+              record.project,
+              record.platform,
+              record.account,
+              record.revenue,
+              record.margin,
+              record.month,
+              record.remark,
+              Math.floor(Date.now() / 1000),
+              record.category,
+              record.business_type,
+              record.entry_source,
+              record.origin_group,
+              record.producer_group,
+              record.origin_share,
+              record.producer_share,
+              record.split_enabled,
+              record.group_revenue,
+              record.tax_revenue,
+              record.group_margin,
+              record.department_margin,
+              record.order_amount,
+              record.rebate_amount,
+              record.final_amount,
+              record.cost_total,
+              record.projected_margin,
+              record.lock_date,
+              record.publish_date,
+              record.execution_status,
+              record.is_published,
+              record.original_id,
+              record.product_line,
+              record.link,
+              record.order_no,
+              record.crm_order_no
+            ]
+          );
+        }
+
+        if (mergeMode) {
+          normalized = normalized.filter(function(record) {
+            if (!record.local_id) return true;
+            directIdRecords.push(record);
+            return false;
+          });
+        }
 
         normalized.forEach(function(record) {
           var key = record.grp + '\u0000' + record.month;
@@ -891,6 +1084,18 @@ module.exports = function createProfitRoutes(deps) {
 
         await run('BEGIN IMMEDIATE');
         try {
+          for (var directIndex = 0; directIndex < directIdRecords.length; directIndex += 1) {
+            var directRecord = directIdRecords[directIndex];
+            var directRows = await all('SELECT id FROM profits WHERE id=? LIMIT 1', [directRecord.local_id]);
+            if (directRows.length) {
+              await updateStoredRecord(directRecord, directRecord.local_id);
+              stats.updated += 1;
+            } else {
+              await insertStoredRecord(directRecord);
+              stats.inserted += 1;
+            }
+          }
+
           for (var entry of grouped.entries()) {
             var scope = entry[0].split('\u0000');
             var grp = scope[0];
@@ -919,7 +1124,7 @@ module.exports = function createProfitRoutes(deps) {
                 reusableExistingByKey.get(existingKey).push(existing);
                 continue;
               }
-              if (incrementalMode) {
+              if (incrementalMode || mergeMode) {
                 stats.preserved += 1;
                 continue;
               }
@@ -945,93 +1150,11 @@ module.exports = function createProfitRoutes(deps) {
                   stats.skipped += 1;
                   continue;
                 }
-                await run(
-                  `UPDATE profits SET
-                    grp=?, project=?, platform=?, account=?, revenue=?, margin=?, month=?, remark=?, category=?,
-                    business_type=?, entry_source=?, origin_group=?, producer_group=?, origin_share=?, producer_share=?, split_enabled=?,
-                    group_revenue=?, tax_revenue=?, group_margin=?, department_margin=?, order_amount=?, rebate_amount=?, final_amount=?,
-                    cost_total=?, projected_margin=?, lock_date=?, publish_date=?, is_published=?, product_line=?, link=?, order_no=?
-                   WHERE id=?`,
-                  [
-                    record.grp,
-                    record.project,
-                    record.platform,
-                    record.account,
-                    record.revenue,
-                    record.margin,
-                    record.month,
-                    record.remark,
-                    record.category,
-                    record.business_type,
-                    record.entry_source,
-                    record.origin_group,
-                    record.producer_group,
-                    record.origin_share,
-                    record.producer_share,
-                    record.split_enabled,
-                    record.group_revenue,
-                    record.tax_revenue,
-                    record.group_margin,
-                    record.department_margin,
-                    record.order_amount,
-                    record.rebate_amount,
-                    record.final_amount,
-                    record.cost_total,
-                    record.projected_margin,
-                    record.lock_date,
-                    record.publish_date,
-                    record.is_published,
-                    record.product_line,
-                    record.link,
-                    record.order_no,
-                    matched.id
-                  ]
-                );
+                await updateStoredRecord(record, matched.id);
                 stats.updated += 1;
                 continue;
               }
-              await run(
-                `INSERT INTO profits (
-                  grp, project, platform, account, revenue, margin, month, remark, created_at, category,
-                  business_type, entry_source, origin_group, producer_group, origin_share, producer_share, split_enabled,
-                  group_revenue, tax_revenue, group_margin, department_margin, order_amount, rebate_amount, final_amount,
-                  cost_total, projected_margin, lock_date, publish_date, is_published, product_line, link, order_no
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                  record.grp,
-                  record.project,
-                  record.platform,
-                  record.account,
-                  record.revenue,
-                  record.margin,
-                  record.month,
-                  record.remark,
-                  Math.floor(Date.now() / 1000),
-                  record.category,
-                  record.business_type,
-                  record.entry_source,
-                  record.origin_group,
-                  record.producer_group,
-                  record.origin_share,
-                  record.producer_share,
-                  record.split_enabled,
-                  record.group_revenue,
-                  record.tax_revenue,
-                  record.group_margin,
-                  record.department_margin,
-                  record.order_amount,
-                  record.rebate_amount,
-                  record.final_amount,
-                  record.cost_total,
-                  record.projected_margin,
-                  record.lock_date,
-                  record.publish_date,
-                  record.is_published,
-                  record.product_line,
-                  record.link,
-                  record.order_no
-                ]
-              );
+              await insertStoredRecord(record);
               stats.inserted += 1;
             }
           }
@@ -1044,7 +1167,7 @@ module.exports = function createProfitRoutes(deps) {
             deleted: stats.deleted,
             preserved: stats.preserved,
             skipped: stats.skipped,
-            total: normalized.length
+            total: normalizedTotal
           });
         } catch (syncErr) {
           await run('ROLLBACK').catch(function() {});
@@ -1083,6 +1206,49 @@ module.exports = function createProfitRoutes(deps) {
     });
   }
 
+  function pullFeishuSpreadsheet(body, cb) {
+    if (!runPython) { cb({ error: 'python runtime not available' }); return; }
+    runPython('feishu_profit.py', 'read_profit_spreadsheet', {
+      year: Number(body.year) || 0,
+      month: Number(body.month) || 0
+    }, 10 * 60).then(function(result) {
+      if (result.error || (result.code && !Array.isArray(result.records))) {
+        cb({ error: result.error || result.msg || '飞书读取失败', feishu: result });
+        return;
+      }
+      var records = Array.isArray(result.records) ? result.records : [];
+      if (!records.length) {
+        cb({
+          success: true,
+          inserted: 0,
+          updated: 0,
+          deleted: 0,
+          preserved: 0,
+          skipped: 0,
+          total: 0,
+          feishu_total: 0,
+          sheets: result.sheets || [],
+          errors: result.errors || []
+        });
+        return;
+      }
+      sync({ records: records, mode: body.mode || 'merge' }, function(syncResult) {
+        if (syncResult && syncResult.error) {
+          cb(Object.assign({ feishu_total: records.length, sheets: result.sheets || [], errors: result.errors || [] }, syncResult));
+          return;
+        }
+        cb(Object.assign({}, syncResult || {}, {
+          feishu_total: records.length,
+          sheets: result.sheets || [],
+          errors: result.errors || [],
+          url: result.url || ''
+        }));
+      });
+    }).catch(function(err) {
+      cb({ error: err && err.message || String(err) });
+    });
+  }
+
   return {
     '/api/feishu/profit': function(body, cb) {
       runPython('feishu_profit.py', 'read', {}, 60).then(cb);
@@ -1103,6 +1269,7 @@ module.exports = function createProfitRoutes(deps) {
     '/api/profits/stats': stats,
     '/api/profits/parse': parse,
     '/api/profits/sync': sync,
-    '/api/profits/sync-feishu': syncFeishu
+    '/api/profits/sync-feishu': syncFeishu,
+    '/api/profits/pull-feishu': pullFeishuSpreadsheet
   };
 };

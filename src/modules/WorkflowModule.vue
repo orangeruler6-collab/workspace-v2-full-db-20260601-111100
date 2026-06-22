@@ -211,6 +211,7 @@
                   <div class="wf-word-slider-head">
                     <span>字数</span>
                     <b>{{ wordTargetLabel(n.data.words) }}</b>
+                    <input class="wf-word-input" type="number" :min="WORD_MIN" :max="WORD_MAX" :step="WORD_STEP" :value="wordTargetValue(n)" @change.stop="setWordTarget(n, $event.target.value)" @keydown.enter.stop="setWordTarget(n, $event.target.value)" />
                   </div>
                   <div class="wf-word-slider-track">
                     <input
@@ -408,6 +409,7 @@
               <div class="wf-word-slider-head">
                 <span>当前目标</span>
                 <b>{{ wordTargetLabel(selectedNode.data.words) }}</b>
+                <input class="wf-word-input" type="number" :min="WORD_MIN" :max="WORD_MAX" :step="WORD_STEP" :value="wordTargetValue(selectedNode)" @change.stop="setWordTarget(selectedNode, $event.target.value)" @keydown.enter.stop="setWordTarget(selectedNode, $event.target.value)" />
               </div>
               <div class="wf-word-slider-track">
                 <input
@@ -446,7 +448,7 @@
           </label>
           <label class="wf-field">
             <span>关键词</span>
-            <input class="wf-side-input" v-model="selectedNode.data.keywords" placeholder="可手动调整搜索关键词" />
+            <input class="wf-side-input" v-model="selectedNode.data.keywords" placeholder="可手动调整，比如 三角洲 V10 角色" />
           </label>
           <div class="wf-platform-actions">
             <button class="btn btn-sm btn-soft" :disabled="selectedNode.run" @click="runN(selectedNode)">重新搜索</button>
@@ -476,7 +478,7 @@
         <template v-else-if="selectedNode.type === 'hot'">
           <label class="wf-field">
             <span>搜索词</span>
-            <input class="wf-side-input" v-model="selectedNode.data.query" placeholder="自动提取；也可手动改，比如 Faker 柳智敏" />
+            <input class="wf-side-input" v-model="selectedNode.data.query" placeholder="自动提取；也可手动改，比如 CPTV10 战队 选手" />
           </label>
           <textarea class="wf-side-text" v-model="detailContent" readonly></textarea>
         </template>
@@ -498,6 +500,7 @@
               <div class="wf-word-slider-head">
                 <span>当前目标</span>
                 <b>{{ wordTargetLabel(selectedNode.data.words) }}</b>
+                <input class="wf-word-input" type="number" :min="WORD_MIN" :max="WORD_MAX" :step="WORD_STEP" :value="wordTargetValue(selectedNode)" @change.stop="setWordTarget(selectedNode, $event.target.value)" @keydown.enter.stop="setWordTarget(selectedNode, $event.target.value)" />
               </div>
               <div class="wf-word-slider-track">
                 <input
@@ -568,6 +571,7 @@
               <div class="wf-word-slider-head">
                 <span>当前目标</span>
                 <b>{{ wordTargetLabel(selectedNode.data.words) }}</b>
+                <input class="wf-word-input" type="number" :min="WORD_MIN" :max="WORD_MAX" :step="WORD_STEP" :value="wordTargetValue(selectedNode)" @change.stop="setWordTarget(selectedNode, $event.target.value)" @keydown.enter.stop="setWordTarget(selectedNode, $event.target.value)" />
               </div>
               <div class="wf-word-slider-track">
                 <input
@@ -700,9 +704,9 @@ const WORD_MAX = 6000
 const WORD_COMMON_MIN = 200
 const WORD_COMMON_MAX = 800
 const WORD_STEP = 50
-const WORD_SLIDER_MIN = 0
-const WORD_SLIDER_MAX = 1000
-const WORD_SLIDER_STEP = 1
+const WORD_SLIDER_MIN = WORD_MIN
+const WORD_SLIDER_MAX = WORD_MAX
+const WORD_SLIDER_STEP = WORD_STEP
 const WORD_COMMON_START = 80
 const WORD_COMMON_END = 720
 
@@ -747,25 +751,11 @@ function mapRange(value, inMin, inMax, outMin, outMax) {
 }
 
 function wordToSlider(value) {
-  const words = normalizeWordTarget(value)
-  if (words <= WORD_COMMON_MIN) {
-    return Math.round(mapRange(words, WORD_MIN, WORD_COMMON_MIN, WORD_SLIDER_MIN, WORD_COMMON_START))
-  }
-  if (words <= WORD_COMMON_MAX) {
-    return Math.round(mapRange(words, WORD_COMMON_MIN, WORD_COMMON_MAX, WORD_COMMON_START, WORD_COMMON_END))
-  }
-  return Math.round(mapRange(words, WORD_COMMON_MAX, WORD_MAX, WORD_COMMON_END, WORD_SLIDER_MAX))
+  return snapWordTarget(value)
 }
 
 function sliderToWord(value) {
-  const slider = Math.max(WORD_SLIDER_MIN, Math.min(Number(value) || 0, WORD_SLIDER_MAX))
-  if (slider <= WORD_COMMON_START) {
-    return snapWordTarget(mapRange(slider, WORD_SLIDER_MIN, WORD_COMMON_START, WORD_MIN, WORD_COMMON_MIN))
-  }
-  if (slider <= WORD_COMMON_END) {
-    return snapWordTarget(mapRange(slider, WORD_COMMON_START, WORD_COMMON_END, WORD_COMMON_MIN, WORD_COMMON_MAX))
-  }
-  return snapWordTarget(mapRange(slider, WORD_COMMON_END, WORD_SLIDER_MAX, WORD_COMMON_MAX, WORD_MAX))
+  return snapWordTarget(value)
 }
 
 function wordSliderValue(n) {
@@ -782,8 +772,19 @@ function setWordFromSlider(n, value) {
   n.data.words = String(sliderToWord(value))
 }
 
+function copyModelOptions(words, phase = 'draft') {
+  const target = normalizeWordTarget(words)
+  const maxTokens = Math.min(12000, Math.max(2600, Math.ceil(target * 1.9) + 900))
+  const baseTimeout = phase === 'selfcheck' ? 150000 : 180000
+  const timeoutMs = Math.min(420000, Math.max(baseTimeout, 90000 + target * 55))
+  return {
+    max_tokens: maxTokens,
+    timeoutMs
+  }
+}
+
 function normalizeWorkflowUrl(url) {
-  let value = String(url || '').trim()
+  let value = repairWorkflowUrlText(url).trim()
   value = value.replace(/[)\]}>'"`.,!?;:\u3002\uff0c\uff01\uff1f\uff1b\uff1a\uff09\u3011\u300b\u3001]+$/g, '')
   if (/^BV[\w]{10}$/i.test(value)) return `https://www.bilibili.com/video/${value}`
   if (value && !/^https?:\/\//i.test(value)) value = 'https://' + value
@@ -791,17 +792,28 @@ function normalizeWorkflowUrl(url) {
 }
 
 function extractWorkflowUrl(text) {
-  return extractWorkflowUrls(text)[0] || normalizeWorkflowUrl(text)
+  return extractWorkflowUrls(text)[0] || ''
+}
+
+function repairWorkflowUrlText(text) {
+  return String(text || '')
+    .replace(/\bh\s*t\s*p\s*s?\s*:\s*\/\s*\//gi, 'https://')
+    .replace(/h\s*t\s*t\s*p\s*s?\s*:\s*\/\s*\//gi, match => match.toLowerCase().includes('https') ? 'https://' : 'http://')
+    .replace(/https?:\s*\/\s*\//gi, match => match.toLowerCase().startsWith('https') ? 'https://' : 'http://')
+    .replace(/\b([a-z0-9-]{3,})\s+(?=(?:feishu|larksuite)\s*[.\s]*(?:cn|com)\b)/gi, '$1.')
+    .replace(/\b(feishu|larksuite)\s*[.\s]+\s*(cn|com)\b/gi, '$1.$2')
+    .replace(/\s+(?=\/(?:docx|wiki|docs|doc)\b)/gi, '')
+    .replace(/\/\s+(?=[A-Za-z0-9_-]{8,})/g, '/')
 }
 
 function extractWorkflowUrls(text) {
-  const raw = String(text || '')
+  const raw = repairWorkflowUrlText(text)
   const patterns = [
     /(?:https?:\/\/)?v\.douyin\.com\/[^\s"'<>\u4e00-\u9fa5]+/gi,
     /(?:https?:\/\/)?(?:www\.)?douyin\.com\/video\/\d+[^\s"'<>\u4e00-\u9fa5]*/gi,
     /(?:https?:\/\/)?(?:www\.)?bilibili\.com\/video\/BV[\w]+[^\s"'<>\u4e00-\u9fa5]*/gi,
     /(?:https?:\/\/)?b23\.tv\/[^\s"'<>\u4e00-\u9fa5]+/gi,
-    /(?:https?:\/\/)?(?:[^/\s"'<>\u4e00-\u9fa5]+\.)?feishu\.cn\/(?:docx|wiki)\/[^\s"'<>\u4e00-\u9fa5]+/gi,
+    /(?:https?:\/\/)?(?:[^/\s"'<>\u4e00-\u9fa5]+\.)?(?:feishu|larksuite)\.(?:cn|com)\/(?:docx|wiki|docs|doc)\/[^\s"'<>\u4e00-\u9fa5]+/gi,
     /\bBV[\w]{10}\b/g
   ]
   const urls = []
@@ -817,9 +829,7 @@ function extractWorkflowUrls(text) {
       }
     }
   }
-  if (urls.length) return urls
-  const fallback = normalizeWorkflowUrl(raw)
-  return fallback ? [fallback] : []
+  return urls
 }
 
 function cleanNodeUrl(n) {
@@ -955,8 +965,8 @@ function df(t) {
   if (t === 'input') return { url: '', idea: '', briefTitle: '', sourceType: 'video', s: '' }
   if (t === 'transcribe') return { s: '待运行', text: '' }
   if (t === 'analyze') return { s: '待运行', r: '' }
-  if (t === 'hot') return { s: '待运行', rs: [], analysis: '', query: '', source: '' }
-  if (t === 'platform') return { s: '待运行', rs: [], candidates: [], selected: [], keywords: '', platforms: ['bilibili'], enabled: false }
+  if (t === 'hot') return { s: '待运行', rs: [], analysis: '', query: '', autoQuery: '', searchQueries: [], fallbackQueries: [], searchPlan: null, source: '' }
+  if (t === 'platform') return { s: '待运行', rs: [], candidates: [], selected: [], keywords: '', autoKeywords: '', searchQueries: [], fallbackQueries: [], searchPlan: null, platforms: ['bilibili'], enabled: false }
   if (t === 'vec') return { s: '待运行', rs: [], query: '', autoQuery: '', searchQueries: [], fallbackQueries: [], search_intent: null, vectorPlan: null }
   if (t === 'sum') return { s: '待运行', txt: '' }
   if (t === 'idea') return { s: '待运行', list: [], sel: -1 }
@@ -1350,7 +1360,7 @@ function formatTranscriptOutput(text) {
 }
 
 function isFeishuWorkflowUrl(url) {
-  return /feishu\.cn\/(?:docx|wiki)\//i.test(String(url || ''))
+  return /(?:feishu|larksuite)\.(?:cn|com)\/(?:docx|wiki|docs|doc)\//i.test(String(url || ''))
 }
 
 function getFeishuWorkflowDocId(url) {
@@ -1608,8 +1618,13 @@ function platformDetailText(n) {
   const candidates = n?.data?.candidates || []
   const selected = n?.data?.selected || []
   const results = candidates.length ? candidates : (n?.data?.rs || [])
+  const searchQueries = uniqueVectorList(n?.data?.searchQueries || [], 4)
+  const fallbackQueries = uniqueVectorList(n?.data?.fallbackQueries || [], 3)
   const cleanHeader = section('B站关联视频搜索', bullets([
     '关键词：' + (n?.data?.keywords || '-'),
+    searchQueries.length ? 'AI主体词：' + searchQueries.join(' / ') : '',
+    fallbackQueries.length ? '备用词：' + fallbackQueries.join(' / ') : '',
+    n?.data?.searchPlan?.reason ? '取词理由：' + n.data.searchPlan.reason : '',
     '候选：' + candidates.length,
     '入选转写：' + selected.length + '/3',
     '当前模块仅支持 B站候选筛选'
@@ -1671,6 +1686,13 @@ function hotDetailText(n) {
     .slice(0, 3)
   const cleanBlocks = []
   if (data.query) cleanBlocks.push(section('背景搜索词', data.query))
+  if (data.searchQueries?.length || data.fallbackQueries?.length || data.searchPlan?.reason) {
+    cleanBlocks.push(section('AI取词判断', bullets([
+      data.searchQueries?.length ? '主体词：' + uniqueVectorList(data.searchQueries, 4).join(' / ') : '',
+      data.fallbackQueries?.length ? '备用词：' + uniqueVectorList(data.fallbackQueries, 3).join(' / ') : '',
+      data.searchPlan?.reason ? '理由：' + data.searchPlan.reason : ''
+    ])))
+  }
   if (data.mode === 'web_research') {
     if (data.analysis) cleanBlocks.push(section('模型联网资料', compact(data.analysis, 1400)))
     if (data.source) cleanBlocks.push(section('检索方式', data.source))
@@ -1750,7 +1772,8 @@ function cleanVectorTerm(value) {
   return String(value || '')
     .replace(/https?:\/\/\S+/g, ' ')
     .replace(/^(账号|平台|标题|发布时间|热度|转写原文|金句|title|golden)\s*[：:]\s*/i, '')
-    .replace(/^[\s#>*\-—•·、.。0-9一二三四五六七八九十]+/g, '')
+    .replace(/^[\s#>*\-—•·、.。]+/g, '')
+    .replace(/^(?:\d+|[一二三四五六七八九十]+)[、.。\)\）\s]+/g, '')
     .replace(/^(关于|围绕|针对|这期|本期|这条|这个|一个|如何|为什么|怎么|帮我|请你|请|写一篇|做一个)+/g, '')
     .replace(/(的视频|的内容|的素材|的文案|相关|资料|参考|表达|方式|结构|分析|搜索)+$/g, '')
     .replace(/[，。！？；：、,.!?;:()[\]【】《》"'“”‘’]/g, ' ')
@@ -1805,6 +1828,27 @@ function tokenizeVectorText(value, limit = 30) {
     .trim()
   const words = source.match(/#[\u4e00-\u9fa5A-Za-z0-9_]{2,24}|[A-Za-z][A-Za-z0-9_-]{1,30}|[\u4e00-\u9fa5]{2,12}/g) || []
   return uniqueVectorList(words.map(word => word.startsWith('#') ? word.slice(1) : word), limit)
+}
+
+function extractPrioritySubjectTerms(text, limit = 10) {
+  const source = String(text || '')
+  const terms = []
+  const subjectLabels = '(?:产品|游戏|角色|人物|战队|队伍|选手|赛事|活动|版本|项目|标题|主题|看点|主角|阵容|对阵|brief|title)'
+  source.split(/\r?\n/).forEach(line => {
+    const match = line.trim().match(new RegExp('^(?:[-*]\\s*)?' + subjectLabels + '\\s*[：:]\\s*(.+)$', 'i'))
+    if (match) terms.push(...tokenizeVectorText(match[1], 6))
+  })
+  ;(source.match(/\b[A-Za-z][A-Za-z0-9_-]{1,30}\b/g) || []).forEach(word => terms.push(word))
+  ;(source.match(/《([^》]{2,28})》/g) || []).forEach(value => terms.push(value.replace(/[《》]/g, '')))
+  ;(source.match(/#[\u4e00-\u9fa5A-Za-z0-9_]{2,24}/g) || []).forEach(value => terms.push(value.slice(1)))
+  return uniqueVectorList(terms, limit)
+}
+
+function pickSubjectFallbackQuery(text, limit = 4) {
+  const priorityTerms = extractPrioritySubjectTerms(text, 10)
+  const signalTerms = findVectorSignalTerms(text)
+  const query = normalizeVectorQuery(priorityTerms.concat(signalTerms).slice(0, limit + 3), limit)
+  return query && isUsefulVectorQuery(query) ? query : ''
 }
 
 function extractVectorSearchQuery(text) {
@@ -2031,6 +2075,125 @@ ${source.substring(0, 2200)}`
   }
 }
 
+function workflowSearchPlanConfig(mode) {
+  if (mode === 'platform') {
+    return {
+      label: 'B站候选视频搜索',
+      primaryLimit: 3,
+      fallbackLimit: 2,
+      termLimit: 4,
+      goal: '为 B站 搜索相近题材/相近素材的视频候选，优先生成像用户会在 B站 搜的标题关键词。',
+      primaryDesc: 'primary_queries 放最可能搜到同题材视频的主体词，建议“游戏/产品 + 角色/战队/选手/版本/事件”。',
+      fallbackDesc: 'fallback_queries 放同领域但更宽一点的搜索词。'
+    }
+  }
+  return {
+    label: '背景事实搜索',
+    primaryLimit: 4,
+    fallbackLimit: 2,
+    termLimit: 5,
+    goal: '为背景资料/事实核查搜索提炼关键词，优先找到主体、事件、版本、赛事、角色、战队或选手的准确信息。',
+    primaryDesc: 'primary_queries 放事实背景搜索最该搜的主体词，不要只放情绪词或包装词。',
+    fallbackDesc: 'fallback_queries 放可扩大检索面的备用主体词。'
+  }
+}
+
+function coerceWorkflowPlanList(value) {
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    return value.split(/[\n/|；;]+/).map(item => item.trim()).filter(Boolean)
+  }
+  return []
+}
+
+function isUsefulWorkflowQuery(query, mode = 'hot') {
+  if (!isUsefulVectorQuery(query)) return false
+  if (mode === 'hot' && isWeakHotSearchQuery(query)) return false
+  const terms = splitVectorQueryInput(query)[0]?.split(/\s+/).filter(Boolean) || []
+  if (!terms.length) return false
+  const generic = new Set(['游戏', '活动', '版本', '赛事', '战队', '选手', '角色', '背景', '资料', '视频', '素材', '文案'])
+  if (terms.every(term => generic.has(term) || VECTOR_FRAME_TERMS.has(term))) return false
+  return true
+}
+
+function normalizeWorkflowAiQueries(list = [], mode = 'hot', limit = 3, bannedTerms = []) {
+  const cfg = workflowSearchPlanConfig(mode)
+  return uniqueVectorList(coerceWorkflowPlanList(list)
+    .map(query => normalizeVectorQuery(String(query || '').replace(/["“”'‘’`]+/g, ' ').replace(/[，、,+]+/g, ' '), cfg.termLimit, bannedTerms))
+    .filter(query => query && isUsefulWorkflowQuery(query, mode)), limit)
+}
+
+function parseWorkflowSearchPlanReply(reply, sourceText = '', mode = 'hot') {
+  const cfg = workflowSearchPlanConfig(mode)
+  const bannedTerms = extractVectorMetaTerms(sourceText)
+  const raw = String(reply || '')
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .trim()
+  const jsonText = (raw.match(/\{[\s\S]*\}/) || [raw])[0]
+  try {
+    const data = JSON.parse(jsonText)
+    return {
+      primary: normalizeWorkflowAiQueries(data.primary_queries || data.primary || data.queries, mode, cfg.primaryLimit, bannedTerms),
+      fallback: normalizeWorkflowAiQueries(data.fallback_queries || data.fallback || data.backup_queries, mode, cfg.fallbackLimit, bannedTerms),
+      reason: compactLine(data.reason || data.search_reason || '', 180)
+    }
+  } catch {
+    const lines = raw.split(/\r?\n/)
+      .map(line => line.replace(/^[-*\d.、\s]+/, '').trim())
+      .filter(Boolean)
+    return {
+      primary: normalizeWorkflowAiQueries(lines.slice(0, cfg.primaryLimit), mode, cfg.primaryLimit, bannedTerms),
+      fallback: normalizeWorkflowAiQueries(lines.slice(cfg.primaryLimit, cfg.primaryLimit + cfg.fallbackLimit), mode, cfg.fallbackLimit, bannedTerms),
+      reason: ''
+    }
+  }
+}
+
+async function getWorkflowSearchPlanWithAI(analysisText, sourceText, mode = 'hot') {
+  const analysis = String(analysisText || '').trim()
+  const source = String(sourceText || '').trim()
+  if (!analysis && !source) return null
+  const cfg = workflowSearchPlanConfig(mode)
+  const bannedTerms = extractVectorMetaTerms([analysis, source].filter(Boolean).join('\n'))
+  try {
+    const d = await chatMinimax({
+      model: 'gpt-5.5',
+      system: '你只负责为内容工作流规划搜索词。只输出 JSON，不写文案，不补充事实。',
+      prompt: `请基于“AI拆解摘要”和“原始素材摘录”，为【${cfg.label}】规划搜索词。
+
+目标：
+- ${cfg.goal}
+- ${cfg.primaryDesc}
+- ${cfg.fallbackDesc}
+
+主体优先级：
+1. 产品/游戏/活动/赛事名。
+2. 角色名、战队名、队伍名、选手名、主播名、人物名。
+3. 版本号、代号、英文缩写和字母数字标识，例如 V10、CPTV10、T1、EDG、LT、HAN、RRQ；如果材料里出现，必须原样保留，不能翻译、扩写或丢弃。
+4. 关键事件/冲突/卖点，只作为主体后的辅助词。
+
+硬规则：
+- 只输出 JSON：{"primary_queries":[],"fallback_queries":[],"reason":""}
+- 每个 query 2-${cfg.termLimit} 个短词，用空格分隔。
+- 不要输出账号、平台、发布时间、热度、链接、标题标签、转写原文等元信息。
+- 不要只输出“离谱/大瓜/爆点/游戏/素材/文案/背景/搜索”等包装词或泛词。
+- 以下是本次禁用的元信息词，绝对不要输出：${bannedTerms.join('、') || '无'}
+- 检索词必须来自材料中的真实信息，不能发明新主体。
+
+AI拆解摘要：
+${analysis.substring(0, 2200)}
+
+原始素材摘录：
+${source.substring(0, 2200)}`
+    })
+    const plan = parseWorkflowSearchPlanReply(d.reply || d.response || d.content || '', [analysis, source].filter(Boolean).join('\n'), mode)
+    if (!plan.primary.length && !plan.fallback.length) return null
+    return plan
+  } catch {
+    return null
+  }
+}
+
 async function searchVectorQuerySet(queries = [], scope = '主题匹配') {
   const errors = []
   const batches = await Promise.all((queries || []).map(async query => {
@@ -2214,6 +2377,7 @@ function pickHotSearchQuery(savedQuery, intent, sourceText) {
     extractStructuredHotSearchQuery(sourceText),
     savedQuery,
     buildHotQueryFromIntent(intent, sourceText),
+    pickSubjectFallbackQuery(sourceText, 4),
     extractHotSearchQuerySmart(sourceText),
     extractHotSearchQuery(sourceText)
   ]
@@ -3743,9 +3907,10 @@ async function generateIdeaCardCopy(card) {
       chatMinimax({
         model: 'gpt-5.5',
         prompt: buildIdeaCardCopyPrompt(sourceText, rep, idea, card.data.words, styleRef),
-        system: '根据原文、用户确认的创意卡和用户手动选择的风格卡生成中文短视频成稿，只返回正文。'
+        system: '根据原文、用户确认的创意卡和用户手动选择的风格卡生成中文短视频成稿，只返回正文。',
+        ...copyModelOptions(card.data.words, 'draft')
       }),
-      70000,
+      copyModelOptions(card.data.words, 'draft').timeoutMs + 30000,
       '生成文案'
     )
     const firstDraft = d.reply || ''
@@ -3758,9 +3923,10 @@ async function generateIdeaCardCopy(card) {
       chatMinimax({
         model: 'gpt-5.5',
         prompt: buildCopySelfCheckPrompt(firstDraft, sourceText, rep, idea, card.data.words),
-        system: '你只做文案自检和修稿，直接输出修订后的最终正文。'
+        system: '你只做文案自检和修稿，直接输出修订后的最终正文。',
+        ...copyModelOptions(card.data.words, 'selfcheck')
       }),
-      70000,
+      copyModelOptions(card.data.words, 'selfcheck').timeoutMs + 30000,
       '自检修稿'
     )
     gen.data.out = checked.reply || firstDraft || '生成失败'
@@ -3946,11 +4112,36 @@ async function runN(n, options = {}) {
       const txt = analysisTxt || transcribeTxt
       const searchContext = [analysisTxt, transcribeTxt].filter(Boolean).join('\n\n')
       if (!txt) { n.data.s = '需要信息采集内容/analysis'; return }
-      const intent = await getSearchIntentQuery(searchContext || txt, 'hot')
-      const kw = pickHotSearchQuery(n.data.query, intent, searchContext || txt)
+      const typedQuery = String(n.data.query || '').trim()
+      const autoQuery = String(n.data.autoQuery || '').trim()
+      const manualQuery = typedQuery && typedQuery !== autoQuery ? typedQuery : ''
+      let intent = { query: '', queries: [], entities: [], exclude_terms: [], intent_terms: [] }
+      let searchPlan = null
+      let searchQueries = []
+      let fallbackQueries = []
+      let kw = manualQuery
+      if (!kw) {
+        n.data.s = 'AI 规划背景搜索词...'
+        searchPlan = await getWorkflowSearchPlanWithAI(analysisTxt, transcribeTxt || txt, 'hot')
+        if (searchPlan) {
+          searchQueries = searchPlan.primary
+          fallbackQueries = searchPlan.fallback
+          kw = searchQueries[0] || fallbackQueries[0] || ''
+        }
+      }
+      if (!kw) {
+        intent = await getSearchIntentQuery(searchContext || txt, 'hot')
+        kw = pickHotSearchQuery('', intent, searchContext || txt)
+      }
       if (!kw) { n.data.s = '没有提取到可用搜索词'; return }
       n.data.query = kw
-      n.data.search_intent = intent
+      if (!manualQuery) n.data.autoQuery = kw
+      n.data.search_intent = searchPlan
+        ? { mode: 'ai_hot_plan', queries: searchQueries, fallback_queries: fallbackQueries, reason: searchPlan.reason || '' }
+        : (manualQuery ? { mode: 'manual_hot_query', queries: [kw], entities: [], exclude_terms: [], intent_terms: [] } : intent)
+      n.data.searchPlan = searchPlan
+      n.data.searchQueries = searchQueries.length ? searchQueries : [kw]
+      n.data.fallbackQueries = fallbackQueries
       n.data.s = '背景搜索中...'
       const d = await searchHot({ query: kw, source_text: (searchContext || txt).substring(0, 4000) })
       n.data.rs = d.results || []
@@ -3958,6 +4149,7 @@ async function runN(n, options = {}) {
       n.data.filteredResults = d.mode === 'web_research' ? n.data.rs : filterHotResultsBySourceText(n.data.rs, searchContext || txt, kw)
       n.data.analysis = d.analysis || ''
       n.data.query = d.query || kw
+      if (!manualQuery) n.data.autoQuery = n.data.query
       n.data.source = d.source || ''
       n.data.filterNote = d.mode === 'web_research' ? '已使用模型原生联网搜索整理背景资料。' : '保留 ' + n.data.filteredResults.length + '/' + n.data.rs.length + ' 个与上游素材更相关的来源；低相关搜索结果不会进入后续汇总。'
       const fetchedCount = n.data.filteredResults.filter(r => r.content).length
@@ -3966,12 +4158,40 @@ async function runN(n, options = {}) {
     }
 
     if (n.type === 'platform') {
-      const txt = gD(n, 'analyze') || gD(n, 'transcribe')
+      const analysisTxt = gD(n, 'analyze')
+      const transcribeTxt = gD(n, 'transcribe')
+      const txt = [analysisTxt, transcribeTxt].filter(Boolean).join('\n\n')
       if (!txt) { n.data.s = '需要信息采集内容/analysis'; return }
-      const intent = await getSearchIntentQuery(txt, 'platform')
-      const keywords = (n.data.keywords || intent.query || extractPlatformSearchQuery(txt) || extractPlatformKeywords(txt)).trim()
+      const typedKeywords = String(n.data.keywords || '').trim()
+      const autoKeywords = String(n.data.autoKeywords || '').trim()
+      const manualKeywords = typedKeywords && typedKeywords !== autoKeywords ? typedKeywords : ''
+      let intent = { query: '', queries: [], entities: [], exclude_terms: [], intent_terms: [] }
+      let searchPlan = null
+      let searchQueries = []
+      let fallbackQueries = []
+      let keywords = manualKeywords
+      if (!keywords) {
+        n.data.s = 'AI 规划B站搜索词...'
+        searchPlan = await getWorkflowSearchPlanWithAI(analysisTxt, transcribeTxt || txt, 'platform')
+        if (searchPlan) {
+          searchQueries = searchPlan.primary
+          fallbackQueries = searchPlan.fallback
+          keywords = searchQueries[0] || fallbackQueries[0] || ''
+        }
+      }
+      if (!keywords) {
+        intent = await getSearchIntentQuery(txt, 'platform')
+        keywords = (intent.query || pickSubjectFallbackQuery(txt, 4) || extractPlatformSearchQuery(txt) || extractPlatformKeywords(txt)).trim()
+      }
+      if (!keywords) { n.data.s = '没有提取到可用搜索词'; return }
       n.data.keywords = keywords
-      n.data.search_intent = intent
+      if (!manualKeywords) n.data.autoKeywords = keywords
+      n.data.search_intent = searchPlan
+        ? { mode: 'ai_platform_plan', queries: searchQueries, fallback_queries: fallbackQueries, reason: searchPlan.reason || '' }
+        : (manualKeywords ? { mode: 'manual_platform_query', queries: [keywords], entities: [], exclude_terms: [], intent_terms: [] } : intent)
+      n.data.searchPlan = searchPlan
+      n.data.searchQueries = searchQueries.length ? searchQueries : [keywords]
+      n.data.fallbackQueries = fallbackQueries
       n.data.s = '搜索 B站候选中...'
       const d = await searchPlatform({ query: keywords, source_text: txt.substring(0, 4000), platforms: ['bilibili'], limit: 5, transcribe_limit: 3, dry_run: true })
       n.data.candidates = d.候选 || d.results || []
@@ -4068,9 +4288,10 @@ async function runN(n, options = {}) {
         chatMinimax({
           model: n.data.mdl === 'Kimi' ? 'Kimi K2.5' : 'gpt-5.5',
           prompt: buildIdeaCardCopyPrompt(sourceText, rep, idea, n.data.words, styleRef),
-          system: '根据原文和已确认的切入点、框架、论据生成中文短视频成稿，只返回正文。'
+          system: '根据原文和已确认的切入点、框架、论据生成中文短视频成稿，只返回正文。',
+          ...copyModelOptions(n.data.words, 'draft')
         }),
-        90000,
+        copyModelOptions(n.data.words, 'draft').timeoutMs + 30000,
         '生成文案'
       ).catch((e) => { throw e })
       const firstDraft = d.reply || ''
@@ -4083,9 +4304,10 @@ async function runN(n, options = {}) {
         chatMinimax({
           model: n.data.mdl === 'Kimi' ? 'Kimi K2.5' : 'gpt-5.5',
           prompt: buildCopySelfCheckPrompt(firstDraft, sourceText, rep, idea, n.data.words),
-          system: '你只做文案自检和修稿，直接输出修订后的最终正文。'
+          system: '你只做文案自检和修稿，直接输出修订后的最终正文。',
+          ...copyModelOptions(n.data.words, 'selfcheck')
         }),
-        90000,
+        copyModelOptions(n.data.words, 'selfcheck').timeoutMs + 30000,
         '自检修稿'
       )
       n.data.out = checked.reply || firstDraft || '生成失败'
@@ -5777,6 +5999,26 @@ onUnmounted(() => {
   font-weight: 900;
 }
 
+.wf-word-input {
+  width: 82px;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--wf-button-border);
+  border-radius: 7px;
+  background: var(--wf-input-solid);
+  color: var(--wf-button-text-strong);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+}
+
+.wf-word-input:focus {
+  outline: none;
+  border-color: var(--wf-primary-border);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent);
+}
+
 .wf-word-slider input[type="range"] {
   width: 100%;
   margin: 0;
@@ -5791,13 +6033,13 @@ onUnmounted(() => {
 .wf-word-slider-track::before {
   content: "";
   position: absolute;
-  left: 8%;
-  right: 28%;
+  left: 0;
+  right: 0;
   top: 50%;
-  height: 6px;
+  height: 4px;
   transform: translateY(-50%);
   border-radius: 999px;
-  background: color-mix(in srgb, var(--primary) 20%, transparent);
+  background: color-mix(in srgb, var(--primary) 14%, var(--wf-button-bg));
   pointer-events: none;
 }
 

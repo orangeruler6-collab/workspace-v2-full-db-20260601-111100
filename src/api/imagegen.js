@@ -1,9 +1,29 @@
 import { request } from './client'
 
+function escapeBadPercent(value) {
+  return String(value || '').replace(/%(?![0-9A-Fa-f]{2})/g, '%25')
+}
+
 export function normalizeImageUrl(value) {
-  const raw = value || ''
-  if (!raw || raw.startsWith('data:') || raw.startsWith('/') || /^https?:\/\//i.test(raw)) return raw
+  const raw = String(value || '').trim()
+  if (!raw || raw.startsWith('data:')) return raw
+  const safeRaw = escapeBadPercent(raw)
+  if (safeRaw.startsWith('/uploads/') || /^https?:\/\//i.test(safeRaw)) return normalizeUploadUrl(safeRaw)
+  if (safeRaw.startsWith('/')) return safeRaw
   return 'data:image/png;base64,' + raw
+}
+
+function normalizeUploadUrl(value) {
+  if (typeof window === 'undefined') return value
+  try {
+    const url = new URL(escapeBadPercent(value), window.location.origin)
+    if (url.pathname.startsWith('/uploads/')) {
+      return window.location.origin + url.pathname + url.search + url.hash
+    }
+    return url.toString()
+  } catch (e) {
+    return value
+  }
 }
 
 export function generateMiniMaxImage(payload) {

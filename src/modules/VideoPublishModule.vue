@@ -135,9 +135,9 @@
                 v-model="publishForm.manualCopyText"
                 class="inp manual-copy-input"
                 rows="8"
-                placeholder="每条文案之间空一行，例如：&#10;第一条视频标题/文案&#10;可以多行描述&#10;&#10;第二条视频标题/文案&#10;继续写完整发布文案"></textarea>
+                placeholder="直接粘贴多条发布文案即可；会自动识别空行、---、1、/2、/第1条/标题：等分隔。"></textarea>
               <small :class="{ warn: manualCopyBlocks.length < videoItems.length }">
-                已识别 {{ manualCopyBlocks.length }} 条文案；当前 {{ videoItems.length }} 个视频。发布时按上传顺序逐条套用。
+                已识别 {{ manualCopyBlocks.length }} 条文案；会自动按空行、编号、标题标记等拆条。
               </small>
             </label>
           </section>
@@ -151,6 +151,7 @@
               <div class="commerce-preset-actions">
                 <button type="button" class="btn btn-ghost btn-sm" @click="applyCommercePreset('chisel')">凿子</button>
                 <button type="button" class="btn btn-ghost btn-sm" @click="applyCommercePreset('fashion')">时装</button>
+                <button type="button" class="btn btn-ghost btn-sm" @click="applyCommercePreset('jinnang')">锦囊</button>
               </div>
             </div>
 
@@ -159,6 +160,7 @@
               <select v-model="publishForm.commercePreset" class="inp" @change="applyCommercePreset(publishForm.commercePreset)">
                 <option value="chisel">逆水寒凿子带货</option>
                 <option value="fashion">逆水寒时装带货</option>
+                <option value="jinnang">逆水寒锦囊带货</option>
               </select>
             </label>
 
@@ -239,24 +241,28 @@
           <div class="queue-panel" :class="{ active: publishForm.queueEnabled }">
             <label class="queue-toggle">
               <input v-model="publishForm.queueEnabled" type="checkbox" />
-              <span>加入定时队列</span>
+              <span>加入后台队列</span>
             </label>
             <div v-if="publishForm.queueEnabled" class="queue-grid">
+              <label class="queue-immediate">
+                <input v-model="publishForm.queueImmediate" type="checkbox" />
+                <span>立即排队</span>
+              </label>
               <label class="field">
                 <span>开始日期</span>
-                <input v-model="publishForm.queueDate" class="inp" type="date" />
+                <input v-model="publishForm.queueDate" class="inp" type="date" :disabled="publishForm.queueImmediate" />
               </label>
               <label class="field">
                 <span>开始时间</span>
-                <input v-model="publishForm.queueTime" class="inp" type="time" />
+                <input v-model="publishForm.queueTime" class="inp" type="time" :disabled="publishForm.queueImmediate" />
               </label>
               <label class="field">
-                <span>间隔分钟</span>
-                <input v-model.number="publishForm.queueIntervalMinutes" class="inp" type="number" min="0" max="1440" step="1" />
+                <span>本次入队条数</span>
+                <input v-model.number="publishForm.queueBatchSize" class="inp" type="number" min="1" :max="videoItems.length || 1" step="1" />
               </label>
             </div>
             <small v-if="publishForm.queueEnabled">
-              按当前账号 {{ selectedAccount.name }} 入队；多条视频会按间隔顺延，到点后后端自动触发。
+              按当前账号 {{ selectedAccount.name }} 入队；{{ publishForm.queueImmediate ? '立即进入后台队列' : '到点后进入后台队列' }}，失败单条会跳过继续。
             </small>
           </div>
 
@@ -283,16 +289,23 @@
             <strong>发布账号</strong>
             <span>账号决定绑定平台身份。</span>
           </div>
-          <input v-model.trim="accountSearch" class="inp" placeholder="搜索账号" />
-          <select v-model="selectedAccountId" class="inp" @change="syncSelectedAccount">
-            <option v-for="account in filteredAccounts" :key="account.id" :value="account.id">
-              {{ account.name }}
+          <select v-model="selectedAccountGroup" class="inp" @change="syncAccountGroup">
+            <option value="all">{{ publishForm.commerceEnabled ? '全部带货账号' : '全部小组' }}</option>
+            <option v-for="group in accountGroupOptions" :key="group.name" :value="group.name">
+              {{ group.name }}
             </option>
           </select>
+          <select v-model="selectedAccountId" class="inp" @change="syncSelectedAccount">
+            <option v-for="account in filteredAccounts" :key="account.id" :value="account.id">
+              {{ account.name }} · {{ accountGroupName(account) }}
+            </option>
+          </select>
+          <input v-model.trim="accountSearch" class="inp" placeholder="搜索账号" />
           <div class="selected-account">
             <span>{{ selectedAccount.avatar }}</span>
             <div>
               <strong>{{ selectedAccount.name }}</strong>
+              <small>{{ accountGroupName(selectedAccount) }}</small>
               <small>{{ selectedAccount.description }}</small>
             </div>
           </div>
@@ -373,7 +386,7 @@
           </div>
           <div class="queue-status-bar" :class="{ paused: queueStatus.paused }">
             <div>
-              <strong>{{ queueStatus.paused ? '定时队列已暂停' : '定时队列运行中' }}</strong>
+              <strong>{{ queueStatus.paused ? '后台队列已暂停' : '后台队列运行中' }}</strong>
               <small>
                 待执行 {{ queueStatus.scheduled_count }} 条
                 <template v-if="queueStatus.next_scheduled_at"> · 下次 {{ formatJobTime(queueStatus.next_scheduled_at) }}</template>
@@ -414,6 +427,7 @@
 <script setup>
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import { listMaterials } from '../api/materials'
+import { getCurrentAuthUser } from '../api/client'
 import { chatMinimax } from '../api/tools'
 import {
   cancelVideoPublishJob,
@@ -524,9 +538,41 @@ const fashionCommerceDefaults = {
     '这波衣品在线'
   ].join('\n')
 }
+const jinnangCommerceDefaults = {
+  id: 'jinnang',
+  name: '逆水寒锦囊',
+  tags: '#逆水寒 #逆水寒手游 #逆水寒全民制作人',
+  productText: '逆水寒锦囊',
+  productUrl: 'https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html?id=3822602349751435366&origin_type=pc_buyin_selection_decision',
+  descriptionPool: [
+    '锦囊这波安排上',
+    '今天开个锦囊看看',
+    '逆水寒锦囊来了',
+    '这波锦囊挺香',
+    '锦囊好物看这里'
+  ].join('\n'),
+  copyPool: [
+    '锦囊这波安排上',
+    '今天开个锦囊看看',
+    '逆水寒锦囊来了',
+    '这波锦囊挺香',
+    '锦囊好物看这里',
+    '这个锦囊有点东西',
+    '今天试试锦囊手气',
+    '锦囊内容直接看',
+    '逆水寒锦囊实测',
+    '这次锦囊别错过',
+    '看看锦囊能开啥',
+    '锦囊安排一下',
+    '这波锦囊值不值',
+    '逆水寒锦囊上车',
+    '锦囊小测来了'
+  ].join('\n')
+}
 const commercePresets = {
   chisel: chiselCommerceDefaults,
-  fashion: fashionCommerceDefaults
+  fashion: fashionCommerceDefaults,
+  jinnang: jinnangCommerceDefaults
 }
 
 function padTimePart(value) {
@@ -555,69 +601,11 @@ const platformColors = {
 
 const defaultExcludedPlatformIds = new Set(['wechatVideo'])
 
-const publishAccounts = [
-  {
-    id: 'tianji-mei',
-    name: '天机妹',
-    avatar: '机',
-    description: '生活感、地域趣闻、轻剧情内容优先',
-    styleHint: '口语化、接地气，有一点吐槽感，但不要太硬。',
-    platforms: [
-      platformAccount('bilibili', 'B站', 'B', 'B站 · 天机妹', 'tianji-mei-publish', 'ready'),
-      platformAccount('kuaishou', '快手', 'K', '快手 · 天机妹', 'tianji-mei-publish', 'ready'),
-      platformAccount('xiaohongshu', '小红书', 'R', '小红书 · 天机妹', 'tianji-mei-publish', 'ready'),
-      platformAccount('wechatVideo', '视频号', 'V', '视频号 · 天机妹', 'tianji-mei-publish', 'ready'),
-      platformAccount('douyin', '抖音', 'D', '抖音 · 天机妹', 'tianji-mei-publish', 'ready')
-    ]
-  },
-  {
-    id: 'maixiaohua',
-    name: '麦晓花',
-    avatar: '麦',
-    description: '生活分享、情绪观点、女性向内容优先',
-    styleHint: '语气自然亲近，先给观点和情绪，再补充故事细节。',
-    platforms: [
-      platformAccount('bilibili', 'B站', 'B', 'B站 · 麦晓花', 'maixiaohua-publish', 'ready'),
-      platformAccount('kuaishou', '快手', 'K', '快手 · 麦晓花喔', 'maixiaohua-publish', 'ready'),
-      platformAccount('xiaohongshu', '小红书', 'R', '小红书 · 麦晓花', 'maixiaohua-publish', 'ready'),
-      platformAccount('wechatVideo', '视频号', 'V', '视频号 · 麦晓花来咯', 'maixiaohua-publish', 'ready'),
-      platformAccount('douyin', '抖音', 'D', '抖音 · 麦晓花', 'maixiaohua-publish', 'ready')
-    ]
-  },
-  {
-    id: 'nishuihan-fanshiqii',
-    name: '逆水寒-饭十七',
-    avatar: '饭',
-    description: '逆水寒手游带货发布账号',
-    styleHint: '短句、强情绪、围绕欧气凿子和祥瑞出货表达。',
-    platforms: [
-      platformAccount('douyin', '抖音', 'D', '抖音 · 饭十七', 'dvabrcmr', 'ready')
-    ]
-  },
-  {
-    id: 'nishuihan-youdianhuang',
-    name: '游点慌',
-    avatar: '游',
-    description: '逆水寒手游带货发布账号',
-    styleHint: '短句、强情绪、围绕欧气凿子和祥瑞出货表达。',
-    platforms: [
-      platformAccount('douyin', '抖音', 'D', '抖音 · 游点慌', 'b3uk5kjf', 'ready')
-    ]
-  },
-  {
-    id: 'nishuihan-leiya',
-    name: '雷鸭',
-    avatar: '雷',
-    description: '逆水寒手游带货发布账号',
-    styleHint: '短句、强情绪、围绕欧气凿子和祥瑞出货表达。',
-    platforms: [
-      platformAccount('douyin', '抖音', 'D', '抖音 · 雷鸭Fist', 'h4g7ab4y', 'ready')
-    ]
-  }
-]
-
-const selectedAccountId = ref(publishAccounts[0].id)
-const selectedPlatformIds = ref(readyPlatformIds(publishAccounts[0]))
+const emptyPublishAccount = { id: '', name: '账号目录读取中', avatar: '·', description: '正在读取后端账号目录', styleHint: '', platforms: [] }
+const publishAccounts = ref([])
+const selectedAccountGroup = ref('')
+const selectedAccountId = ref('')
+const selectedPlatformIds = ref([])
 const accountSearch = ref('')
 const videoFileInput = ref(null)
 const localDragging = ref(false)
@@ -679,22 +667,63 @@ const publishForm = reactive({
   coverMode: 'auto',
   visibility: 'public',
   publishTime: 'now',
-  queueEnabled: false,
+  queueEnabled: true,
+  queueImmediate: true,
   queueDate: dateInputValue(queueStartDefault),
   queueTime: timeInputValue(queueStartDefault),
-  queueIntervalMinutes: 10,
+  queueIntervalMinutes: 0,
+  queueBatchSize: 10,
   allowComment: true,
   allowShare: true,
   allowDownload: false
 })
 
-const selectedAccount = computed(() => publishAccounts.find(account => account.id === selectedAccountId.value) || publishAccounts[0])
+function normalizeGroupName(value) {
+  return String(value || '').trim()
+}
+
+function currentUserGroupName() {
+  const user = getCurrentAuthUser() || {}
+  return normalizeGroupName(user.group_name || user.groupName || user.group)
+}
+
+function accountGroupName(account) {
+  return normalizeGroupName(account?.groupName || account?.group_name || account?.group) || '待接入'
+}
+
+function isCommerceAccount(account = selectedAccount.value) {
+  const accountId = String(account?.id || '')
+  return accountId.startsWith('nishuihan-') || accountId === 'youxia-bengbeng'
+}
+
+function accountsForCurrentMode(accounts) {
+  const rows = Array.isArray(accounts) ? accounts : []
+  return rows.filter(account => publishForm.commerceEnabled ? isCommerceAccount(account) : !isCommerceAccount(account))
+}
+
+const modePublishAccounts = computed(() => accountsForCurrentMode(publishAccounts.value))
+const selectedAccount = computed(() => modePublishAccounts.value.find(account => account.id === selectedAccountId.value) || modePublishAccounts.value[0] || emptyPublishAccount)
+const accountGroupOptions = computed(() => {
+  const rows = new Map()
+  modePublishAccounts.value.forEach(account => {
+    const groupName = accountGroupName(account)
+    if (!rows.has(groupName)) rows.set(groupName, { name: groupName, groupId: Number(account.groupId || account.group_id) || 999 })
+  })
+  return Array.from(rows.values()).sort((a, b) => a.groupId - b.groupId || a.name.localeCompare(b.name, 'zh-CN'))
+})
+const accountsInSelectedGroup = computed(() => {
+  const groupName = normalizeGroupName(selectedAccountGroup.value)
+  if (!groupName || groupName === 'all') return modePublishAccounts.value
+  return modePublishAccounts.value.filter(account => accountGroupName(account) === groupName)
+})
 const filteredAccounts = computed(() => {
   const keyword = accountSearch.value.toLowerCase()
-  if (!keyword) return publishAccounts
-  return publishAccounts.filter(account => {
+  const scoped = accountsInSelectedGroup.value
+  if (!keyword) return scoped
+  return scoped.filter(account => {
     return [
       account.name,
+      accountGroupName(account),
       account.description,
       account.styleHint,
       ...account.platforms.map(platform => platform.handle)
@@ -707,14 +736,22 @@ const activeVideo = computed(() => videoItems.value.find(item => queueId(item) =
 const activeCommercePreset = computed(() => commercePresets[publishForm.commercePreset] || chiselCommerceDefaults)
 const commerceCopyQueueRemaining = computed(() => commerceQueueForPreset(activeCommercePreset.value.id).length)
 const manualCopyBlocks = computed(() => parseManualCopyBlocks(publishForm.manualCopyText))
-const taskCount = computed(() => videoItems.value.length * selectedPlatformIds.value.length)
+const effectiveQueueBatchSize = computed(() => {
+  if (!publishForm.queueEnabled) return videoItems.value.length
+  const total = videoItems.value.length
+  if (!total) return 0
+  const requested = Number(publishForm.queueBatchSize) || 10
+  return Math.max(1, Math.min(total, requested))
+})
+const remainingAfterQueueBatch = computed(() => Math.max(0, videoItems.value.length - effectiveQueueBatchSize.value))
+const taskCount = computed(() => effectiveQueueBatchSize.value * selectedPlatformIds.value.length)
 const taskCountLabel = computed(() => {
-  if (publishForm.queueEnabled) return '本次将加入定时队列的记录'
+  if (publishForm.queueEnabled) return '本次将加入后台队列的记录'
   return publishForm.commerceEnabled ? '本次将发布的抖音带货记录' : '本次将直接发布的平台记录'
 })
 const canPublishNow = computed(() => videoItems.value.length > 0 && selectedPlatformIds.value.length > 0)
 const submitText = computed(() => {
-  if (publishForm.queueEnabled) return '加入定时队列'
+  if (publishForm.queueEnabled) return publishForm.queueImmediate ? '立即排队' : '加入后台队列'
   return publishForm.commerceEnabled ? '开始抖音带货发布' : '立即发布到所选平台'
 })
 const aiSourceLabel = computed(() => {
@@ -728,13 +765,62 @@ function platformAccount(id, name, icon, handle, profile, status) {
   return { id, name, icon, handle, profile, status, color: platformColors[id] || 'var(--surface2)' }
 }
 
+function normalizePublishAccount(account) {
+  const platforms = Array.isArray(account?.platforms) ? account.platforms : []
+  return {
+    id: account?.id || account?.account_id || '',
+    name: account?.name || account?.account_name || '',
+    avatar: account?.avatar || String(account?.name || account?.account_name || '?').slice(0, 1),
+    groupName: account?.groupName || account?.group_name || account?.group || '待接入',
+    groupId: account?.groupId || account?.group_id || 0,
+    owner: account?.owner || '',
+    description: account?.description || '',
+    styleHint: account?.styleHint || account?.style_hint || '',
+    platforms: platforms.map(platform => platformAccount(
+      platform.id || platform.platform_id,
+      platform.name || platform.platform_name || platform.id || platform.platform_id,
+      platform.icon || String(platform.name || platform.platform_name || platform.id || '?').slice(0, 1),
+      platform.handle || platform.platform_handle || '',
+      platform.profile || platform.profile_alias || platform.profileAlias || '',
+      platform.status || platform.login_status || platform.loginStatus || 'unknown'
+    )).filter(platform => platform.id)
+  }
+}
+
 function readyPlatformIds(account) {
   return account.platforms
     .filter(platform => platform.status === 'ready' && !defaultExcludedPlatformIds.has(platform.id))
     .map(platform => platform.id)
 }
 
+function ensureSelectedAccountVisible() {
+  const rows = modePublishAccounts.value
+  if (!rows.length) {
+    selectedAccountId.value = ''
+    selectedPlatformIds.value = []
+    return
+  }
+  if (!rows.some(account => account.id === selectedAccountId.value)) {
+    selectedAccountId.value = rows[0].id
+    selectedAccountGroup.value = accountGroupName(rows[0])
+  }
+  const platformSet = new Set(selectedAccount.value.platforms.map(platform => platform.id))
+  selectedPlatformIds.value = selectedPlatformIds.value.filter(id => platformSet.has(id))
+  if (!selectedPlatformIds.value.length) selectedPlatformIds.value = readyPlatformIds(selectedAccount.value)
+}
+
+function syncAccountGroup() {
+  const rows = accountsInSelectedGroup.value
+  if (!rows.some(account => account.id === selectedAccountId.value)) {
+    selectedAccountId.value = rows[0]?.id || ''
+  }
+  selectedPlatformIds.value = readyPlatformIds(selectedAccount.value)
+  if (selectedAccountId.value) aiHint.value = `${selectedAccount.value.name} 已按小组筛选选中。`
+}
+
 function syncSelectedAccount() {
+  const groupName = accountGroupName(selectedAccount.value)
+  if (groupName) selectedAccountGroup.value = groupName
   selectedPlatformIds.value = readyPlatformIds(selectedAccount.value)
   aiHint.value = `${selectedAccount.value.name} 已选中，平台账号已同步。`
 }
@@ -915,10 +1001,34 @@ function commerceDescriptionLines() {
 }
 
 function parseManualCopyBlocks(value) {
-  return String(value || '')
-    .split(/\r?\n\s*\r?\n+/)
+  const text = String(value || '').trim().replace(/\r\n/g, '\n')
+  if (!text) return []
+  const byLine = text
+    .split('\n')
     .map(block => block.trim())
     .filter(Boolean)
+  const lineLikeShortCopies = byLine.length > 1
+    && byLine.every(line => Array.from(line).length <= 42)
+    && byLine.filter(line => /[。！？!?~～]$/.test(line) || Array.from(line).length <= 24).length >= Math.ceil(byLine.length * 0.7)
+  const explicit = text
+    .split(/\n\s*(?:---+|===+|###)\s*\n/)
+    .map(block => block.trim())
+    .filter(Boolean)
+  if (explicit.length > 1) return explicit
+  if (lineLikeShortCopies) return byLine
+  const byBlankLine = text
+    .split(/\n\s*\n+/)
+    .map(block => block.trim())
+    .filter(Boolean)
+  if (byBlankLine.length > 1) return byBlankLine
+  const markerBreaks = text
+    .replace(/(^|\s+)(?=(?:\d{1,3}[、.．)\)]|[①②③④⑤⑥⑦⑧⑨⑩]|第[一二三四五六七八九十百千万\d]+条)\s*\S)/g, '$1\n@@COPY_SPLIT@@')
+    .replace(/(^|\s+)(?=(?:标题|文案)\s*\d{0,3}\s*[:：]\s*\S)/g, '$1\n@@COPY_SPLIT@@')
+    .split(/\n@@COPY_SPLIT@@/)
+    .map(block => block.trim())
+    .filter(Boolean)
+  if (markerBreaks.length > 1) return markerBreaks
+  return byLine.length > 1 ? byLine : [text]
 }
 
 function manualCopyTitle(block) {
@@ -949,11 +1059,12 @@ function applyManualCopiesToVideos(items, startIndex = 0) {
 function validateManualCopyForm() {
   if (publishForm.copyMode !== 'manual') return true
   const count = manualCopyBlocks.value.length
+  const required = publishForm.queueEnabled ? effectiveQueueBatchSize.value : videoItems.value.length
   if (!count) {
-    showToast('请填写手动发布文案，文案之间用空行分隔', 'warning')
+    showToast('请填写手动发布文案，系统会自动识别多条文案', 'warning')
     return false
   }
-  if (count < videoItems.value.length) {
+  if (count < required) {
     showToast(`手动文案只有 ${count} 条，当前有 ${videoItems.value.length} 个视频，请补齐后再发布`, 'warning')
     return false
   }
@@ -1061,23 +1172,25 @@ function selectDouyinOnly() {
   if (douyin) selectedPlatformIds.value = ['douyin']
 }
 
-function isCommerceAccount(account = selectedAccount.value) {
-  return String(account?.id || '').startsWith('nishuihan-')
-}
-
 function ensureCommerceAccount() {
   if (isCommerceAccount()) return false
-  const fallback = publishAccounts.find(account => account.id === 'nishuihan-fanshiqii')
-    || publishAccounts.find(account => String(account.id || '').startsWith('nishuihan-'))
-  if (!fallback) return false
-  selectedAccountId.value = fallback.id
-  selectedPlatformIds.value = readyPlatformIds(fallback)
-  aiHint.value = `逆水寒带货模式已切换到 ${fallback.name}，避免发到普通账号。`
+  const commerceAccount = publishAccounts.value.find(account => account.id === 'nishuihan-fanshiqii')
+    || publishAccounts.value.find(account => String(account.id || '').startsWith('nishuihan-'))
+  if (!commerceAccount) return false
+  selectedAccountId.value = commerceAccount.id
+  selectedAccountGroup.value = accountGroupName(commerceAccount)
+  selectedPlatformIds.value = readyPlatformIds(commerceAccount)
+  aiHint.value = `逆水寒带货模式已切换到 ${commerceAccount.name}，避免发到普通账号。`
   return true
 }
 
 function handleCommerceToggle() {
-  if (!publishForm.commerceEnabled) return
+  if (!publishForm.commerceEnabled) {
+    ensureSelectedAccountVisible()
+    return
+  }
+  selectedAccountGroup.value = 'all'
+  ensureSelectedAccountVisible()
   const switched = ensureCommerceAccount()
   applyCommercePreset(publishForm.commercePreset)
   if (switched) showToast('已自动切到逆水寒-饭十七，避免发错账号', 'info')
@@ -1118,6 +1231,7 @@ function validateCommerceForm() {
 
 function queueStartTimestamp() {
   if (!publishForm.queueEnabled) return 0
+  if (publishForm.queueImmediate) return Math.floor(Date.now() / 1000)
   const date = String(publishForm.queueDate || '').trim()
   const time = String(publishForm.queueTime || '').trim() || '00:00'
   const ts = Date.parse(`${date}T${time}:00`)
@@ -1127,10 +1241,11 @@ function queueStartTimestamp() {
 function validateQueueForm() {
   if (!publishForm.queueEnabled) return true
   if (!queueStartTimestamp()) {
-    showToast('请填写有效的定时队列开始时间', 'warning')
+    showToast('请填写有效的后台队列开始时间', 'warning')
     return false
   }
-  publishForm.queueIntervalMinutes = Math.max(0, Math.min(1440, Number(publishForm.queueIntervalMinutes) || 0))
+  publishForm.queueIntervalMinutes = 0
+  publishForm.queueBatchSize = Math.max(1, Math.min(videoItems.value.length || 1, Number(publishForm.queueBatchSize) || 10))
   return true
 }
 
@@ -1216,6 +1331,10 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function isUserStopError(err) {
+  return publishStopRequested.value || publishPaused.value || /立即暂停|已暂停|cancelled|CANCELLED/i.test(String(err?.message || err || ''))
+}
+
 function sleepUntilPublishActive(ms) {
   return new Promise(resolve => {
     const started = Date.now()
@@ -1285,15 +1404,21 @@ function formatJobTime(ts) {
 }
 
 function bindingPayload(platform) {
-  const fallbackProfile = platform.profile || opencliProfiles.value[0]?.alias || opencliProfiles.value[0]?.context_id
+  const profileAlias = bindingFor(platform).profile_alias || platform.profile
   return {
     account_id: selectedAccount.value.id,
     account_name: selectedAccount.value.name,
     platform_id: platform.id,
     platform_name: platform.name,
     platform_handle: platform.handle,
-    profile_alias: bindingFor(platform).profile_alias || fallbackProfile || platform.profile
+    profile_alias: profileAlias || ''
   }
+}
+
+function requireBindingPayload(platform) {
+  const payload = bindingPayload(platform)
+  if (!payload.profile_alias) throw new Error(`账号目录缺少 ${selectedAccount.value.name || payload.account_id} / ${platform.name || platform.id} 的 Profile`)
+  return payload
 }
 
 async function loadPublishAccounts() {
@@ -1301,9 +1426,36 @@ async function loadPublishAccounts() {
     const data = await listVideoPublishAccounts({ includeProfiles: true })
     accountBindings.value = data.accounts || []
     opencliProfiles.value = data.profiles || []
+    const catalogAccounts = Array.isArray(data.catalog_accounts) ? data.catalog_accounts.map(normalizePublishAccount).filter(account => account.id && account.platforms.length) : []
+    if (catalogAccounts.length) {
+      publishAccounts.value = catalogAccounts
+      const userGroup = currentUserGroupName()
+      if (!selectedAccountGroup.value && userGroup && publishAccounts.value.some(account => accountGroupName(account) === userGroup)) {
+        selectedAccountGroup.value = userGroup
+      }
+      if (!selectedAccountGroup.value && selectedAccountId.value) {
+        const current = publishAccounts.value.find(account => account.id === selectedAccountId.value)
+        if (current) selectedAccountGroup.value = accountGroupName(current)
+      }
+      if (!selectedAccountGroup.value) selectedAccountGroup.value = accountGroupName(publishAccounts.value[0])
+      const groupRows = selectedAccountGroup.value && selectedAccountGroup.value !== 'all'
+        ? modePublishAccounts.value.filter(account => accountGroupName(account) === selectedAccountGroup.value)
+        : modePublishAccounts.value
+      const scopedRows = groupRows.length ? groupRows : modePublishAccounts.value
+      if (!scopedRows.some(account => account.id === selectedAccountId.value)) selectedAccountId.value = scopedRows[0].id
+      const selectedPlatformSet = new Set(selectedAccount.value.platforms.map(platform => platform.id))
+      selectedPlatformIds.value = selectedPlatformIds.value.filter(id => selectedPlatformSet.has(id))
+      if (!selectedPlatformIds.value.length) selectedPlatformIds.value = readyPlatformIds(selectedAccount.value)
+      ensureSelectedAccountVisible()
+    }
   } catch (e) {
     accountBindings.value = []
     opencliProfiles.value = []
+    publishAccounts.value = []
+    selectedAccountGroup.value = ''
+    selectedAccountId.value = ''
+    selectedPlatformIds.value = []
+    showToast('账号目录读取失败：' + (e.message || '后端未返回账号目录'), 'error')
   }
 }
 
@@ -1311,7 +1463,7 @@ async function saveBinding(platform) {
   const key = platformKey(selectedAccount.value, platform)
   accountBusyKey.value = key
   try {
-    await saveVideoPublishAccount(bindingPayload(platform))
+    await saveVideoPublishAccount(requireBindingPayload(platform))
     await loadPublishAccounts()
     showToast('发布账号 Profile 已绑定', 'success')
   } catch (e) {
@@ -1325,8 +1477,9 @@ async function launchProfile(platform) {
   const key = platformKey(selectedAccount.value, platform)
   accountBusyKey.value = key
   try {
-    await saveVideoPublishAccount(bindingPayload(platform))
-    const data = await launchVideoPublishProfile(bindingPayload(platform))
+    const payload = requireBindingPayload(platform)
+    await saveVideoPublishAccount(payload)
+    const data = await launchVideoPublishProfile(payload)
     await loadPublishAccounts()
     showToast(data.ok ? `已拉起：${data.profile_directory || 'Chrome Profile'}` : ('拉起失败：' + (data.error || '未知错误')), data.ok ? 'success' : 'error')
   } catch (e) {
@@ -1340,8 +1493,9 @@ async function checkLogin(platform) {
   const key = platformKey(selectedAccount.value, platform)
   accountBusyKey.value = key
   try {
-    await saveVideoPublishAccount(bindingPayload(platform))
-    const data = await checkVideoPublishLogin(bindingPayload(platform))
+    const payload = requireBindingPayload(platform)
+    await saveVideoPublishAccount(payload)
+    const data = await checkVideoPublishLogin(payload)
     await loadPublishAccounts()
     const ready = data.ready !== undefined ? data.ready : data.login_status === 'ready'
     showToast(ready ? '登录态和发布页可用' : '登录态需要处理：' + (data.error || '请打开登录页确认'), ready ? 'success' : 'warning')
@@ -1356,8 +1510,9 @@ async function openLogin(platform) {
   const key = platformKey(selectedAccount.value, platform)
   accountBusyKey.value = key
   try {
-    await saveVideoPublishAccount(bindingPayload(platform))
-    await openVideoPublishLogin(bindingPayload(platform))
+    const payload = requireBindingPayload(platform)
+    await saveVideoPublishAccount(payload)
+    await openVideoPublishLogin(payload)
     showToast('已打开登录窗口，请在对应 Profile 中完成登录', 'info')
   } catch (e) {
     showToast('打开登录窗口失败：' + (e.message || '未知错误'), 'error')
@@ -1457,6 +1612,23 @@ function removeVideo(id) {
   if (activeVideoId.value === id) activeVideoId.value = queueId(videoItems.value[0] || {}) || ''
 }
 
+function removeQueuedVideosByIds(ids) {
+  const removeSet = new Set((ids || []).filter(Boolean))
+  if (!removeSet.size) return 0
+  const before = videoItems.value.length
+  videoItems.value = videoItems.value.filter(item => !removeSet.has(queueId(item)))
+  if (!videoItems.value.some(item => queueId(item) === activeVideoId.value)) {
+    activeVideoId.value = queueId(videoItems.value[0] || {}) || ''
+  }
+  return before - videoItems.value.length
+}
+
+function consumeManualCopyBlocks(count) {
+  if (publishForm.copyMode !== 'manual' || !count) return
+  const rest = manualCopyBlocks.value.slice(count)
+  publishForm.manualCopyText = rest.join('\n\n')
+}
+
 function clearVideos() {
   videoItems.value = []
   activeVideoId.value = ''
@@ -1496,16 +1668,24 @@ async function ensureServerVideo(item) {
   }
 }
 
-async function prepareVideosForJobs() {
+async function prepareVideosForJobs(items = videoItems.value, options = {}) {
   const prepared = []
-  for (let i = 0; i < videoItems.value.length; i += 1) {
-    const item = videoItems.value[i]
+  const source = Array.isArray(items) ? items : videoItems.value
+  for (let i = 0; i < source.length; i += 1) {
+    const item = source[i]
     if (item.source === 'local' && item.file && !item.url) {
-      publishingText.value = `上传本地视频 ${i + 1}/${videoItems.value.length}`
+      publishingText.value = `上传本地视频 ${i + 1}/${source.length}`
     }
-    prepared.push(await ensureServerVideo(item))
+    try {
+      const ready = await ensureServerVideo(item)
+      prepared.push(ready)
+      videoItems.value = videoItems.value.map(row => queueId(row) === queueId(item) ? ready : row)
+    } catch (err) {
+      const message = err?.message || '上传失败'
+      pushPublishEvent(`素材准备失败，已跳过：${materialTitle(item)}｜${message}`, 'error')
+      if (!options.continueOnError) throw err
+    }
   }
-  videoItems.value = prepared
   return prepared
 }
 
@@ -1547,17 +1727,20 @@ async function transcribeActiveVideoForCopy() {
 
 async function ensureSelectedBindings() {
   for (const platform of selectedPlatforms.value) {
-    await saveVideoPublishAccount(bindingPayload(platform))
+    await saveVideoPublishAccount(requireBindingPayload(platform))
   }
   await loadPublishAccounts()
 }
 
 function serializePlatformForJob(platform) {
+  const binding = requireBindingPayload(platform)
+  const profileAlias = binding.profile_alias || platform.profile
   return {
     id: platform.id,
     name: platform.name,
     handle: platform.handle,
-    profile: platform.profile,
+    profile: profileAlias,
+    profile_alias: profileAlias,
     status: platform.status
   }
 }
@@ -1635,7 +1818,7 @@ function applyProjectDeliveryContext(payload) {
 
 async function loadRecentJobs() {
   try {
-    const data = await listVideoPublishJobs({ limit: 20 })
+    const data = await listVideoPublishJobs({ limit: 120 })
     recentJobs.value = data.jobs || []
     loadQueueStatus()
     syncPublishingStateFromJobs()
@@ -1666,9 +1849,9 @@ async function toggleQueuePaused() {
     const data = await pauseVideoPublishQueue(nextPaused)
     queueStatus.paused = Boolean(data.paused)
     await loadRecentJobs()
-    showToast(queueStatus.paused ? '定时队列已暂停' : '定时队列已恢复', queueStatus.paused ? 'warning' : 'success')
+    showToast(queueStatus.paused ? '后台队列已暂停' : '后台队列已恢复', queueStatus.paused ? 'warning' : 'success')
   } catch (e) {
-    showToast('定时队列状态更新失败：' + (e.message || '未知错误'), 'error')
+    showToast('后台队列状态更新失败：' + (e.message || '未知错误'), 'error')
   } finally {
     queueStatusBusy.value = false
   }
@@ -1690,16 +1873,6 @@ function syncPublishingStateFromJobs() {
     return
   }
   if (publishingNow.value) return
-  const active = recentJobs.value.find(job => String(job.status || '') === 'publishing')
-  if (!active) return
-  publishingNow.value = true
-  publishPaused.value = false
-  publishStopRequested.value = false
-  activePublishJobId.value = active.id
-  const progress = jobProgressText(active) || '已有发布任务正在执行'
-  publishingText.value = progress.slice(0, 12)
-  setPublishActivity('发布中', progress, 55, 'active')
-  pushPublishEvent(`已接管正在执行的发布任务 #${active.id}`)
 }
 
 function canRunJob(job) {
@@ -1913,7 +2086,7 @@ async function runCreatedPublishIds(ids, results, currentIndex, totalCount) {
       }
     } catch (err) {
       if (progressTimer) window.clearInterval(progressTimer)
-      if (publishStopRequested.value) {
+      if (isUserStopError(err)) {
         results.push({ id, ok: false, cancelled: true, error: '发布已立即暂停' })
         pushPublishEvent(`已暂停：记录 #${id} 已停止`, 'warning')
         setPublishActivity('已暂停', `记录 #${id} 已停止，后续记录未继续执行`, pct, 'active')
@@ -1922,10 +2095,9 @@ async function runCreatedPublishIds(ids, results, currentIndex, totalCount) {
       }
       results.push({ id, ok: false, error: err.message || '执行失败' })
       pushPublishEvent(`发布失败：记录 #${id}，${err.message || '执行失败'}`, 'error')
-      setPublishActivity('队列已停止', `记录 #${id} 失败，后续记录未继续打开页面`, pct, 'bad')
-      publishPaused.value = true
+      setPublishActivity('单条失败，继续队列', `记录 #${id} 失败，已跳过并继续后续任务`, pct, 'bad')
       await loadRecentJobs()
-      break
+      continue
     }
     activePublishJobId.value = 0
     await loadRecentJobs()
@@ -1969,6 +2141,7 @@ async function publishNow() {
       for (let i = 0; i < total; i += 1) {
         if (publishStopRequested.value) break
         await waitWhilePublishPaused(i, total)
+        try {
         const preparedVideo = applyCommerceCopiesToVideos(applyManualCopiesToVideos([await prepareOneVideoForJob(videoItems.value[i], i, total)], i))[0]
         if (publishStopRequested.value) break
         publishingText.value = `创建任务 ${i + 1}/${total}`
@@ -1987,10 +2160,24 @@ async function publishNow() {
         const ids = jobs.map(job => job.id).filter(Boolean)
         if (!ids.length) throw new Error('没有生成可执行的发布记录')
         await runCreatedPublishIds(ids, results, i, total)
-        if (publishPaused.value || results.some(item => !item.ok && !item.cancelled)) break
+        if (publishStopRequested.value || publishPaused.value) break
         await loadRecentJobs()
         if (publishStopRequested.value) break
         await waitBeforeNextDirectPublish(i + 1, total)
+        } catch (err) {
+          if (isUserStopError(err)) {
+            results.push({ id: 0, ok: false, cancelled: true, error: err?.message || '发布已立即暂停' })
+            pushPublishEvent(`已暂停：第 ${i + 1}/${total} 条之后停止，后续任务不再继续`, 'warning')
+            setPublishActivity('已暂停', `第 ${i + 1}/${total} 条之后停止，后续任务不再继续`, 100, 'active')
+            await loadRecentJobs()
+            break
+          }
+          results.push({ id: 0, ok: false, error: err?.message || '准备失败' })
+          pushPublishEvent(`发布准备失败：第 ${i + 1}/${total} 条，${err?.message || '准备失败'}`, 'error')
+          setPublishActivity('单条失败，继续队列', `第 ${i + 1}/${total} 条准备失败，已跳过并继续后续任务`, 45, 'bad')
+          await loadRecentJobs()
+          continue
+        }
       }
 
       if (publishStopRequested.value) {
@@ -2012,7 +2199,10 @@ async function publishNow() {
       })
       return
     }
-    const preparedVideos = applyCommerceCopiesToVideos(applyManualCopiesToVideos(await prepareVideosForJobs()))
+    const queueSourceVideos = queueMode ? videoItems.value.slice(0, effectiveQueueBatchSize.value) : videoItems.value
+    const preparedVideos = applyCommerceCopiesToVideos(applyManualCopiesToVideos(await prepareVideosForJobs(queueSourceVideos, { continueOnError: queueMode })))
+    if (!preparedVideos.length) throw new Error('本次没有可入队的视频，请检查上传失败的素材')
+    const queuedVideoIds = preparedVideos.map(queueId)
     publishingText.value = '确认账号'
     setPublishActivity('确认账号', '正在确认已选平台 Profile 绑定', 35, 'active')
     await ensureSelectedBindings()
@@ -2038,13 +2228,15 @@ async function publishNow() {
 
     if (queueMode) {
       await loadRecentJobs()
-      const firstAt = new Date(queueStartTimestamp() * 1000).toLocaleString('zh-CN', { hour12: false })
+      const removedCount = removeQueuedVideosByIds(queuedVideoIds)
+      consumeManualCopyBlocks(removedCount)
+      const firstAt = publishForm.queueImmediate ? '立即' : new Date(queueStartTimestamp() * 1000).toLocaleString('zh-CN', { hour12: false })
       publishingText.value = '已入队'
-      setPublishActivity('已加入定时队列', `${ids.length} 条记录已绑定 ${selectedAccount.value.name}，从 ${firstAt} 开始触发`, 100, 'ok')
-      pushPublishEvent(`定时队列已创建：${ids.length} 条，从 ${firstAt} 开始`, 'success')
-      showToast(`${ids.length} 条已加入定时队列`, 'success', {
+      setPublishActivity('已加入后台队列', `${ids.length} 条记录已绑定 ${selectedAccount.value.name}，${firstAt}开始触发；已移除 ${removedCount} 条，剩余 ${videoItems.value.length} 条`, 100, 'ok')
+      pushPublishEvent(`后台队列已创建：${ids.length} 条，${firstAt}开始；剩余待排 ${videoItems.value.length} 条`, 'success')
+      showToast(`${ids.length} 条已加入后台队列，剩余 ${videoItems.value.length} 条`, 'success', {
         celebrate: true,
-        celebrationTitle: `${selectedAccount.value.name} 定时队列已创建`
+        celebrationTitle: `${selectedAccount.value.name} 后台队列已创建`
       })
       return
     }
@@ -2086,20 +2278,19 @@ async function publishNow() {
         }
       } catch (err) {
         if (progressTimer) window.clearInterval(progressTimer)
-        if (publishStopRequested.value) {
+        if (isUserStopError(err)) {
           results.push({ id, ok: false, cancelled: true, error: '发布已立即暂停' })
           pushPublishEvent(`已暂停：记录 #${id} 已停止`, 'warning')
           setPublishActivity('已暂停', `记录 #${id} 已停止，后续记录未继续执行`, pct, 'active')
           await loadRecentJobs()
           break
         }
-        results.push({ id, ok: false, error: err.message || '执行失败' })
-        pushPublishEvent(`发布失败：记录 #${id}，${err.message || '执行失败'}`, 'error')
-        setPublishActivity('队列已停止', `记录 #${id} 失败，后续记录未继续打开页面`, pct, 'bad')
-        publishPaused.value = true
-        await loadRecentJobs()
-        break
-      }
+      results.push({ id, ok: false, error: err.message || '执行失败' })
+      pushPublishEvent(`发布失败：记录 #${id}，${err.message || '执行失败'}`, 'error')
+      setPublishActivity('单条失败，继续队列', `记录 #${id} 失败，已跳过并继续后续任务`, pct, 'bad')
+      await loadRecentJobs()
+      continue
+    }
       activePublishJobId.value = 0
       await loadRecentJobs()
       if (publishStopRequested.value) break
@@ -2690,9 +2881,19 @@ watch(() => props.trafficContext, payload => {
 
 .queue-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 112px;
+  grid-template-columns: 112px minmax(0, 1fr) minmax(0, 1fr) 132px;
   gap: 10px;
   align-items: end;
+}
+
+.queue-immediate {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .queue-panel small {

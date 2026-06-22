@@ -14,11 +14,11 @@ try {
 const logger = createLogger('routes:trafficPlanV2');
 
 const GROUP_ACCOUNTS = [
-  { groupName: '内容一组', members: ['许树杰', '许梦婷', '刘登魁', '许国锬', '叶进生', '高明镇', '薛荐轩', '叶颖'], accounts: ['花无缺', '葵仔不想肝', '最翁说游', '薛定谔的机', '跑腿的包子', '李野王SG', '游电工厂', '硬件侠', '素材'] },
-  { groupName: '内容二组', members: ['傅思敏', '赵良杰', '陈乐恒', '吴恒', '李扬林', '施律彬', '罗晓棋'], accounts: ['痞仔伯爵', '暴走星号键', '雷鸭Fist', '报告砖家', '沙雕101', '灵梦小师妹', '网瘾少女一条', '素材'] },
-  { groupName: '内容三组', members: ['曹媛', '陈泓睿', '林文涛', '刘佳琳', '肖子璇'], accounts: ['苏大强', '中二探长', '团子好贵', '嘿小虎', '饭十七', '皮皮说游戏', '素材'] },
-  { groupName: '内容四组', members: ['姚希', '陈健伊', '宋丽佳', '林宇辰'], accounts: ['天机妹', '花蛮楼', '麦晓花', '夏天丶Cat', '有事找学姐', '小张同学', '素材'] },
-  { groupName: '内容五组', members: ['朱信宇', '林心语', '商光涵', '杨鸿霆', '吴楷煌'], accounts: ['游小妹', '游热娃子', '超玩教授', 'Lee小强', '尼大木', '麦冬冬', '素材'] },
+  { groupName: '内容一组', members: ['许树杰', '许梦婷', '刘登魁', '许国锬', '叶进生', '高明镇', '薛荐轩', '叶颖'], accounts: ['花无缺', '葵仔不想肝', '最翁Damnnn', '薛定谔的机', '跑腿的包子', '李野王SG', '游电工厂', '硬件侠', '素材'] },
+  { groupName: '内容二组', members: ['傅思敏', '赵良杰', '陈乐恒', '吴恒', '李扬林', '施律彬', '罗晓棋'], accounts: ['痞仔伯爵', '暴走星号键', '雷鸭Fist', '报告砖家', '沙雕101', '网瘾少女一条', '素材'] },
+  { groupName: '内容三组', members: ['曹媛', '陈泓睿', '林文涛', '刘佳琳', '肖子璇'], accounts: ['策划克星阿强', '中二探长', '团子好贵', '嘿小虎', '灵梦小师妹', '饭十七', '皮皮说游戏', '素材'] },
+  { groupName: '内容四组', members: ['姚希', '陈健伊', '宋丽佳', '林宇辰'], accounts: ['天机妹', '花蛮楼', '麦小雯', '夏天丶Cat', '有事找学姐', '小张同学', '素材'] },
+  { groupName: '内容五组', members: ['朱信宇', '林心语', '商光涵', '杨鸿霆', '吴楷煌'], accounts: ['游小妹', '游热娃子', '超玩教授', 'Lee小强', '木游话说', '麦冬冬', '素材'] },
   { groupName: '内容六组', members: ['廖李星', '吴皓轩', '林孝添', '林语婷', '张碧珊', '叶子健'], accounts: ['不玩就分手', '游点慌', '游戏永动机', '畅玩百晓生', '夏洛', '游侠蹦蹦', '王路飞cp', '上官北丶', '情风师兄', '素材'] }
 ];
 
@@ -26,6 +26,7 @@ const PRICE_TABLES = [
   {
     platform: 'douyin',
     items: [
+      { id: 'douyin-play-qianchuan-new', service: 'play', name: '千川（新）', unitPrice: 28, quantityUnit: '万', minimumQuantity: 1 },
       { id: 'douyin-play-qianchuan-10w', service: 'play', name: '普通千川', unitPrice: 30, quantityUnit: '万', minimumQuantity: 1, priceTiers: [{ min: 1, max: 49, unitPrice: 30 }, { min: 50, unitPrice: 28 }] },
       { id: 'douyin-play-qianchuan-high-10w', service: 'play', name: '商业流', unitPrice: 48, quantityUnit: '万', minimumQuantity: 1 },
       { id: 'douyin-play-tech', service: 'play', name: '千川无视版(hkj)', unitPrice: 55, quantityUnit: '万', minimumQuantity: 3 },
@@ -77,6 +78,13 @@ const DEFAULT_PRESETS = [
   }
 ];
 
+const ACCOUNT_NAME_ALIASES = [
+  { canonical: '木游话说', aliases: ['尼大木'] },
+  { canonical: '策划克星阿强', aliases: ['苏大强'] },
+  { canonical: '最翁Damnnn', aliases: ['最翁说游'] },
+  { canonical: '麦小雯', aliases: ['麦晓花'] }
+];
+
 let defaultAccountStandardsCache = null;
 
 function findMaintenanceWorkbook() {
@@ -126,7 +134,30 @@ function findInquiryWorkbook() {
 }
 
 function inquiryKey(platform, accountName) {
-  return [normalizePlatform(platform), normalizeText(accountName)].join('::');
+  return [normalizePlatform(platform), normalizeAccountKey(accountName)].join('::');
+}
+
+function inquiryKeysFor(platform, accountName) {
+  const names = [accountName];
+  const alias = findAccountAliasRule(accountName);
+  if (alias) accountAliasNames(alias).forEach(function(name) { names.push(name); });
+  const seen = new Set();
+  return names
+    .map(function(name) { return inquiryKey(platform, name); })
+    .filter(function(key) {
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function findInquiryInfo(inquiry, platform, accountName) {
+  const keys = inquiryKeysFor(platform, accountName);
+  for (let i = 0; i < keys.length; i += 1) {
+    const info = inquiry.get(keys[i]);
+    if (info) return { key: keys[i], info: info, keys: keys };
+  }
+  return null;
 }
 
 function readInquiryAccountInfo() {
@@ -199,9 +230,12 @@ function mergeInquiryAccountInfo(standards) {
   const matchedKeys = new Set();
   const mergedRows = rows.map(function(standard) {
     const platform = normalizePlatform(standard.platform);
-    const info = inquiry.get(inquiryKey(platform, standard.accountName));
-    if (!info) return standard;
-    matchedKeys.add(inquiryKey(platform, info.accountName));
+    const matched = findInquiryInfo(inquiry, platform, standard.accountName);
+    if (!matched) return standard;
+    const info = matched.info;
+    matched.keys.forEach(function(key) { matchedKeys.add(key); });
+    matchedKeys.add(matched.key);
+    inquiryKeysFor(platform, info.accountName).forEach(function(key) { matchedKeys.add(key); });
     return Object.assign({}, standard, {
       xingtuId: info.xingtuId || standard.xingtuId || '',
       douyinId: info.douyinId || standard.douyinId || '',
@@ -280,17 +314,18 @@ function mergeAccountStandardRows(baseRows, extraRows) {
   const result = Array.isArray(baseRows) ? baseRows.slice() : [];
   (Array.isArray(extraRows) ? extraRows : []).forEach(function(extra) {
     const platform = normalizePlatform(extra.platform);
-    const key = normalizeText(extra.accountName);
+    const key = normalizeAccountKey(extra.accountName);
     if (!key) return;
     const index = result.findIndex(function(row) {
-      return normalizePlatform(row.platform) === platform && normalizeText(row.accountName) === key;
+      return normalizePlatform(row.platform) === platform && normalizeAccountKey(row.accountName) === key;
     });
     if (index < 0) {
-      result.push(extra);
+      result.push(canonicalizeAccountStandard(extra));
       return;
     }
     const current = result[index] || {};
-    result[index] = Object.assign({}, extra, current, {
+    result[index] = Object.assign({}, canonicalizeAccountStandard(extra), canonicalizeAccountStandard(current), {
+      accountName: canonicalMaintenanceAccountName(current.accountName || extra.accountName),
       xingtuId: current.xingtuId || extra.xingtuId || '',
       douyinId: current.douyinId || extra.douyinId || '',
       accountId: current.accountId || extra.accountId || '',
@@ -306,6 +341,54 @@ function mergeAccountStandardRows(baseRows, extraRows) {
     });
   });
   return result;
+}
+
+function accountAliasNames(rule) {
+  return [rule.canonical].concat(rule.aliases || []);
+}
+
+function findAccountAliasRule(value) {
+  const key = normalizeText(value);
+  if (!key) return null;
+  return ACCOUNT_NAME_ALIASES.find(function(rule) {
+    return accountAliasNames(rule).some(function(name) {
+      const aliasKey = normalizeText(name);
+      return aliasKey && (key === aliasKey || key.indexOf(aliasKey) >= 0);
+    });
+  }) || null;
+}
+
+function isAliasedMaintenanceAccount(value) {
+  return Boolean(findAccountAliasRule(value));
+}
+
+function canonicalMaintenanceAccountName(value) {
+  const raw = text(value);
+  const alias = findAccountAliasRule(raw);
+  return alias ? alias.canonical : raw;
+}
+
+function normalizeAccountKey(value) {
+  return normalizeText(canonicalMaintenanceAccountName(value));
+}
+
+function hasMaintenanceStandard(row) {
+  return money(row && row.targetCpm) > 0 && num(row && row.metrics && row.metrics.play) > 0;
+}
+
+function canonicalizeAccountStandard(row) {
+  if (!row) return row;
+  const platform = normalizePlatform(row.platform);
+  const accountName = canonicalMaintenanceAccountName(row.accountName);
+  return Object.assign({}, row, {
+    platform: platform,
+    accountName: accountName,
+    id: row.id || standardRowId(platform, accountName, 'canonical')
+  });
+}
+
+function normalizeAccountStandardRows(rows) {
+  return mergeAccountStandardRows([], Array.isArray(rows) ? rows.map(canonicalizeAccountStandard) : []);
 }
 
 function readDefaultAccountStandards() {
@@ -378,7 +461,7 @@ function readDefaultAccountStandards() {
     }
   }
   defaultAccountStandardsCache = mergeAccountStandardRows(defaultAccountStandardsCache, readGrossMarginAccountStandards());
-  defaultAccountStandardsCache = mergeInquiryAccountInfo(defaultAccountStandardsCache);
+  defaultAccountStandardsCache = normalizeAccountStandardRows(mergeInquiryAccountInfo(defaultAccountStandardsCache));
   return defaultAccountStandardsCache;
 }
 function nowSec() {
@@ -567,9 +650,9 @@ function inferGroup(name) {
 }
 
 function accountGroup(accountName) {
-  const key = normalizeText(accountName);
+  const key = normalizeAccountKey(accountName);
   const found = GROUP_ACCOUNTS.find(function(group) {
-    return group.accounts.some(function(account) { return normalizeText(account) === key; });
+    return group.accounts.some(function(account) { return normalizeAccountKey(account) === key; });
   });
   return found ? found.groupName : '';
 }
@@ -578,7 +661,9 @@ function normalizePlatform(value) {
   const raw = text(value).toLowerCase();
   if (/b站|bilibili|哔哩/.test(raw)) return 'bilibili';
   if (/抖音|douyin/.test(raw)) return 'douyin';
-  return raw || 'douyin';
+  if (/快手|kuaishou/.test(raw)) return 'kuaishou';
+  if (/小红书|xiaohongshu|red/.test(raw)) return 'xiaohongshu';
+  return 'douyin';
 }
 
 function defaultTargetCpm(platform) {
@@ -692,10 +777,12 @@ function knownAccounts() {
 }
 
 function findKnownAccountInText(value) {
+  const alias = canonicalMaintenanceAccountName(value);
+  if (alias && alias !== text(value)) return alias;
   const key = normalizeText(value);
   if (!key) return '';
   const found = knownAccounts().find(function(account) {
-    const accountKey = normalizeText(account);
+    const accountKey = normalizeAccountKey(account);
     return accountKey && key.indexOf(accountKey) >= 0;
   });
   return found || '';
@@ -856,22 +943,26 @@ function pickAccountDisplayName(a, b) {
   return keyA.length <= keyB.length ? cleanA : cleanB;
 }
 
+function parsedAccountNamesMatch(a, b) {
+  const keyA = normalizeText(pickAccountDisplayName(a, a));
+  const keyB = normalizeText(pickAccountDisplayName(b, b));
+  if (!keyA || !keyB) return false;
+  if (keyA === keyB) return true;
+  const shorter = keyA.length <= keyB.length ? keyA : keyB;
+  const longer = keyA.length > keyB.length ? keyA : keyB;
+  return shorter.length >= 4 && longer.indexOf(shorter) >= 0;
+}
+
 function mergeParsedAccounts(accounts, schedules, defaultScheduleDate, targetCpm) {
   const merged = [];
   accounts.forEach(function(account) {
     const displayName = pickAccountDisplayName(account.accountName, account.accountName);
-    const displayKey = normalizeText(displayName);
     const index = merged.findIndex(function(item) {
-      const itemKey = normalizeText(pickAccountDisplayName(item.accountName, displayName));
-      return itemKey && displayKey && (
-        itemKey === displayKey ||
-        itemKey.indexOf(displayKey) >= 0 ||
-        displayKey.indexOf(itemKey) >= 0
-      );
+      return parsedAccountNamesMatch(item.accountName, displayName);
     });
     const normalized = Object.assign({}, account, {
       accountName: displayName,
-      scheduleDate: account.scheduleDate || schedules[displayName] || schedules[displayKey] || defaultScheduleDate
+      scheduleDate: account.scheduleDate || schedules[displayName] || schedules[normalizeText(displayName)] || defaultScheduleDate
     });
     if (index < 0) {
       merged.push(normalized);
@@ -927,15 +1018,17 @@ function accountStandardFor(accountName, platform) {
 }
 
 function findAccountStandardInRows(standards, accountName, platform) {
-  const key = normalizeText(accountName);
+  const key = normalizeAccountKey(accountName);
   const platformKey = normalizePlatform(platform);
   if (!key) return null;
   const rows = (Array.isArray(standards) ? standards : []).filter(function(standard) {
     return normalizePlatform(standard.platform) === platformKey;
   });
-  return rows.find(function(standard) { return normalizeText(standard.accountName) === key; })
+  const exactRows = rows.filter(function(standard) { return normalizeAccountKey(standard.accountName) === key; });
+  return exactRows.find(hasMaintenanceStandard)
+    || exactRows[0]
     || rows.find(function(standard) {
-      const standardKey = normalizeText(standard.accountName);
+      const standardKey = normalizeAccountKey(standard.accountName);
       return standardKey && (key.indexOf(standardKey) >= 0 || standardKey.indexOf(key) >= 0);
     })
     || null;
@@ -980,14 +1073,27 @@ function enrichAccountIdentity(input, standards) {
     item.platform
   ) || {};
   const platform = normalizePlatform(item.platform);
-  const douyinId = firstIdentityText('douyinId', platform, item.douyinId, item.accountId, standard.douyinId, standard.accountId);
-  const accountId = firstIdentityText('accountId', platform, item.accountId, item.douyinId, standard.accountId, standard.douyinId);
+  const preferStandard = isAliasedMaintenanceAccount(item.accountName);
+  const douyinId = preferStandard
+    ? firstIdentityText('douyinId', platform, standard.douyinId, standard.accountId, item.douyinId, item.accountId)
+    : firstIdentityText('douyinId', platform, item.douyinId, item.accountId, standard.douyinId, standard.accountId);
+  const accountId = preferStandard
+    ? firstIdentityText('accountId', platform, standard.accountId, standard.douyinId, item.accountId, item.douyinId)
+    : firstIdentityText('accountId', platform, item.accountId, item.douyinId, standard.accountId, standard.douyinId);
   return Object.assign({}, item, {
-    xingtuId: firstIdentityText('xingtuId', platform, item.xingtuId, standard.xingtuId),
+    accountName: canonicalMaintenanceAccountName(item.accountName),
+    platform: platform,
+    xingtuId: preferStandard
+      ? firstIdentityText('xingtuId', platform, standard.xingtuId, item.xingtuId)
+      : firstIdentityText('xingtuId', platform, item.xingtuId, standard.xingtuId),
     douyinId: douyinId,
     accountId: accountId,
-    uid: firstIdentityText('uid', platform, item.uid, standard.uid),
-    cooperationCode: firstIdentityText('cooperationCode', platform, item.cooperationCode, standard.cooperationCode)
+    uid: preferStandard
+      ? firstIdentityText('uid', platform, standard.uid, item.uid)
+      : firstIdentityText('uid', platform, item.uid, standard.uid),
+    cooperationCode: preferStandard
+      ? firstIdentityText('cooperationCode', platform, standard.cooperationCode, item.cooperationCode)
+      : firstIdentityText('cooperationCode', platform, item.cooperationCode, standard.cooperationCode)
   });
 }
 
@@ -1159,11 +1265,14 @@ function closeBusyCrmProfile(profileDir) {
   const script = [
     "$profile = '" + profileLiteral + "'",
     "$profileName = 'crm-chrome-profile'",
-    "$items = Get-CimInstance Win32_Process -Filter \"name = 'chrome.exe'\" | Where-Object { $_.CommandLine -and ($_.CommandLine.Contains($profile) -or $_.CommandLine.Contains($profileName)) }",
+    "$find = { Get-CimInstance Win32_Process -Filter \"name = 'chrome.exe'\" | Where-Object { $_.CommandLine -and ($_.CommandLine.Contains($profile) -or $_.CommandLine.Contains($profileName)) } }",
+    "$items = & $find",
     "$count = 0",
     "foreach ($item in $items) { $count += 1; $p = Get-Process -Id $item.ProcessId -ErrorAction SilentlyContinue; if ($p -and $p.MainWindowHandle -ne 0) { $null = $p.CloseMainWindow() } }",
-    "if ($count -gt 0) { Start-Sleep -Milliseconds 1800 }",
-    "Write-Output $count"
+    "$deadline = (Get-Date).AddSeconds(10)",
+    "while ((Get-Date) -lt $deadline) { $left = & $find; if (-not $left) { break }; Start-Sleep -Milliseconds 500 }",
+    "$remaining = @(& $find).Count",
+    "Write-Output ($count.ToString() + ',' + $remaining.ToString())"
   ].join('; ');
   try {
     const result = childProcess.spawnSync('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
@@ -1172,7 +1281,8 @@ function closeBusyCrmProfile(profileDir) {
       timeout: 10000,
       windowsHide: true
     });
-    return { ok: result.status === 0, closed: num(result.stdout), error: result.stderr || '' };
+    const parts = String(result.stdout || '').trim().split(',');
+    return { ok: result.status === 0, closed: num(parts[0]), remaining: num(parts[1]), error: result.stderr || '' };
   } catch (err) {
     return { ok: false, closed: 0, error: err.message || String(err) };
   }
@@ -1410,22 +1520,210 @@ function hasExecutionLink(execution) {
   return !!(normalizeUrlToken(execution.videoUrl) || videoIdentityToken(execution.videoId));
 }
 
+function isDouyinShortUrl(value) {
+  return /(^|\/\/)v\.douyin\.com\/[0-9a-z_-]+/i.test(normalizeUrlToken(value));
+}
+
+function crmAccountMatches(execution, row) {
+  const accountKey = normalizeAccountKey(execution.accountName);
+  const rowAccountKey = normalizeAccountKey(row.accountName);
+  if (!accountKey || !rowAccountKey) return false;
+  return accountKey === rowAccountKey || accountKey.includes(rowAccountKey) || rowAccountKey.includes(accountKey);
+}
+
+function crmProjectKey(value) {
+  return normalizeText(value)
+    .replace(/端游|手游|达人合作|达人|合作|活动|项目|游戏|抖音|字节|客户|投放|推广|科技|有限|公司|appstore/g, function(match) {
+      return match === 'appstore' ? match : '';
+    });
+}
+
+function crmProjectTokens(value) {
+  const compact = crmProjectKey(value);
+  if (!compact) return [];
+  const tokens = compact
+    .split(/[^0-9a-zA-Z\u4e00-\u9fa5]+/)
+    .map(function(item) { return normalizeText(item); })
+    .filter(function(item) { return item.length >= 2; });
+  if (compact.length >= 2) tokens.push(compact);
+  const seen = new Set();
+  return tokens.filter(function(item) {
+    if (!item || seen.has(item)) return false;
+    seen.add(item);
+    return true;
+  });
+}
+
+function crmProjectOverlapScore(left, right) {
+  const leftTokens = crmProjectTokens(left);
+  const rightTokens = crmProjectTokens(right);
+  if (!leftTokens.length || !rightTokens.length) return 0;
+  let score = 0;
+  leftTokens.forEach(function(a) {
+    rightTokens.forEach(function(b) {
+      if (a === b) score = Math.max(score, 36);
+      else if (a.length >= 3 && b.length >= 3 && (a.includes(b) || b.includes(a))) score = Math.max(score, 28);
+      else {
+        const chars = new Set(a.split(''));
+        let shared = 0;
+        b.split('').forEach(function(ch) { if (chars.has(ch)) shared += 1; });
+        if (shared >= 2 && shared / Math.min(a.length, b.length) >= 0.66) score = Math.max(score, 18);
+      }
+    });
+  });
+  return score;
+}
+
+function crmProjectMatches(execution, row) {
+  const projectKey = normalizeText(execution.projectName);
+  const targetKey = normalizeText(row.marketingTarget);
+  if (!projectKey || !targetKey) return false;
+  if (projectKey.includes(targetKey) || targetKey.includes(projectKey)) return true;
+  const compactProjectKey = crmProjectKey(projectKey);
+  const compactTargetKey = crmProjectKey(targetKey);
+  if (compactProjectKey && compactTargetKey && (
+    compactProjectKey.includes(compactTargetKey) ||
+    compactTargetKey.includes(compactProjectKey) ||
+    compactProjectKey === compactTargetKey
+  )) return true;
+  return crmProjectOverlapScore(projectKey, targetKey) >= 28;
+}
+
+function crmDateParts(value) {
+  const raw = text(value);
+  if (!raw) return [];
+  const parts = [];
+  const fullDate = raw.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})/);
+  if (fullDate) parts.push({
+    year: Number(fullDate[1]),
+    month: Number(fullDate[2]),
+    day: Number(fullDate[3])
+  });
+  const yearMonth = raw.match(/(20\d{2})[-/.年](\d{1,2})\s*月?(?!\s*[-/.]\s*\d)/);
+  if (yearMonth && !fullDate) parts.push({
+    year: Number(yearMonth[1]),
+    month: Number(yearMonth[2]),
+    day: 15
+  });
+  const mdMatches = raw.matchAll(/(\d{1,2})\s*[月./-]\s*(\d{1,2})/g);
+  for (const match of mdMatches) {
+    parts.push({ year: new Date().getFullYear(), month: Number(match[1]), day: Number(match[2]) });
+  }
+  return parts.filter(function(part) {
+    return part.year && part.month >= 1 && part.month <= 12 && part.day >= 1 && part.day <= 31;
+  });
+}
+
+function crmDateDistanceDays(left, right) {
+  const leftParts = crmDateParts(left);
+  const rightParts = crmDateParts(right);
+  let best = Infinity;
+  leftParts.forEach(function(a) {
+    rightParts.forEach(function(b) {
+      const at = Date.UTC(a.year, a.month - 1, a.day);
+      const bt = Date.UTC(b.year, b.month - 1, b.day);
+      best = Math.min(best, Math.abs(at - bt) / 86400000);
+    });
+  });
+  return best;
+}
+
+function crmDateScore(execution, row) {
+  const distance = crmDateDistanceDays(execution.scheduleDate, row.publishedAt);
+  if (!Number.isFinite(distance)) return 0;
+  if (distance <= 0) return 36;
+  if (distance <= 1) return 30;
+  if (distance <= 3) return 20;
+  if (distance <= 7) return 8;
+  if (distance <= 14) return 6;
+  if (distance <= 21) return 4;
+  if (distance <= 45) return 3;
+  return 0;
+}
+
+function canUseCrmFallbackMatch(execution, row) {
+  if (normalizePlatform(execution.platform) !== normalizePlatform(row.platform)) return false;
+  const accountMatched = crmAccountMatches(execution, row);
+  const projectMatched = crmProjectMatches(execution, row);
+  const projectScore = crmProjectOverlapScore(execution.projectName, row.marketingTarget);
+  const dateScore = crmDateScore(execution, row);
+  if (accountMatched && projectMatched && dateScore >= 3) return true;
+  if (accountMatched && projectScore >= 36 && dateScore >= 3) return true;
+  if (projectScore >= 36 && dateScore >= 3) return true;
+  if (isDouyinShortUrl(execution.videoUrl) && accountMatched && dateScore >= 20) return true;
+  return false;
+}
+
 function crmRowScore(execution, row) {
   const linkRequired = hasExecutionLink(execution);
   const linkMatched = crmLinkMatches(execution, row);
-  if (linkRequired && !linkMatched) return -1;
+  const fallbackMatched = linkRequired && !linkMatched && canUseCrmFallbackMatch(execution, row);
+  if (linkRequired && !linkMatched && !fallbackMatched) return -1;
   let score = 0;
   if (linkMatched) score += 120;
+  if (fallbackMatched) score += 45;
   const projectKey = normalizeText(execution.projectName);
-  const targetKey = normalizeText(row.marketingTarget);
-  if (projectKey && targetKey && (projectKey.includes(targetKey) || targetKey.includes(projectKey))) score += 40;
-  const accountKey = normalizeText(execution.accountName);
-  const rowAccountKey = normalizeText(row.accountName);
-  if (accountKey && rowAccountKey && (accountKey === rowAccountKey || accountKey.includes(rowAccountKey) || rowAccountKey.includes(accountKey))) score += 45;
+  if (crmProjectMatches(execution, row)) score += 40;
+  score += crmProjectOverlapScore(execution.projectName, row.marketingTarget);
+  if (crmAccountMatches(execution, row)) score += 45;
   const titleKey = normalizeText(row.title);
   if (projectKey && titleKey && titleKey.includes(projectKey)) score += 12;
+  score += crmDateScore(execution, row);
   if (normalizePlatform(execution.platform) === normalizePlatform(row.platform)) score += 4;
   return score;
+}
+
+function crmMetricClosenessScore(execution, row) {
+  const targetPlay = num(execution.targetMetrics && execution.targetMetrics.play);
+  const rowPlay = num(row.metrics && row.metrics.play);
+  if (!targetPlay || !rowPlay) return 0;
+  const ratio = Math.min(targetPlay, rowPlay) / Math.max(targetPlay, rowPlay);
+  if (ratio >= 0.95) return 30;
+  if (ratio >= 0.85) return 24;
+  if (ratio >= 0.7) return 16;
+  if (ratio >= 0.5) return 8;
+  return 0;
+}
+
+function crmWeakRowScore(execution, row) {
+  if (normalizePlatform(execution.platform) !== normalizePlatform(row.platform)) return -1;
+  const accountMatched = crmAccountMatches(execution, row);
+  const projectMatched = crmProjectMatches(execution, row);
+  const projectScore = crmProjectOverlapScore(execution.projectName, row.marketingTarget);
+  const dateScore = crmDateScore(execution, row);
+  const metricScore = crmMetricClosenessScore(execution, row);
+  const projectName = normalizeText(execution.projectName);
+  const unlinkedProject = !projectName || normalizeText(execution.projectId) === 'unlinked-project' || projectName.includes(normalizeText('未关联项目')) || normalizeText(execution.notes).includes(normalizeText('未关联项目'));
+  const nearMeaning = projectMatched || projectScore >= 28 || (projectScore >= 18 && dateScore >= 3);
+  let score = 0;
+  if (accountMatched) score += 55;
+  if (projectMatched) score += 45;
+  score += projectScore;
+  score += dateScore;
+  score += metricScore;
+  if (crmLinkMatches(execution, row)) score += 80;
+  if (!unlinkedProject && !nearMeaning) return -1;
+  if (!accountMatched && !projectMatched && projectScore < 28) return -1;
+  if (!accountMatched && projectScore >= 28 && dateScore < 3 && metricScore < 16 && !crmLinkMatches(execution, row)) return -1;
+  if (unlinkedProject && !accountMatched) return -1;
+  if (unlinkedProject && metricScore < 16 && !crmLinkMatches(execution, row)) return -1;
+  return score;
+}
+
+function crmMatchMode(execution, row, score) {
+  if (crmLinkMatches(execution, row)) return 'link';
+  if (score >= 120) return 'fallback';
+  return 'weak';
+}
+
+function crmMatchReason(execution, row, mode) {
+  const parts = [];
+  if (crmLinkMatches(execution, row)) parts.push('link');
+  if (crmAccountMatches(execution, row)) parts.push('account');
+  if (crmProjectMatches(execution, row)) parts.push('project');
+  if (crmDateScore(execution, row)) parts.push('date');
+  if (crmMetricClosenessScore(execution, row)) parts.push('target_play');
+  return [mode].concat(parts).join(':');
 }
 
 function pickCrmRow(execution, rows) {
@@ -1439,7 +1737,21 @@ function pickCrmRow(execution, rows) {
     }
   });
   const threshold = hasExecutionLink(execution) ? 120 : 80;
-  return bestScore >= threshold ? { row: best, score: bestScore } : null;
+  if (bestScore >= threshold) {
+    const mode = crmMatchMode(execution, best, bestScore);
+    return { row: best, score: bestScore, mode: mode, reason: crmMatchReason(execution, best, mode) };
+  }
+  let weakBest = null;
+  let weakScore = 0;
+  rows.forEach(function(row) {
+    const score = crmWeakRowScore(execution, row);
+    if (score > weakScore || score === weakScore && weakBest && num(row.metrics && row.metrics.play) > num(weakBest.metrics && weakBest.metrics.play)) {
+      weakBest = row;
+      weakScore = score;
+    }
+  });
+  if (weakScore >= 70) return { row: weakBest, score: weakScore, mode: 'weak', reason: crmMatchReason(execution, weakBest, 'weak') };
+  return null;
 }
 
 function mergeNonDecreasingMetrics(existing, incoming) {
@@ -1618,7 +1930,14 @@ function optionFor(platform, optionId, service) {
 function optionForTables(priceTables, platform, optionId, service) {
   const tables = Array.isArray(priceTables) && priceTables.length ? priceTables : PRICE_TABLES;
   const table = tables.find(function(item) { return item.platform === normalizePlatform(platform); }) || tables[0] || { items: [] };
-  return table.items.find(function(item) { return item.id === optionId; }) || table.items.find(function(item) { return item.service === service; }) || null;
+  const direct = table.items.find(function(item) { return item.id === optionId; });
+  if (direct) return direct;
+  const builtinTable = PRICE_TABLES.find(function(item) { return item.platform === normalizePlatform(platform); }) || PRICE_TABLES[0] || { items: [] };
+  const builtinDirect = builtinTable.items.find(function(item) { return item.id === optionId; });
+  if (builtinDirect) return builtinDirect;
+  return table.items.find(function(item) { return item.service === service; })
+    || builtinTable.items.find(function(item) { return item.service === service; })
+    || null;
 }
 
 function calculateMaintenance(platform, quantityInputs, selectedOptions, priceTables) {
@@ -1668,9 +1987,14 @@ function nextPhase(records, executionId) {
   return ['一期', '二期', '三期', '四期', '五期'][max] || ('第' + (max + 1) + '期');
 }
 
+function orderTypeLabel(value, platform) {
+  if (text(value) === 'private') return '私单';
+  return normalizePlatform(platform) === 'bilibili' ? '平台单' : '星图单';
+}
+
 function buildReviewText(app, execution, calc, cumulativeCost) {
-  const platform = platformLabel(app.platform || execution.platform);
-  const orderType = text(app.orderType || execution.orderType || execution.dealType) === 'private' ? '私单' : '星图单';
+  const platform = normalizePlatform(app.platform || execution.platform);
+  const orderType = orderTypeLabel(app.orderType || execution.orderType || execution.dealType, platform);
   const metricLine = calc.lines.map(function(line) {
     return line.service + '：' + line.quantity + line.quantityUnit;
   }).join('，') || '本期未填写维护数量';
@@ -1682,7 +2006,7 @@ function buildReviewText(app, execution, calc, cumulativeCost) {
     '标的：' + text(app.projectName || execution.projectName),
     '账号：' + text(app.accountName || execution.accountName),
     '订单类型：' + orderType,
-    '平台：' + platform,
+    '平台：' + platformLabel(platform),
     '期数：' + text(app.phaseName || '一期'),
     '视频链接：' + (text(app.videoUrl || execution.videoUrl) || '待补'),
     '目标播放：' + Math.round(num(app.targetPlay || execution.targetMetrics && execution.targetMetrics.play)).toLocaleString('zh-CN'),
@@ -1944,12 +2268,12 @@ module.exports = function createTrafficPlanV2Routes(deps) {
     const standardRow = await get(db, 'SELECT payload FROM traffic_v2_settings WHERE user_key=? AND setting_key=?', [key, 'accountStandards']);
     const savedAccountStandards = parseJson(standardRow && standardRow.payload, null);
     const accountStandards = Array.isArray(savedAccountStandards) && savedAccountStandards.length
-      ? savedAccountStandards
+      ? normalizeAccountStandardRows(savedAccountStandards)
       : readDefaultAccountStandards();
     return {
       priceTables: parseJson(priceRow && priceRow.payload, null) || PRICE_TABLES,
       presets: parseJson(presetRow && presetRow.payload, null) || DEFAULT_PRESETS,
-      accountStandards: mergeInquiryAccountInfo(accountStandards)
+      accountStandards: normalizeAccountStandardRows(mergeInquiryAccountInfo(accountStandards))
     };
   }
 
@@ -2273,6 +2597,11 @@ module.exports = function createTrafficPlanV2Routes(deps) {
           crmUpdatedAt: picked.row.updatedAt || new Date(csv.file.mtimeMs).toISOString(),
           crmFollowStatus: picked.row.followStatus || execution.crmFollowStatus || '',
           crmMatchedTitle: picked.row.title,
+          crmMatchedTarget: picked.row.marketingTarget,
+          crmMatchedAccount: picked.row.accountName,
+          crmMatchedVideoUrl: picked.row.videoUrl,
+          crmMatchMode: picked.mode || 'link',
+          crmMatchReason: picked.reason || '',
           crmMatchScore: picked.score,
           crmRegressionIgnored: mergedMetrics.regressions,
           updatedAt: new Date().toISOString()
@@ -2283,6 +2612,10 @@ module.exports = function createTrafficPlanV2Routes(deps) {
           projectName: nextExecution.projectName,
           accountName: nextExecution.accountName,
           score: picked.score,
+          mode: picked.mode || 'link',
+          reason: picked.reason || '',
+          matchedTarget: picked.row.marketingTarget,
+          matchedAccount: picked.row.accountName,
           regressions: mergedMetrics.regressions,
           metrics: nextMetrics
         });

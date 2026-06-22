@@ -454,15 +454,15 @@ module.exports = function createVectorRoutes(deps) {
 
       const prompts = {
         wenan: {
-          system: '你是一个短视频文案分析师。从文案中提取JSON：\n{account,scene,content,hook,golden_line}\n账号：天机妹、花蛮楼、麦晓花、夏天丶Cat、有事找学姐、小张同学、呼叫网管、王者代做、通用\n场景：开场|承接|结尾|梗|素材\n只返回JSON不要其他内容。',
+          system: '你是一个短视频文案分析师。从文案中提取JSON：\n{account,scene,content,hook,golden_line}\n账号：天机妹、花蛮楼、麦小雯、夏天丶Cat、有事找学姐、小张同学、呼叫网管、王者代做、通用\n场景：开场|承接|结尾|梗|素材\n只返回JSON不要其他内容。',
           fields: { account: '账号', scene: '场景', content: '内容概览', hook: '钩子', golden_line: '金句' }
         },
         bf: {
-          system: '你是一个营销分析师。从营销内容中提取JSON：\n{account,scene,marketing_target,content_direction}\n账号：天机妹、花蛮楼、麦晓花、夏天丶Cat、有事找学姐、小张同学、呼叫网管、王者代做、通用\n营销标的：指这条视频/内容的营销目标是什么（如：引流私域、推广产品、品牌曝光等）\n内容方向：指内容的创作方向或主题（如：游戏攻略、产品测评、热点话题等）\n场景：BF框架|BF素材|BF参考\n只返回JSON不要其他内容。',
+          system: '你是一个营销分析师。从营销内容中提取JSON：\n{account,scene,marketing_target,content_direction}\n账号：天机妹、花蛮楼、麦小雯、夏天丶Cat、有事找学姐、小张同学、呼叫网管、王者代做、通用\n营销标的：指这条视频/内容的营销目标是什么（如：引流私域、推广产品、品牌曝光等）\n内容方向：指内容的创作方向或主题（如：游戏攻略、产品测评、热点话题等）\n场景：BF框架|BF素材|BF参考\n只返回JSON不要其他内容。',
           fields: { account: '账号', scene: '场景', marketing_target: '营销标的', content_direction: '内容方向' }
         },
         cases: {
-          system: '你是一个案例分析师。从案例内容中提取JSON：\n{account,scene,content,case_tags,link}\n账号：天机妹、花蛮楼、麦晓花、夏天丶Cat、有事找学姐、小张同学、呼叫网管、王者代做、通用\n内容：对案例内容的简要总结（AI解析）\n案例标签：用于分类案例的标签（如：优秀案例、差评案例、数据复盘、爆款、低播放等）\n链接：如果内容中有链接则提取，没有则留空\n场景：优秀案例|差评案例|数据复盘\n只返回JSON不要其他内容。',
+          system: '你是一个案例分析师。从案例内容中提取JSON：\n{account,scene,content,case_tags,link}\n账号：天机妹、花蛮楼、麦小雯、夏天丶Cat、有事找学姐、小张同学、呼叫网管、王者代做、通用\n内容：对案例内容的简要总结（AI解析）\n案例标签：用于分类案例的标签（如：优秀案例、差评案例、数据复盘、爆款、低播放等）\n链接：如果内容中有链接则提取，没有则留空\n场景：优秀案例|差评案例|数据复盘\n只返回JSON不要其他内容。',
           fields: { account: '账号', scene: '场景', content: 'AI解析', case_tags: '案例标签', link: '链接' }
         }
       };

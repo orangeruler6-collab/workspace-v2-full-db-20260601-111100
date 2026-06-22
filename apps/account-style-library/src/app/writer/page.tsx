@@ -16,7 +16,7 @@ import { formatPlatform } from "@/components/Formatters";
 import { useLibrary } from "@/components/LibraryProvider";
 import { useTasks } from "@/components/TaskProvider";
 import { isTaskProgressMessage } from "@/lib/feedback-messages";
-import { getDrafts } from "@/lib/client";
+import { getDrafts, transcribeAudioUpload } from "@/lib/client";
 import { buildWriterDraftHref } from "@/lib/draft-links";
 import { extractRewriteSourceMaterial, normalizeRewritePrompt } from "@/lib/source-extraction";
 import type { Draft } from "@/lib/types";
@@ -24,7 +24,7 @@ import type { Draft } from "@/lib/types";
 type WriterSource = {
   id: string;
   label: string;
-  kind: "link" | "text" | "document";
+  kind: "link" | "text" | "document" | "audio";
   content: string;
   fileName?: string;
 };
@@ -640,6 +640,7 @@ function WriterSourcePanel({
 }) {
   const nextIndex = sources.length + 1;
   const [draggingSourceId, setDraggingSourceId] = useState("");
+  const [transcribingSourceId, setTranscribingSourceId] = useState("");
 
   function updateSource(id: string, patch: Partial<WriterSource>) {
     onSourcesChange((current) => current.map((source) => (source.id === id ? { ...source, ...patch } : source)));
@@ -647,6 +648,42 @@ function WriterSourcePanel({
 
   function removeSource(id: string) {
     onSourcesChange((current) => renumberSources(current.filter((source) => source.id !== id)));
+  }
+
+  async function handleSourceFile(sourceId: string, file: File) {
+    const isAudio = isAudioSourceFile(file);
+    const previousSource = sources.find((source) => source.id === sourceId);
+    if (isAudio) {
+      setTranscribingSourceId(sourceId);
+      updateSource(sourceId, {
+        kind: "audio",
+        content: `正在上传并转写 ${file.name}，稍等一下...`,
+        fileName: file.name
+      });
+    }
+
+    const loaded = await readSourceFile(file).catch((error) => {
+      onNotice(error instanceof Error ? error.message : isAudio ? "音频转写失败" : "读取文档失败");
+      return null;
+    });
+
+    if (isAudio) setTranscribingSourceId("");
+    if (!loaded) {
+      if (isAudio && previousSource) {
+        updateSource(sourceId, {
+          kind: previousSource.kind,
+          content: previousSource.content,
+          fileName: previousSource.fileName
+        });
+      }
+      return;
+    }
+    updateSource(sourceId, {
+      kind: loaded.kind,
+      content: loaded.content,
+      fileName: loaded.fileName
+    });
+    if (loaded.kind === "audio") onNotice(`${loaded.fileName || "音频"} 已转写完成`);
   }
 
   return (
@@ -664,6 +701,7 @@ function WriterSourcePanel({
       </div>
       <div className="writer-source-list">
         {sources.map((source, index) => {
+          const transcribing = transcribingSourceId === source.id;
           return (
             <div
               className={`writer-source-card ${draggingSourceId === source.id ? "dragging" : ""}`}
@@ -678,16 +716,7 @@ function WriterSourcePanel({
                 setDraggingSourceId("");
                 const file = event.dataTransfer.files[0];
                 if (!file) return;
-                const loaded = await readSourceFile(file).catch((error) => {
-                  onNotice(error instanceof Error ? error.message : "读取文档失败");
-                  return null;
-                });
-                if (!loaded) return;
-                updateSource(source.id, {
-                  kind: loaded.kind,
-                  content: loaded.content,
-                  fileName: loaded.fileName
-                });
+                await handleSourceFile(source.id, file);
               }}
             >
               <div className="writer-source-card-header">
@@ -703,16 +732,35 @@ function WriterSourcePanel({
                   <Trash2 aria-hidden="true" size={15} />
                 </button>
               </div>
+              <div className="writer-source-import-row">
+                <label className={`btn compact ${transcribing ? "disabled" : ""}`}>
+                  <FileUp aria-hidden="true" size={14} />
+                  {transcribing ? "转写中..." : "导入文件 / MP3"}
+                  <input
+                    accept=".txt,.md,.docx,.mp3,.m4a,.wav,.aac,.flac,.ogg,.opus,audio/*"
+                    disabled={transcribing}
+                    onChange={async (event) => {
+                      const file = event.target.files?.[0];
+                      event.currentTarget.value = "";
+                      if (!file) return;
+                      await handleSourceFile(source.id, file);
+                    }}
+                    type="file"
+                  />
+                </label>
+                <span>{transcribing ? "硅基流动转写中，完成后会自动填入下方。" : "支持 Word / TXT / MD / MP3"}</span>
+              </div>
               <textarea
                 aria-label={`${source.label} 内容`}
                 className="writer-textarea source"
+                disabled={transcribing}
                 onChange={(event) => updateSource(source.id, { content: event.target.value, kind: detectSourceKind(event.target.value) })}
                 placeholder={sourcePlaceholder(source.kind)}
                 value={source.content}
               />
               <div className="writer-source-footer">
                 <span>{source.fileName || `${source.label} ${index === 0 ? "默认主参考" : "默认辅参考"}`}</span>
-                <span>拖入 Word / TXT / MD</span>
+                <span>拖入 Word / TXT / MD / MP3</span>
               </div>
             </div>
           );
@@ -829,12 +877,14 @@ function detectSourceKind(content: string): WriterSource["kind"] {
 function sourcePlaceholder(kind: WriterSource["kind"]) {
   if (kind === "link") return "粘贴一条或多条抖音/B站链接";
   if (kind === "document") return "拖入 Word/TXT 文档，也可直接粘贴文档正文；输入“商单修改”时会读取 Word 批注";
+  if (kind === "audio") return "上传 MP3 后会自动转写到这里，也可以直接粘贴音频转写稿";
   return "粘贴原文、观点、开头、结尾或参考表达";
 }
 
 function sourceKindLabel(kind: WriterSource["kind"]) {
   if (kind === "link") return "链接";
   if (kind === "document") return "文档";
+  if (kind === "audio") return "音频转写";
   return "文本";
 }
 
@@ -857,13 +907,22 @@ function readMentionQuery(target: HTMLTextAreaElement) {
 
 async function readSourceFile(file: File): Promise<Pick<WriterSource, "kind" | "content" | "fileName">> {
   const extension = file.name.split(".").pop()?.toLowerCase() || "";
+  if (isAudioSourceFile(file)) {
+    const result = await transcribeAudioUpload(file);
+    return { kind: "audio", content: result.transcript, fileName: result.fileName || file.name };
+  }
   if (extension === "txt" || extension === "md") {
     return { kind: "document", content: await file.text(), fileName: file.name };
   }
   if (extension === "docx") {
     return { kind: "document", content: await readDocxText(file), fileName: file.name };
   }
-  throw new Error("暂只支持 TXT、Markdown 和 Word .docx 文档。");
+  throw new Error("暂只支持 TXT、Markdown、Word .docx 和 MP3 等音频文件。");
+}
+
+function isAudioSourceFile(file: File) {
+  const extension = file.name.split(".").pop()?.toLowerCase() || "";
+  return file.type.startsWith("audio/") || ["mp3", "m4a", "wav", "aac", "flac", "ogg", "opus", "mpeg", "mpga"].includes(extension);
 }
 
 async function readDocxText(file: File) {

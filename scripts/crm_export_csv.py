@@ -141,7 +141,8 @@ async def main():
                 print(json.dumps({
                     "ok": False,
                     "needLogin": True,
-                    "error": "CRM 需要登录，请先用同一个自动化 Profile 登录畅玩ERP",
+                    "error": "CRM 需要登录：请用投流看板的“CRM登录”打开的二维码完成登录，登录后等页面跳到达人执行效果列表，再点“登录后刷新数据”。",
+                    "profile": str(profile_dir),
                     "url": page.url,
                     "title": await page.title(),
                 }, ensure_ascii=True))

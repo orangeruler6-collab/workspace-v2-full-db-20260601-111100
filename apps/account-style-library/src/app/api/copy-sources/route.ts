@@ -94,6 +94,22 @@ export async function POST(request: Request) {
     }
 
     const input = transcribeSchema.parse(body);
+    if (isFeishuDocumentUrl(input.url)) {
+      const source = await saveFeishuCopySource(input.url, input.titleHint);
+      return NextResponse.json({
+        source,
+        result: {
+          platform: "unknown",
+          source: "feishu",
+          text: source.transcript,
+          title: source.title,
+          url: input.url
+        }
+      });
+    }
+    if (!isSupportedVideoSourceUrl(input.url)) {
+      throw new Error("暂不支持的链接类型，已阻止进入视频转写");
+    }
     const result = await transcribeLinkSource({
       url: input.url,
       titleHint: input.titleHint,
@@ -257,6 +273,9 @@ async function saveTranscribedLinkCopySource(input: {
   supplementText?: string;
   analyzeVideo: boolean;
 }) {
+  if (!isSupportedVideoSourceUrl(input.url)) {
+    throw new Error("暂不支持的链接类型，已阻止进入视频转写");
+  }
   const result = await transcribeLinkSource({
     url: input.url,
     titleHint: input.titleHint,
@@ -287,6 +306,10 @@ async function saveTranscribedLinkCopySource(input: {
     fallbackReason: result.fallbackReason,
     materialAnalysis
   });
+}
+
+function isSupportedVideoSourceUrl(url: string) {
+  return /(?:douyin\.com|v\.douyin\.com|iesdouyin\.com|bilibili\.com|b23\.tv|^BV[0-9A-Za-z]{8,}$)/i.test(url);
 }
 
 async function summarizeBfMaterial(input: {

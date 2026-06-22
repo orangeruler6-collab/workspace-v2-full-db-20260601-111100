@@ -10,8 +10,10 @@
     "dev:front": "vite",
     "dev:api": "node server/index.cjs",
     "dev:style": "node scripts/style-dev.cjs",
+    "collect:account-data": "node scripts/collect-account-data-batch.cjs",
     "build": "vite build",
     "check:backend": "node scripts/check-backend.cjs",
+    "check:encoding": "node scripts/check-encoding.cjs",
     "smoke:api": "node scripts/smoke-api.cjs",
     "preview": "vite preview"
   },

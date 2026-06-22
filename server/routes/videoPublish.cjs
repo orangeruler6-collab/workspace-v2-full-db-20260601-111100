@@ -1,4 +1,4 @@
-﻿const fs = require('fs');
+const fs = require('fs');
 const http = require('http');
 const https = require('https');
 const path = require('path');
@@ -7,19 +7,20 @@ const os = require('os');
 const { spawn } = require('child_process');
 const createLogger = require('../lib/logger.cjs');
 const createSqliteAdapter = require('../lib/sqlite.cjs');
+const {
+  chromeProfileDirectoryMap,
+  defaultVideoPublishBindings,
+  publishAccountCatalog
+} = require('../lib/accountCatalog.cjs');
 
 const logger = createLogger('routes:videoPublish');
 const profileLocks = new Map();
 const chromeLaunchState = new Map();
 const runningJobs = new Map();
-const chromeProfileByOpenCli = {
-  'collector-link-crawl': 'Profile 1',
-  'tianji-mei-publish': 'Profile 2',
-  'maixiaohua-publish': 'Profile 3',
-  dvabrcmr: 'Profile 4',
-  h4g7ab4y: 'Profile 5',
-  b3uk5kjf: 'Profile 6'
-};
+const chromeProfileByOpenCli = chromeProfileDirectoryMap();
+const defaultAccountBindings = defaultVideoPublishBindings();
+const openCliExtensionDir = process.env.OPENCLI_EXTENSION_DIR
+  || path.join(process.env.USERPROFILE || '', '.opencli', 'chrome-extension', 'opencli-webstore-unpacked');
 
 function now() {
   return Math.floor(Date.now() / 1000);
@@ -41,6 +42,25 @@ function stringify(value) {
 function cleanText(value, max) {
   const text = String(value || '').replace(/\r/g, '\n').trim();
   return max ? text.slice(0, max) : text;
+}
+
+function cleanCommerceProductText(value, commerce) {
+  const text = cleanText(value, 80).replace(/\s+/g, ' ').trim();
+  if (!text) return '';
+  const preset = cleanText(commerce && commerce.preset, 40);
+  const mode = cleanText(commerce && commerce.mode, 80);
+  const productUrl = cleanText(commerce && commerce.productUrl, 1000);
+  const chiselProduct = preset === 'chisel' || /chisel|凿子/.test(mode) || /3822421447960297861/.test(productUrl);
+  if (!chiselProduct) return text;
+  const preferred = '欧气凿子来辣';
+  if (text.includes(preferred)) return preferred;
+  const compact = text.replace(/\s+/g, '');
+  for (let size = 1; size <= Math.floor(compact.length / 2); size += 1) {
+    if (compact.length % size !== 0) continue;
+    const chunk = compact.slice(0, size);
+    if (chunk && chunk.repeat(compact.length / size) === compact) return chunk;
+  }
+  return text;
 }
 
 function videoSizeBytes(row, videoPath) {
@@ -149,6 +169,66 @@ function ensureDir(dir) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
+async function preparePlatformUploadVideo(root, row, videoPath) {
+  if (!videoPath || !fs.existsSync(videoPath)) return { path: videoPath, cleanup: async function() {}, meta: {} };
+  const probe = await probePlatformUploadVideo(root, videoPath);
+  const needsH264 = /^(hevc|h265)$/i.test(String(probe.codec_name || ''));
+  const rawName = safeName(row && (row.video_name || row.video_id), path.basename(videoPath));
+  const originalName = needsH264 ? rawName.replace(/\.[^.]+$/, '') + '.mp4' : rawName;
+  if (!needsH264 && path.basename(videoPath) === originalName && videoPath.length < 160) {
+    return { path: videoPath, cleanup: async function() {}, meta: { codec: probe.codec_name || '', copied: false, transcoded: false } };
+  }
+  const uploadDir = path.join(root, 'temp', 'video-publish-opencli', String(row && row.id || Date.now()));
+  ensureDir(uploadDir);
+  const uploadPath = path.join(uploadDir, originalName);
+  let meta = { codec: probe.codec_name || '', copied: false, transcoded: false };
+  if (needsH264) {
+    const result = await runProcess(ffmpegBin(root), [
+      '-y',
+      '-i', videoPath,
+      '-map', '0:v:0',
+      '-map', '0:a?',
+      '-c:v', 'libx264',
+      '-preset', 'veryfast',
+      '-crf', '20',
+      '-pix_fmt', 'yuv420p',
+      '-profile:v', 'main',
+      '-movflags', '+faststart',
+      '-c:a', 'aac',
+      '-b:a', '192k',
+      uploadPath
+    ], { timeoutMs: 10 * 60 * 1000, cwd: root });
+    if (result.code !== 0 || !fs.existsSync(uploadPath)) {
+      throw new Error('视频临时转 H.264 失败：' + cleanText(result.stderr || result.stdout || 'ffmpeg failed', 800));
+    }
+    meta.transcoded = true;
+  } else {
+    await fs.promises.copyFile(videoPath, uploadPath);
+    meta.copied = true;
+  }
+  return {
+    path: uploadPath,
+    meta,
+    cleanup: async function() {
+      try { await fs.promises.unlink(uploadPath); } catch (e) {}
+      try { await fs.promises.rmdir(uploadDir); } catch (e) {}
+    }
+  };
+}
+
+async function probePlatformUploadVideo(root, videoPath) {
+  const result = await runProcess(ffprobeBin(root), [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=codec_name,width,height,pix_fmt',
+    '-of', 'json',
+    videoPath
+  ], { timeoutMs: 60000, cwd: root });
+  if (result.code !== 0) return {};
+  const parsed = safeJson(result.stdout, {});
+  return parsed && parsed.streams && parsed.streams[0] || {};
+}
+
 function opencliBin() {
   if (process.env.OPENCLI_BIN) return process.env.OPENCLI_BIN;
   const npmDir = path.join(process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming'), 'npm');
@@ -168,16 +248,64 @@ function chromeBin() {
   return candidates.find(item => fs.existsSync(item)) || candidates[0] || 'chrome.exe';
 }
 
+function chromeUserDataDir() {
+  return process.env.CHROME_USER_DATA_DIR
+    || path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local'), 'Google', 'Chrome', 'User Data');
+}
+
+function listChromeProfileDirectories() {
+  const localState = path.join(chromeUserDataDir(), 'Local State');
+  try {
+    const state = JSON.parse(fs.readFileSync(localState, 'utf8'));
+    const info = state && state.profile && state.profile.info_cache || {};
+    return Object.keys(info).map(dir => ({
+      dir,
+      name: cleanText(info[dir] && info[dir].name, 120),
+      shortcut_name: cleanText(info[dir] && info[dir].shortcut_name, 120),
+      user_name: cleanText(info[dir] && info[dir].user_name, 120)
+    }));
+  } catch (e) {
+    return [];
+  }
+}
+
 function chromeProfileDirectory(accountId, profileAlias) {
   const envKey = 'VIDEO_PUBLISH_CHROME_PROFILE_' + String(accountId || profileAlias || '').replace(/[^a-zA-Z0-9]/g, '_').toUpperCase();
-  return process.env[envKey] || chromeProfileByOpenCli[profileAlias] || '';
+  if (process.env[envKey]) return process.env[envKey];
+  if (chromeProfileByOpenCli[accountId]) return chromeProfileByOpenCli[accountId];
+  if (chromeProfileByOpenCli[profileAlias]) return chromeProfileByOpenCli[profileAlias];
+  const wanted = cleanText(profileAlias, 120);
+  if (!wanted) return '';
+  const matched = listChromeProfileDirectories().find(item => (
+    item.dir === wanted
+    || item.name === wanted
+    || item.shortcut_name === wanted
+    || item.user_name === wanted
+  ));
+  return matched ? matched.dir : '';
+}
+
+function openCliProfileArgs(profileAlias) {
+  const alias = cleanText(profileAlias, 120);
+  return alias ? ['--profile', alias] : [];
+}
+
+function shellQuoteArg(value) {
+  const text = String(value === undefined || value === null ? '' : value);
+  if (!text) return '""';
+  if (/^[a-zA-Z0-9_./:=@-]+$/.test(text)) return text;
+  return '"' + text.replace(/(["\\])/g, '\\$1') + '"';
+}
+
+function formatOpenCliCommand(args) {
+  return 'opencli ' + (args || []).map(shellQuoteArg).join(' ');
 }
 
 function launchChromeProfile(profileDirectory, url) {
   return new Promise(resolve => {
     const bin = chromeBin();
-    const userDataDir = process.env.CHROME_USER_DATA_DIR
-      || path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local'), 'Google', 'Chrome', 'User Data');
+    const userDataDir = chromeUserDataDir();
+    const hasOpenCliExtension = fs.existsSync(path.join(openCliExtensionDir, 'manifest.json'));
     const args = [
       '--new-window',
       '--user-data-dir=' + userDataDir,
@@ -185,6 +313,7 @@ function launchChromeProfile(profileDirectory, url) {
       '--no-default-browser-check'
     ];
     if (profileDirectory) args.push('--profile-directory=' + profileDirectory);
+    if (hasOpenCliExtension) args.push('--load-extension=' + openCliExtensionDir);
     args.push(url || 'about:blank');
     let proc = null;
     try {
@@ -194,7 +323,7 @@ function launchChromeProfile(profileDirectory, url) {
         windowsHide: false
       });
       proc.unref();
-      resolve({ ok: true, bin, args });
+      resolve({ ok: true, bin, args, extension_dir: hasOpenCliExtension ? openCliExtensionDir : '' });
     } catch (err) {
       resolve({ ok: false, bin, args, error: err.message });
     }
@@ -275,19 +404,34 @@ async function ensureChromeProfileWindow(accountId, platformId, profileAlias, op
   if (!profileDirectory) {
     return { ok: false, error: '鏈厤缃?Chrome Profile 鐩綍', profile_alias: profileAlias };
   }
+  const connectedProfiles = await listOpenCliProfiles();
+  if (!options.force && connectedProfiles.some(item => item.connected && (item.alias === profileAlias || item.context_id === profileAlias))) {
+    return { ok: true, skipped: true, reason: 'profile already connected', profile_alias: profileAlias, profile_directory: profileDirectory };
+  }
+  const beforeIds = new Set((connectedProfiles || []).map(item => String(item && item.context_id || '').trim()).filter(Boolean));
   const key = profileDirectory + ':' + (platformId || '');
   const previous = chromeLaunchState.get(key) || 0;
   if (!options.force && Date.now() - previous < 10 * 60 * 1000) {
     return { ok: true, skipped: true, reason: 'recently launched', profile_alias: profileAlias, profile_directory: profileDirectory };
   }
-  const launched = await launchChromeProfile(profileDirectory, platformUrl(platformId) || 'about:blank');
+  const launched = await launchChromeProfile(profileDirectory, options.url || 'about:blank');
   if (launched.ok) {
     chromeLaunchState.set(key, Date.now());
     const waitUntil = Date.now() + (Number(options.connectTimeoutMs) || 30000);
     while (Date.now() < waitUntil) {
       await waitMs(3000);
       const profiles = await listOpenCliProfiles();
-      if (profiles.some(item => item.connected && (item.alias === profileAlias || item.context_id === profileAlias))) break;
+      const aliased = profiles.find(item => item.connected && (item.alias === profileAlias || item.context_id === profileAlias));
+      if (aliased) {
+        launched.connected_profile = aliased.context_id || aliased.alias || profileAlias;
+        break;
+      }
+      const newlyConnected = profiles.find(item => item.connected && item.context_id && !beforeIds.has(String(item.context_id).trim()));
+      if (newlyConnected) {
+        launched.connected_profile = newlyConnected.context_id || newlyConnected.alias || profileAlias;
+        launched.detected_context_id = newlyConnected.context_id || '';
+        break;
+      }
     }
   }
   return Object.assign({
@@ -299,24 +443,38 @@ async function ensureChromeProfileWindow(accountId, platformId, profileAlias, op
 function parseOpenCliProfiles(text) {
   let disconnected = false;
   return String(text || '').split(/\r?\n/).map(line => {
-    if (/Disconnected saved profiles/i.test(line)) {
+    const raw = String(line || '').trim();
+    if (!raw || /^Update available:|^Run:|^Download:|^Extension update available:/i.test(raw)) return null;
+    if (/No Browser Bridge profiles connected|Open a Chrome profile/i.test(raw)) return null;
+    if (/Disconnected saved profiles/i.test(raw)) {
       disconnected = true;
       return null;
     }
-    if (/Connected Browser Bridge profiles/i.test(line)) {
+    if (/Connected Browser Bridge profiles/i.test(raw)) {
       disconnected = false;
       return null;
     }
-    const match = line.match(/^\s*([a-zA-Z0-9_-]+)\s+(.*)$/);
-    if (!match) return null;
-    const rest = match[2] || '';
+    const parts = raw.split(/\s+(?:\u2014|\u2013|-)\s+/);
+    let left = '';
+    let rest = '';
+    if (parts.length >= 2) {
+      left = parts[0].trim();
+      rest = parts.slice(1).join(' - ').trim();
+    } else {
+      const match = raw.match(/^\s*(\S+)\s+(.*)$/);
+      if (!match) return null;
+      left = match[1];
+      rest = match[2] || '';
+    }
+    const leftMatch = left.match(/^(\S+)(?:\s+(.*))?$/);
+    if (!leftMatch) return null;
     const alias = (rest.match(/alias[:：]\s*([^\s]+)/i) || [])[1] || '';
     const connected = !disconnected && /connected/i.test(rest) && !/not connected/i.test(rest);
     return {
-      context_id: match[1],
-      alias: alias || match[1],
+      context_id: leftMatch[1],
+      alias: leftMatch[2] || alias || leftMatch[1],
       connected,
-      raw: line.trim()
+      raw
     };
   }).filter(Boolean);
 }
@@ -424,6 +582,7 @@ function statusFromPublishTime(value) {
 
 function scheduledAt(form) {
   if (!form || (form.publishTime !== 'schedule' && form.publishTime !== 'queue')) return 0;
+  if (form.publishTime === 'queue' && form.queueImmediate) return now();
   const date = String(form.publishTime === 'queue' ? (form.queueDate || form.scheduleDate) : form.scheduleDate || '').trim();
   const time = String(form.publishTime === 'queue' ? (form.queueTime || form.scheduleTime) : form.scheduleTime || '').trim() || '00:00';
   if (!date) return 0;
@@ -661,6 +820,11 @@ function ffmpegBin(root) {
   return fs.existsSync(bundled) ? bundled : 'ffmpeg';
 }
 
+function ffprobeBin(root) {
+  const bundled = path.join(root, '.runtime', 'ffmpeg', 'ffmpeg-8.1.1-essentials_build', 'bin', process.platform === 'win32' ? 'ffprobe.exe' : 'ffprobe');
+  return fs.existsSync(bundled) ? bundled : 'ffprobe';
+}
+
 function transcribeAudioFile(audioPath) {
   const key = process.env.SILICONFLOW_API_KEY || process.env.SF_KEY || '';
   if (!key) return Promise.resolve({ error: 'SILICONFLOW_API_KEY is not configured' });
@@ -891,13 +1055,61 @@ module.exports = function createVideoPublishRoutes(deps) {
   ];
   (function runInitStatement(index) {
     if (index >= initStatements.length) {
-      initDb.close();
+      seedDefaultAccountBindings(initDb, function() {
+        initDb.close();
+      });
       return;
     }
     initDb.run(initStatements[index], [], function() {
       runInitStatement(index + 1);
     });
   })(0);
+
+  function seedDefaultAccountBindings(db, done) {
+    if (!defaultAccountBindings.length) {
+      done();
+      return;
+    }
+    const ts = now();
+    const sql = `INSERT INTO video_publish_accounts (
+        account_id,account_name,platform_id,platform_name,platform_handle,profile_alias,login_status,last_checked_at,capabilities,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(account_id, platform_id) DO UPDATE SET
+        account_name=excluded.account_name,
+        platform_name=excluded.platform_name,
+        platform_handle=excluded.platform_handle,
+        profile_alias=excluded.profile_alias,
+        login_status=CASE
+          WHEN video_publish_accounts.login_status IS NULL OR video_publish_accounts.login_status = 'unknown'
+          THEN excluded.login_status
+          ELSE video_publish_accounts.login_status
+        END,
+        capabilities=excluded.capabilities,
+        updated_at=excluded.updated_at`;
+    (function seedNext(index) {
+      if (index >= defaultAccountBindings.length) {
+        done();
+        return;
+      }
+      const binding = defaultAccountBindings[index];
+      const platformId = cleanText(binding.platform_id, 80);
+      db.run(sql, [
+        cleanText(binding.account_id, 80),
+        cleanText(binding.account_name, 120),
+        platformId,
+        cleanText(binding.platform_name, 120),
+        cleanText(binding.platform_handle, 200),
+        cleanText(binding.profile_alias, 120),
+        cleanText(binding.login_status || 'unknown', 40),
+        Number(binding.last_checked_at || 0) || 0,
+        stringify(platformCapabilities(platformId)),
+        ts,
+        ts
+      ], function() {
+        seedNext(index + 1);
+      });
+    })(0);
+  }
 
   function logRun(payload, done) {
     const db = getDb();
@@ -930,6 +1142,8 @@ module.exports = function createVideoPublishRoutes(deps) {
     const accountId = cleanText(input.account_id || input.accountId, 80);
     const platformId = cleanText(input.platform_id || input.platformId, 80);
     if (!accountId || !platformId) { cb({ error: 'missing account/platform' }); return; }
+    const profileAlias = cleanText(input.profile_alias || input.profileAlias, 120);
+    if (!profileAlias) { cb({ error: 'missing profile alias' }); return; }
     const ts = now();
     const caps = platformCapabilities(platformId);
     const db = getDb();
@@ -950,7 +1164,7 @@ module.exports = function createVideoPublishRoutes(deps) {
         platformId,
         cleanText(input.platform_name || input.platformName, 120),
         cleanText(input.platform_handle || input.platformHandle, 200),
-        cleanText(input.profile_alias || input.profileAlias, 120),
+        profileAlias,
         cleanText(input.login_status || input.loginStatus || 'unknown', 40),
         Number(input.last_checked_at || input.lastCheckedAt) || 0,
         stringify(caps),
@@ -1033,8 +1247,9 @@ module.exports = function createVideoPublishRoutes(deps) {
     if (/douyin commerce fillMain/.test(text)) return '正在填写标题、文案和话题';
     if (/douyin commerce openCartSelect/.test(text)) return '正在打开购物车标签选择';
     if (/wait cart dropdown|douyin commerce chooseCart/.test(text)) return '正在切换成购物车标签';
-    if (/wait product link input|douyin commerce addProduct/.test(text)) return '正在添加商品链接';
-    if (/wait product modal|douyin commerce completeProduct/.test(text)) return '正在填写商品文案';
+    if (/wait product link input|douyin commerce addProduct/.test(text)) return '正在打开商品链接入口';
+    if (/wait product modal|probe douyin commerce product modal/.test(text)) return '正在等待商品链接弹窗';
+    if (/douyin commerce completeProduct|completeProduct fallback|type product short title|finish product edit/.test(text)) return '正在填写商品文案';
     if (/wait product attached|douyin commerce verifyReady/.test(text)) return '正在确认商品已挂载并检查发布按钮';
     if (/douyin commerce click publish/.test(text)) return '正在点击最终发布';
     if (/douyin commerce confirm publish/.test(text)) return data && data.ok ? '发布已确认完成' : '正在确认发布结果';
@@ -1130,7 +1345,7 @@ module.exports = function createVideoPublishRoutes(deps) {
 
   async function runWithProfileLock(profileAlias, fn) {
     const key = profileAlias || '__default__';
-    if (profileLocks.get(key)) throw new Error('This OpenCLI profile is already running another publish task. Please wait or cancel it first.');
+    if (profileLocks.get(key)) throw new Error('该 OpenCLI Profile 正在执行另一个发布任务，请等待当前任务结束，或先取消正在运行的任务后再发布。');
     profileLocks.set(key, true);
     try {
       return await fn();
@@ -1139,10 +1354,36 @@ module.exports = function createVideoPublishRoutes(deps) {
     }
   }
 
+  function isDouyinCommerceAccount(row, profileAlias) {
+    const accountId = cleanText(row && row.account_id, 120);
+    if (accountId.startsWith('nishuihan-') || accountId === 'youxia-bengbeng') return true;
+    const accountText = [
+      profileAlias,
+      row && row.profile_alias,
+      row && row.account_name,
+      row && row.platform_handle
+    ].filter(Boolean).join(' ');
+    return /dvabrcmr|h4g7ab4y|b3uk5kjf|vpu8aysj|饭十七|游点慌|雷鸭|游侠蹦蹦/i.test(accountText);
+  }
+
+  function shouldRunDouyinCommerce(row, profileAlias, commerce) {
+    if (!commerce) return false;
+    if (commerce.enabled) return true;
+    const productUrl = cleanText(commerce.productUrl, 1000);
+    const productText = cleanCommerceProductText(commerce.productText, commerce);
+    return Boolean(productUrl && productText && isDouyinCommerceAccount(row, profileAlias));
+  }
+
   async function runDouyinJob(row, videoPath, profileAlias) {
     const options = safeJson(row.options_json, {});
     const commerce = options && options.raw && options.raw.commerce || {};
-    if (commerce && commerce.enabled) return runDouyinCommerceJob(row, videoPath, profileAlias, commerce);
+    if (shouldRunDouyinCommerce(row, profileAlias, commerce)) {
+      return runDouyinCommerceJob(row, videoPath, profileAlias, {
+        ...commerce,
+        enabled: true,
+        mode: commerce.mode || ('nishuihan-' + cleanText(commerce.preset || 'chisel', 40))
+      });
+    }
     if (row.publish_time === 'now') return runBrowserPublishJob(row, videoPath, profileAlias);
     const mode = row.publish_time === 'schedule' ? 'publish' : 'draft';
     if (mode === 'publish') {
@@ -1153,7 +1394,7 @@ module.exports = function createVideoPublishRoutes(deps) {
       }
     }
     const args = [];
-    if (profileAlias) args.push('--profile', profileAlias);
+    args.push(...openCliProfileArgs(profileAlias));
     args.push('douyin', mode, videoPath, '--title', cleanText(row.title || row.video_name, 30), '--caption', captionFor(row), '--visibility', douyinVisibility(row.visibility), '-f', 'json');
     if (mode === 'publish') args.push('--schedule', formatSchedule(row.scheduled_at), '--allow_download', String(Boolean(safeJson(row.options_json, {}).allowDownload)));
     return runOpenCli(args, { timeoutMs: 30 * 60 * 1000, cwd: root });
@@ -1195,7 +1436,7 @@ module.exports = function createVideoPublishRoutes(deps) {
     const tagsText = douyinCommerceTags(row, commerce);
     const caption = tagsText;
     const productUrl = cleanText(commerce && commerce.productUrl, 1000);
-    const productText = cleanText(commerce && commerce.productText, 80);
+    const productText = cleanCommerceProductText(commerce && commerce.productText, commerce);
     return [
       '(function(){',
       'var stage=' + JSON.stringify(stage) + ';',
@@ -1221,7 +1462,7 @@ module.exports = function createVideoPublishRoutes(deps) {
       'function exactButton(text,root){return buttonPool(root).filter(function(item){return item.text===text}).sort(function(a,b){return(a.w*a.h)-(b.w*b.h)||a.y-b.y||a.x-b.x})[0]}',
       'var body=(document.body&&document.body.innerText||"").replace(/\\s+/g," ");',
       'if(stage==="fillMain"){var titleInput=items("input").filter(function(item){return item.visible&&!item.disabled&&item.type!=="file"&&(/\\u586b\\u5199\\u4f5c\\u54c1\\u6807\\u9898|\\u4f5c\\u54c1\\u6807\\u9898/.test(item.placeholder+" "+item.text)||item.placeholder==="\\u586b\\u5199\\u4f5c\\u54c1\\u6807\\u9898\\uff0c\\u4e3a\\u4f5c\\u54c1\\u83b7\\u5f97\\u66f4\\u591a\\u6d41\\u91cf")})[0];var editors=items("[contenteditable=true],textarea").filter(function(item){return item.visible&&!item.disabled&&item.w>220&&item.h>36});var editor=(editors.find(function(item){return /\\u4f5c\\u54c1\\u63cf\\u8ff0|#\\u6dfb\\u52a0\\u8bdd\\u9898|@\\u597d\\u53cb/.test(item.ctx)})||editors[0]||{}).el;var okTitle=titleInput?setInput(titleInput.el,mainCopy||title):true;var okCaption=tagsText?setEditable(editor,tagsText):true;return{ok:okTitle&&okCaption,title:okTitle,caption:okCaption,titleValue:titleInput&&titleInput.el.value||"",captionValue:editor&&textOf(editor)||"",mainCopy:mainCopy,tagsText:tagsText,editorCount:editors.length,url:location.href,tail:body.slice(-700)}}',
-      'if(stage==="openCartSelect"){var focusedRow=focusTagRow();function fireEl(el){if(!el)return null;try{el.scrollIntoView({block:"center",inline:"center"})}catch(e){}var r=el.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y)||el;["pointerdown","mousedown","pointerup","mouseup","click"].forEach(function(type){hit.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{hit.click()}catch(e){}try{el.click()}catch(e){}return{text:textOf(el),ctx:ctx(el),x:Math.round(x),y:Math.round(y),hit:textOf(hit)}}function box(el){var r=el.getBoundingClientRect();return{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}}function rowFor(el){var p=el;for(var i=0;i<8&&p;i++,p=p.parentElement){var r=p.getBoundingClientRect(),t=textOf(p);if(r.width>180&&r.width<760&&r.height>24&&r.height<170&&/\\u6dfb\\u52a0\\u6807\\u7b7e/.test(t)&&/(\\u4f4d\\u7f6e|\\u6e38\\u620f\\u624b\\u67c4|\\u8d2d\\u7269\\u8f66)/.test(t))return p}return null}var labels=items("div,span,label").filter(function(item){return item.visible&&item.text==="\\u6dfb\\u52a0\\u6807\\u7b7e"});var candidates=[];labels.forEach(function(label){var row=rowFor(label.el);if(row){Array.from(row.querySelectorAll("[class*=semi-select],[role=combobox],button,[role=button],div,span")).forEach(function(el){var t=textOf(el),r=el.getBoundingClientRect();if(visible(el)&&!disabled(el)&&r.width>=30&&r.height>=16&&r.width<=260&&r.height<=90&&/(\\u4f4d\\u7f6e|\\u6e38\\u620f\\u624b\\u67c4|\\u8d2d\\u7269\\u8f66)/.test(t+" "+String(el.className||"")))candidates.push({el:el,text:t,ctx:ctx(el),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)})})}});var pool=buttonPool();var target=candidates.sort(function(a,b){var as=/semi-select|combobox/i.test(String(a.el.className||"")+" "+(a.el.getAttribute&&a.el.getAttribute("role")||""))?0:1,bs=/semi-select|combobox/i.test(String(b.el.className||"")+" "+(b.el.getAttribute&&b.el.getAttribute("role")||""))?0:1;return as-bs||(b.w*b.h)-(a.w*a.h)||a.y-b.y})[0]||pool.filter(function(item){return /^(\\u6e38\\u620f\\u624b\\u67c4|\\u4f4d\\u7f6e|\\u8d2d\\u7269\\u8f66)$/.test(item.text)&&/\\u6269\\u5c55\\u4fe1\\u606f|\\u6dfb\\u52a0\\u6807\\u7b7e/.test(item.ctx)}).sort(function(a,b){return(a.w*a.h)-(b.w*b.h)||a.y-b.y||a.x-b.x})[0];var clicked=target&&fireEl(target.el);return{ok:!!clicked,clicked:clicked&&clicked.text,hit:clicked&&clicked.hit,candidates:candidates.slice(0,12).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h,box:box(item.el)}}),options:pool.filter(function(item){return /\\u6269\\u5c55\\u4fe1\\u606f|\\u6dfb\\u52a0\\u6807\\u7b7e|\\u4f4d\\u7f6e|\\u8d2d\\u7269\\u8f66|\\u6e38\\u620f\\u624b\\u67c4|\\u6dfb\\u52a0\\u4f5c\\u54c1\\u540c\\u6b3e\\u6e38\\u620f/.test(item.text+" "+item.ctx)}).slice(0,30).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}})}}',
+      'if(stage==="openCartSelect"){var focusedRow=focusTagRow();function fireEl(el,ratio){if(!el)return null;try{el.scrollIntoView({block:"center",inline:"center"})}catch(e){}var r=el.getBoundingClientRect(),x=r.x+r.width*(ratio||0.5),y=r.y+r.height/2,hit=document.elementFromPoint(x,y)||el;["pointerdown","mousedown","pointerup","mouseup","click"].forEach(function(type){hit.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{hit.click()}catch(e){}try{el.click()}catch(e){}return{text:textOf(el),ctx:ctx(el),x:Math.round(x),y:Math.round(y),hit:textOf(hit)}}function box(el){var r=el.getBoundingClientRect();return{x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}}function rowFor(el){var p=el;for(var i=0;i<8&&p;i++,p=p.parentElement){var r=p.getBoundingClientRect(),t=textOf(p);if(r.width>180&&r.width<760&&r.height>24&&r.height<170&&/\\u6dfb\\u52a0\\u6807\\u7b7e/.test(t)&&/(\\u4f4d\\u7f6e|\\u8f93\\u5165\\u5730\\u7406\\u4f4d\\u7f6e|\\u6e38\\u620f\\u624b\\u67c4|\\u6dfb\\u52a0\\u4f5c\\u54c1\\u540c\\u6b3e\\u6e38\\u620f|\\u8d2d\\u7269\\u8f66)/.test(t))return p}return null}function rank(item){var text=item.text+" "+item.ctx+" "+String(item.el&&item.el.className||"");var select=/semi-select|combobox/i.test(String(item.el&&item.el.className||"")+" "+(item.el&&item.el.getAttribute&&item.el.getAttribute("role")||""))?0:2;var kind=/\\u8d2d\\u7269\\u8f66/.test(text)?0:/\\u6e38\\u620f\\u624b\\u67c4|\\u6dfb\\u52a0\\u4f5c\\u54c1\\u540c\\u6b3e\\u6e38\\u620f/.test(text)?1:/\\u4f4d\\u7f6e|\\u8f93\\u5165\\u5730\\u7406\\u4f4d\\u7f6e/.test(text)?3:4;return kind+select}var labels=items("div,span,label").filter(function(item){return item.visible&&item.text==="\\u6dfb\\u52a0\\u6807\\u7b7e"});var candidates=[];labels.forEach(function(label){var row=rowFor(label.el);if(row){Array.from(row.querySelectorAll("[class*=semi-select],[role=combobox],button,[role=button],div,span")).forEach(function(el){var t=textOf(el),r=el.getBoundingClientRect();if(visible(el)&&!disabled(el)&&r.width>=30&&r.height>=16&&r.width<=260&&r.height<=90&&/(\\u4f4d\\u7f6e|\\u8f93\\u5165\\u5730\\u7406\\u4f4d\\u7f6e|\\u6e38\\u620f\\u624b\\u67c4|\\u6dfb\\u52a0\\u4f5c\\u54c1\\u540c\\u6b3e\\u6e38\\u620f|\\u8d2d\\u7269\\u8f66)/.test(t+" "+String(el.className||"")))candidates.push({el:el,text:t,ctx:ctx(el),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)})})}});var pool=buttonPool();var target=candidates.sort(function(a,b){return rank(a)-rank(b)||(b.w*b.h)-(a.w*a.h)||a.y-b.y})[0]||pool.filter(function(item){return /^(\\u8d2d\\u7269\\u8f66|\\u6e38\\u620f\\u624b\\u67c4|\\u6dfb\\u52a0\\u4f5c\\u54c1\\u540c\\u6b3e\\u6e38\\u620f|\\u4f4d\\u7f6e)$/.test(item.text)&&/\\u6269\\u5c55\\u4fe1\\u606f|\\u6dfb\\u52a0\\u6807\\u7b7e/.test(item.ctx)}).sort(function(a,b){var ak=/\\u8d2d\\u7269\\u8f66/.test(a.text)?0:/\\u6e38\\u620f\\u624b\\u67c4|\\u6dfb\\u52a0\\u4f5c\\u54c1\\u540c\\u6b3e\\u6e38\\u620f/.test(a.text)?1:3,bk=/\\u8d2d\\u7269\\u8f66/.test(b.text)?0:/\\u6e38\\u620f\\u624b\\u67c4|\\u6dfb\\u52a0\\u4f5c\\u54c1\\u540c\\u6b3e\\u6e38\\u620f/.test(b.text)?1:3;return ak-bk||(a.w*a.h)-(b.w*b.h)||a.y-b.y||a.x-b.x})[0];var clicked=target&&fireEl(target.el,/\\u4f4d\\u7f6e|\\u8f93\\u5165\\u5730\\u7406\\u4f4d\\u7f6e/.test(target.text+" "+target.ctx)?0.86:0.5);return{ok:!!clicked,clicked:clicked&&clicked.text,hit:clicked&&clicked.hit,candidates:candidates.slice(0,12).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h,box:box(item.el)}}),options:pool.filter(function(item){return /\\u6269\\u5c55\\u4fe1\\u606f|\\u6dfb\\u52a0\\u6807\\u7b7e|\\u4f4d\\u7f6e|\\u8f93\\u5165\\u5730\\u7406\\u4f4d\\u7f6e|\\u8d2d\\u7269\\u8f66|\\u6e38\\u620f\\u624b\\u67c4|\\u6dfb\\u52a0\\u4f5c\\u54c1\\u540c\\u6b3e\\u6e38\\u620f/.test(item.text+" "+item.ctx)}).slice(0,30).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}})}}',
       'if(stage==="chooseCart"){focusTagRow();function itemExact(item,text){return item.text===text}var opts=buttonPool().filter(function(item){return /\\u8d2d\\u7269\\u8f66/.test(item.text+" "+item.ctx)&&!/\\u5df2\\u6dfb\\u52a0/.test(item.text)}).sort(function(a,b){var ae=itemExact(a,"\\u8d2d\\u7269\\u8f66")?0:1,be=itemExact(b,"\\u8d2d\\u7269\\u8f66")?0:1;return ae-be||(a.w*a.h)-(b.w*b.h)||a.y-b.y});var target=opts[0];return{ok:!!fire(target),clicked:target&&target.text,options:opts.slice(0,24).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}}),tail:body.slice(-900)}}',
       'if(stage==="addProduct"){var dialog=inDialog();var root=dialog&&dialog.el||document;var fields=items("input,textarea",root).filter(function(item){return item.visible&&!item.disabled&&item.type!=="file"&&(/\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|http|https|\\u94fe\\u63a5/.test(item.placeholder+" "+item.text+" "+item.ctx)||item.w>260&&item.h>=24)}).sort(function(a,b){var as=/\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|http|https|\\u94fe\\u63a5/.test(a.placeholder+" "+a.text+" "+a.ctx)?0:1;var bs=/\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|http|https|\\u94fe\\u63a5/.test(b.placeholder+" "+b.text+" "+b.ctx)?0:1;return as-bs||b.w-a.w||a.y-b.y});var input=fields[0];var buttons=buttonPool(root).filter(function(item){return /\\u6dfb\\u52a0\\u94fe\\u63a5|\\u6dfb\\u52a0\\u5546\\u54c1|\\u786e\\u8ba4\\u6dfb\\u52a0|^\\u6dfb\\u52a0$|^\\u786e\\u5b9a$|^\\u786e\\u8ba4$/.test(item.text)});if(!input){var opener=buttons.filter(function(item){return /\\u6dfb\\u52a0\\u94fe\\u63a5|\\u6dfb\\u52a0\\u5546\\u54c1/.test(item.text+" "+item.ctx)}).sort(function(a,b){var ae=/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u6dfb\\u52a0\\u5546\\u54c1/.test(a.text)?0:1,be=/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u6dfb\\u52a0\\u5546\\u54c1/.test(b.text)?0:1;return ae-be||(a.w*a.h)-(b.w*b.h)||a.y-b.y})[0]||buttons[0];var opened=fire(opener);return{ok:false,opened:!!opened,input:false,clicked:opened&&opened.text,buttons:buttons.slice(0,12).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}}),fields:fields.slice(0,8).map(function(item){return{text:item.text,placeholder:item.placeholder,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}})}}var okInput=setInput(input.el,productUrl);var add=(input&&buttons.filter(function(item){return item.y>=input.y-18&&item.y<=input.y+input.h+24&&item.x>input.x+input.w-30}).sort(function(a,b){return a.x-b.x||a.y-b.y})[0])||buttons.sort(function(a,b){var ae=/\\u6dfb\\u52a0\\u94fe\\u63a5/.test(a.text)?0:1,be=/\\u6dfb\\u52a0\\u94fe\\u63a5/.test(b.text)?0:1;return ae-be||(a.w*a.h)-(b.w*b.h)||b.y-a.y})[0];var clicked=fire(add);return{ok:okInput&&!!add,input:okInput,clicked:clicked&&clicked.text,placeholder:input&&input.placeholder,buttons:buttons.slice(0,12).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}}),fields:fields.slice(0,8).map(function(item){return{text:item.text,placeholder:item.placeholder,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}})}}',
       'if(stage==="completeProduct"){var productEditorPattern=/\\u5546\\u54c1\\u77ed\\u6807\\u9898|\\u5546\\u54c1\\u539f\\u6807\\u9898|\\u5b8c\\u6210\\u7f16\\u8f91|\\u6700\\u591a\\u8f93\\u516510\\u4e2a\\u6c49\\u5b57/;var linkEntryPattern=/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|https?:\\/\\//;if(/\\u5df2\\u6dfb\\u52a0\\u5546\\u54c1/.test(body))return{ok:true,alreadyAttached:true,tail:body.slice(-700)};var dialog=inDialog();if(!dialog&&!productEditorPattern.test(body))return{ok:false,waitingProductModal:true,linkEntryVisible:linkEntryPattern.test(body),tail:body.slice(-900)};var root=dialog&&dialog.el||document;function forceTypeShortTitle(){var nodes=items("input,textarea,[contenteditable=true],div",root).filter(function(item){return item.visible&&!item.disabled&&item.w>=80&&item.h>=18&&item.w<=420&&item.h<=80});var byCtx=nodes.filter(function(item){return /\\u5546\\u54c1\\u77ed\\u6807\\u9898|\\u6700\\u591a\\u8f93\\u516510\\u4e2a\\u6c49\\u5b57/.test(item.ctx+" "+item.placeholder+" "+item.text)&&!/\\u5b8c\\u6210\\u7f16\\u8f91|\\u53d6\\u6d88/.test(item.text)}).sort(function(a,b){return a.y-b.y||a.x-b.x})[0];var input=byCtx&&byCtx.el;if(input&&/INPUT|TEXTAREA/.test(input.tagName))return setInput(input,productText);if(input&&input.getAttribute&&input.getAttribute("contenteditable")==="true")return setEditable(input,productText);if(input){try{input.scrollIntoView({block:"center",inline:"center"})}catch(e){}var r=input.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;var hit=document.elementFromPoint(x,y)||input;hit.dispatchEvent(new MouseEvent("click",{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}));try{document.execCommand&&document.execCommand("insertText",false,productText)}catch(e){}return true}return false}var fields=items("input,textarea,[contenteditable=true]",root).filter(function(item){return item.visible&&!item.disabled&&item.type!=="file"&&(/\\u5546\\u54c1\\u77ed\\u6807\\u9898|\\u77ed\\u6807\\u9898|\\u5546\\u54c1\\u6587\\u6848|\\u6587\\u6848|\\u6700\\u591a\\u8f93\\u516510\\u4e2a\\u6c49\\u5b57/.test(item.placeholder+" "+item.text+" "+item.ctx)||item.w>120&&item.h>=20)}).sort(function(a,b){var as=/\\u5546\\u54c1\\u77ed\\u6807\\u9898|\\u6700\\u591a\\u8f93\\u516510\\u4e2a\\u6c49\\u5b57/.test(a.placeholder+" "+a.text+" "+a.ctx)?0:1;var bs=/\\u5546\\u54c1\\u77ed\\u6807\\u9898|\\u6700\\u591a\\u8f93\\u516510\\u4e2a\\u6c49\\u5b57/.test(b.placeholder+" "+b.text+" "+b.ctx)?0:1;return as-bs||a.y-b.y});var input=fields[0];var okShort=input?(/INPUT|TEXTAREA/.test(input.el.tagName)?setInput(input.el,productText):setEditable(input.el,productText)):forceTypeShortTitle();var done=buttonPool(root).filter(function(item){return /^(\\u5b8c\\u6210\\u7f16\\u8f91|\\u5b8c\\u6210|\\u786e\\u8ba4|\\u786e\\u5b9a|\\u4fdd\\u5b58)$/.test(item.text)}).sort(function(a,b){var ae=a.text==="\\u5b8c\\u6210\\u7f16\\u8f91"?0:1,be=b.text==="\\u5b8c\\u6210\\u7f16\\u8f91"?0:1;return ae-be||b.y-a.y||b.x-a.x})[0];var clicked=fire(done);return{ok:okShort&&!!done,shortTitle:okShort,clicked:clicked&&clicked.text,placeholder:input&&input.placeholder,fields:fields.slice(0,8).map(function(item){return{text:item.text,placeholder:item.placeholder,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}}),buttons:buttonPool(root).filter(function(item){return /\\u5b8c\\u6210|\\u786e\\u5b9a|\\u53d6\\u6d88|\\u7f16\\u8f91/.test(item.text)}).slice(0,12).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}}),tail:body.slice(-700)}}',
@@ -1235,7 +1476,7 @@ module.exports = function createVideoPublishRoutes(deps) {
     const title = cleanText(row.title || row.video_name, 30);
     const caption = douyinCommerceCaption(row, commerce);
     const productUrl = cleanText(commerce && commerce.productUrl, 1000);
-    const productText = cleanText(commerce && commerce.productText, 80);
+    const productText = cleanCommerceProductText(commerce && commerce.productText, commerce);
     return [
       '(function(){',
       'var stage=' + JSON.stringify(stage) + ';',
@@ -1273,6 +1514,7 @@ module.exports = function createVideoPublishRoutes(deps) {
       'function ctx(el){var a=[],p=el;for(var i=0;i<5&&p;i++,p=p.parentElement)a.push(textOf(p));return a.join(" | ").slice(0,700)}',
       'function items(selector,root){return Array.from((root||document).querySelectorAll(selector)).map(function(el){var r=el.getBoundingClientRect();return{el:el,text:textOf(el),ctx:ctx(el),placeholder:el.getAttribute&&el.getAttribute("placeholder")||"",type:el.getAttribute&&el.getAttribute("type")||"",cls:String(el.className||"").slice(0,160),visible:visible(el),disabled:disabled(el),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}})}',
       'function fire(item){if(!item)return null;try{item.el.scrollIntoView({block:"center",inline:"center"})}catch(e){}var r=item.el.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y)||item.el;["pointermove","mousemove","pointerdown","mousedown","pointerup","mouseup","click"].forEach(function(type){hit.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{hit.click&&hit.click()}catch(e){}try{item.el.click&&item.el.click()}catch(e){}return{text:item.text,ctx:item.ctx,placeholder:item.placeholder,x:Math.round(x),y:Math.round(y),hit:textOf(hit)}}',
+      'function clickAt(x,y){x=Math.max(10,Math.min(innerWidth-10,x));y=Math.max(10,Math.min(innerHeight-10,y));var hit=document.elementFromPoint(x,y);if(!hit)return null;["pointermove","mousemove","pointerdown","mousedown","pointerup","mouseup","click"].forEach(function(type){hit.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{hit.focus&&hit.focus();hit.click&&hit.click()}catch(e){}return{text:textOf(hit),ctx:ctx(hit),x:Math.round(x),y:Math.round(y)}}',
       'function setInput(el,value){if(!el)return false;try{el.scrollIntoView({block:"center",inline:"center"})}catch(e){}el.focus&&el.focus();var proto=el.tagName==="TEXTAREA"?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;var desc=Object.getOwnPropertyDescriptor(proto,"value");if(desc&&desc.set)desc.set.call(el,"");else el.value="";el.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"deleteContentBackward",data:null}));if(desc&&desc.set)desc.set.call(el,value);else el.value=value;el.dispatchEvent(new InputEvent("input",{bubbles:true,inputType:"insertText",data:value}));el.dispatchEvent(new Event("change",{bubbles:true}));return true}',
       'function dialog(){return items("[role=dialog],.semi-modal,.semi-modal-content,[class*=modal],[class*=dialog]").filter(function(item){return item.visible&&item.w>260&&item.h>160}).sort(function(a,b){return(b.w*b.h)-(a.w*a.h)})[0]}',
       'function fieldList(root){return items("input,textarea",root).filter(function(item){return item.visible&&!item.disabled&&item.type!=="file"&&(/\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|http|https|\\u94fe\\u63a5/.test(item.placeholder+" "+item.text+" "+item.ctx)||item.w>260&&item.h>=24)}).sort(function(a,b){var as=/\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|http|https|\\u94fe\\u63a5/.test(a.placeholder+" "+a.text+" "+a.ctx)?0:1;var bs=/\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|http|https|\\u94fe\\u63a5/.test(b.placeholder+" "+b.text+" "+b.ctx)?0:1;return as-bs||b.w-a.w||a.y-b.y})}',
@@ -1280,7 +1522,11 @@ module.exports = function createVideoPublishRoutes(deps) {
       'var dlg=dialog();',
       'var roots=[dlg&&dlg.el,document].filter(Boolean);',
       'for(var ri=0;ri<roots.length;ri++){var fields=fieldList(roots[ri]);var input=fields[0];if(input){var okInput=setInput(input.el,productUrl);var add=addButtons(roots[ri],input)[0];var clicked=fire(add);return{ok:okInput&&!!add,input:okInput,clicked:clicked&&clicked.text,placeholder:input.placeholder,mode:"fill-existing-input",fields:fields.slice(0,6).map(function(item){return{text:item.text,placeholder:item.placeholder,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}}),buttons:addButtons(roots[ri],input).slice(0,8).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}})}}}',
-      'var openers=items("button,[role=button],a,div,span").filter(function(item){var text=item.text+" "+item.ctx+" "+item.cls;return item.visible&&!item.disabled&&item.w>=24&&item.h>=14&&item.w<=360&&item.h<=140&&(/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u6dfb\\u52a0\\u5546\\u54c1|\\u6dfb\\u52a0/.test(item.text)||(/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u6dfb\\u52a0\\u5546\\u54c1/.test(text)&&/\\u8d2d\\u7269\\u8f66|\\u6dfb\\u52a0\\u6807\\u7b7e/.test(text)))}).sort(function(a,b){var exactA=/^\\u6dfb\\u52a0\\u94fe\\u63a5$|^\\u6dfb\\u52a0\\u5546\\u54c1$/.test(a.text)?0:1;var exactB=/^\\u6dfb\\u52a0\\u94fe\\u63a5$|^\\u6dfb\\u52a0\\u5546\\u54c1$/.test(b.text)?0:1;var cartA=/\\u8d2d\\u7269\\u8f66/.test(a.ctx)?0:1;var cartB=/\\u8d2d\\u7269\\u8f66/.test(b.ctx)?0:1;return exactA-exactB||cartA-cartB||(a.w*a.h)-(b.w*b.h)||a.y-b.y})',
+      'var pageItems=items("button,[role=button],a,div,span");',
+      'var cartRows=pageItems.filter(function(item){return item.visible&&!item.disabled&&item.w>=80&&item.h>=16&&item.w<=760&&item.h<=180&&/\\u8d2d\\u7269\\u8f66/.test(item.text)&&/\\u6dfb\\u52a0\\u94fe\\u63a5/.test(item.text)&&!/\\u5df2\\u6dfb\\u52a0/.test(item.text)}).sort(function(a,b){return(a.w*a.h)-(b.w*b.h)||a.y-b.y||a.x-b.x});',
+      'var cartRow=cartRows[0];',
+      'if(cartRow){var scoped=pageItems.filter(function(item){return item.visible&&!item.disabled&&/^(\\u6dfb\\u52a0\\u94fe\\u63a5|\\u6dfb\\u52a0\\u5546\\u54c1)$/.test(item.text)&&item.x>=cartRow.x-20&&item.x<=cartRow.x+cartRow.w+20&&item.y>=cartRow.y-20&&item.y<=cartRow.y+cartRow.h+20&&item.w>=20&&item.h>=12&&item.w<=220&&item.h<=80}).sort(function(a,b){return(a.w*a.h)-(b.w*b.h)||b.x-a.x||a.y-b.y})[0];var scopedClicked=scoped?fire(scoped):clickAt(cartRow.x+cartRow.w*0.72,cartRow.y+cartRow.h/2);return{ok:false,opened:!!scopedClicked,clicked:scopedClicked,mode:"open-cart-link-scoped",cartRow:{text:cartRow.text,x:cartRow.x,y:cartRow.y,w:cartRow.w,h:cartRow.h},opener:scoped&&{text:scoped.text,x:scoped.x,y:scoped.y,w:scoped.w,h:scoped.h}}}',
+      'var openers=pageItems.filter(function(item){var text=item.text+" "+item.ctx+" "+item.cls;return item.visible&&!item.disabled&&item.w>=24&&item.h>=14&&item.w<=360&&item.h<=140&&(/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u6dfb\\u52a0\\u5546\\u54c1|\\u6dfb\\u52a0/.test(item.text)||(/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u6dfb\\u52a0\\u5546\\u54c1/.test(text)&&/\\u8d2d\\u7269\\u8f66|\\u6dfb\\u52a0\\u6807\\u7b7e/.test(text)))}).sort(function(a,b){var exactA=/^\\u6dfb\\u52a0\\u94fe\\u63a5$|^\\u6dfb\\u52a0\\u5546\\u54c1$/.test(a.text)?0:1;var exactB=/^\\u6dfb\\u52a0\\u94fe\\u63a5$|^\\u6dfb\\u52a0\\u5546\\u54c1$/.test(b.text)?0:1;var cartA=/\\u8d2d\\u7269\\u8f66/.test(a.ctx)?0:1;var cartB=/\\u8d2d\\u7269\\u8f66/.test(b.ctx)?0:1;return exactA-exactB||cartA-cartB||(a.w*a.h)-(b.w*b.h)||a.y-b.y})',
       'var opened=fire(openers[0]);',
       'return{ok:false,opened:!!opened,clicked:opened,mode:"open-link-entry",openers:openers.slice(0,10).map(function(item){return{text:item.text,ctx:item.ctx,x:item.x,y:item.y,w:item.w,h:item.h}}),tail:textOf(document.body).slice(-900)}})()'
     ].join('');
@@ -1295,16 +1541,44 @@ module.exports = function createVideoPublishRoutes(deps) {
       'function ctx(el){var a=[],p=el;for(var i=0;i<5&&p;i++,p=p.parentElement)a.push(textOf(p));return a.join(" | ").slice(0,700)}',
       'function items(selector){return Array.from(document.querySelectorAll(selector)).map(function(el){var r=el.getBoundingClientRect();return{el:el,text:textOf(el),ctx:ctx(el),placeholder:el.getAttribute&&el.getAttribute("placeholder")||"",type:el.getAttribute&&el.getAttribute("type")||"",cls:String(el.className||"").slice(0,160),visible:visible(el),disabled:disabled(el),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}})}',
       'var body=(document.body&&document.body.innerText||"").replace(/\\s+/g," ");',
-      'var productEditorPattern=/\\u5546\\u54c1\\u77ed\\u6807\\u9898|\\u5546\\u54c1\\u539f\\u6807\\u9898|\\u5b8c\\u6210\\u7f16\\u8f91|\\u6700\\u591a\\u8f93\\u516510\\u4e2a\\u6c49\\u5b57/;',
-      'var dialogs=items("[role=dialog],.semi-modal,.semi-modal-content,[class*=modal],[class*=dialog],.dy-creator-content-modal-wrap,.dy-creator-content-modal").filter(function(item){return item.visible&&!item.disabled&&item.w>260&&item.h>160&&productEditorPattern.test(item.text+" "+item.ctx)}).sort(function(a,b){return(b.w*b.h)-(a.w*a.h)});',
+      'var productEditorPattern=/\\u5546\\u54c1\\u77ed\\u6807\\u9898|\\u5546\\u54c1\\u539f\\u6807\\u9898|\\u5546\\u54c1\\u6807\\u9898|\\u77ed\\u6807\\u9898|\\u5546\\u54c1\\u6587\\u6848|\\u5356\\u70b9|\\u63a8\\u8350\\u8bed|\\u5b8c\\u6210\\u7f16\\u8f91|\\u6700\\u591a\\u8f93\\u5165\\d*\\u4e2a\\u6c49\\u5b57|\\u8bf7\\u8f93\\u5165.{0,12}\\u6807\\u9898/;',
+      'var linkEntryPattern=/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|https?:\\/\\//;',
+      'var allDialogs=items("[role=dialog],.semi-modal,.semi-modal-content,[class*=modal],[class*=dialog],.dy-creator-content-modal-wrap,.dy-creator-content-modal").filter(function(item){return item.visible&&!item.disabled&&item.w>260&&item.h>160}).sort(function(a,b){return(b.w*b.h)-(a.w*a.h)});',
+      'var dialogs=allDialogs.filter(function(item){var text=item.text+" "+item.ctx+" "+item.cls;return productEditorPattern.test(text)||(/\\u5546\\u54c1/.test(text)&&/\\u7f16\\u8f91|\\u5b8c\\u6210|\\u6807\\u9898|\\u6587\\u6848/.test(text))});',
       'var controls=items("input,textarea,[contenteditable=true]").filter(function(item){return item.visible&&!item.disabled&&item.type!=="file"&&productEditorPattern.test(item.placeholder+" "+item.text+" "+item.ctx)}).sort(function(a,b){return a.y-b.y||a.x-b.x});',
-      'var modalReady=!!dialogs[0]||!!controls[0];',
+      'var genericControls=items("input,textarea,[contenteditable=true]").filter(function(item){var text=item.placeholder+" "+item.text+" "+item.ctx;return item.visible&&!item.disabled&&item.type!=="file"&&item.w>=80&&item.h>=18&&item.w<=520&&item.h<=120&&!linkEntryPattern.test(text)&&(/\\u5546\\u54c1|\\u7f16\\u8f91|\\u6807\\u9898|\\u6587\\u6848|\\u63a8\\u8350/.test(text)||allDialogs.some(function(dialog){return item.x>=dialog.x-30&&item.x<=dialog.x+dialog.w+30&&item.y>=dialog.y-30&&item.y<=dialog.y+dialog.h+30&&/\\u5546\\u54c1|\\u7f16\\u8f91|\\u5b8c\\u6210/.test(dialog.text+" "+dialog.ctx)}))}).sort(function(a,b){return a.y-b.y||a.x-b.x});',
+      'var modalReady=!!dialogs[0]||!!controls[0]||!!genericControls[0];',
       'var attached=/\\u5df2\\u6dfb\\u52a0\\u5546\\u54c1/.test(body);',
-      'return{ok:attached||modalReady,attached:attached,modalReady:modalReady,dialog:dialogs[0]&&{text:dialogs[0].text.slice(0,120),ctx:dialogs[0].ctx.slice(0,160),x:dialogs[0].x,y:dialogs[0].y,w:dialogs[0].w,h:dialogs[0].h},controls:controls.slice(0,6).map(function(item){return{text:item.text,placeholder:item.placeholder,ctx:item.ctx.slice(0,160),x:item.x,y:item.y,w:item.w,h:item.h}}),linkEntryVisible:/\\u6dfb\\u52a0\\u94fe\\u63a5|\\u5546\\u54c1\\u94fe\\u63a5|\\u7c98\\u8d34|https?:\\/\\//.test(body),tail:body.slice(-900)}',
+      'return{ok:attached||modalReady,attached:attached,modalReady:modalReady,dialog:(dialogs[0]||allDialogs[0])&&{text:(dialogs[0]||allDialogs[0]).text.slice(0,120),ctx:(dialogs[0]||allDialogs[0]).ctx.slice(0,160),x:(dialogs[0]||allDialogs[0]).x,y:(dialogs[0]||allDialogs[0]).y,w:(dialogs[0]||allDialogs[0]).w,h:(dialogs[0]||allDialogs[0]).h},controls:controls.concat(genericControls).slice(0,6).map(function(item){return{text:item.text,placeholder:item.placeholder,ctx:item.ctx.slice(0,160),x:item.x,y:item.y,w:item.w,h:item.h}}),linkEntryVisible:linkEntryPattern.test(body),tail:body.slice(-900)}',
       '})()'
     ].join('');
   }
 
+  function douyinCommerceCompleteProductDirectScript(productText) {
+    return String.raw`(function(){
+      var productText=__PRODUCT_TEXT__;
+      function attr(el,name){try{return el&&el.getAttribute?el.getAttribute(name):''}catch(e){return''}}
+      function prop(el,name){try{return el?el[name]:''}catch(e){return''}}
+      function textOf(el){var value=prop(el,'innerText')||prop(el,'textContent')||prop(el,'value')||prop(el,'placeholder')||attr(el,'aria-label')||'';return String(value).trim().replace(/\s+/g,' ')}
+      function visible(el){if(!el)return false;var r=el.getBoundingClientRect(),s=getComputedStyle(el);return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth}
+      function disabled(el){return !!(prop(el,'disabled')||attr(el,'aria-disabled')==='true'||/disabled|disable|loading/.test(String(prop(el,'className')||'')))}
+      function ctx(el){var list=[],p=el;for(var i=0;i<5&&p;i++,p=p.parentElement)list.push(textOf(p));return list.join(' | ').slice(0,700)}
+      function setInput(el,value){if(!el)return false;try{el.scrollIntoView({block:'center',inline:'center'})}catch(e){}try{el.focus&&el.focus()}catch(e){}var proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;var desc=Object.getOwnPropertyDescriptor(proto,'value');if(desc&&desc.set)desc.set.call(el,'');else el.value='';el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward',data:null}));if(desc&&desc.set)desc.set.call(el,value);else el.value=value;el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));el.dispatchEvent(new Event('change',{bubbles:true}));el.dispatchEvent(new KeyboardEvent('keyup',{bubbles:true,key:'Process'}));return el.value===value}
+      function fire(el){if(!el)return null;try{el.scrollIntoView({block:'center',inline:'center'})}catch(e){}var r=el.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2,hit=document.elementFromPoint(x,y)||el;['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(type){hit.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{el.click&&el.click()}catch(e){}return{text:textOf(el),hit:textOf(hit),x:Math.round(x),y:Math.round(y)}}
+      var body=textOf(document.body);
+      if(/\u5df2\u6dfb\u52a0\u5546\u54c1/.test(body))return{ok:true,alreadyAttached:true,tail:body.slice(-700)};
+      var shortTitlePattern=/\u8bf7\u8f93\u5165\u5546\u54c1\u77ed\u6807\u9898|\u5546\u54c1\u77ed\u6807\u9898|\u6700\u591a\u8f93\u516510\u4e2a\u6c49\u5b57/;
+      var linkPattern=/\u7c98\u8d34\u5546\u54c1\u94fe\u63a5|\u5546\u54c1\u94fe\u63a5|\u6dfb\u52a0\u94fe\u63a5|https?:\/\//;
+      var inputs=Array.from(document.querySelectorAll('input,textarea')).filter(function(el){var text=(attr(el,'placeholder')+' '+textOf(el)+' '+ctx(el));return visible(el)&&!disabled(el)&&attr(el,'type')!=='file'&&shortTitlePattern.test(text)&&!linkPattern.test(text)}).sort(function(a,b){var ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();return ar.y-br.y||ar.x-br.x});
+      var input=inputs[0];
+      if(!input)return{ok:false,directInput:false,tail:body.slice(-900)};
+      var okInput=setInput(input,productText);
+      var finishPattern=/^(\u5b8c\u6210\u7f16\u8f91|\u5b8c\u6210|\u786e\u5b9a|\u786e\u8ba4)$/;
+      var buttons=Array.from(document.querySelectorAll('button,[role=button],div,span')).filter(function(el){return visible(el)&&!disabled(el)&&finishPattern.test(textOf(el))}).sort(function(a,b){var at=textOf(a)==='\u5b8c\u6210\u7f16\u8f91'?0:1,bt=textOf(b)==='\u5b8c\u6210\u7f16\u8f91'?0:1,ar=a.getBoundingClientRect(),br=b.getBoundingClientRect();return at-bt||br.y-ar.y||br.x-ar.x});
+      var clicked=okInput?fire(buttons[0]):null;
+      return{ok:okInput&&!!clicked,shortTitle:okInput,clicked:clicked&&clicked.text,placeholder:attr(input,'placeholder'),value:input.value,buttons:buttons.slice(0,8).map(function(el){var r=el.getBoundingClientRect();return{text:textOf(el),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}}),tail:body.slice(-700)};
+    })()`.replace('__PRODUCT_TEXT__', jsUriLiteral(productText));
+  }
   async function runDouyinCommerceStage(row, commerce, prefix, session, combined, stage, timeoutMs) {
     if (stage === 'completeProduct') {
       const modalProbe = await evalBrowserJson(prefix, session, 'probe douyin commerce product modal', douyinCommerceProductModalReadyScript(), combined, 60000);
@@ -1316,12 +1590,19 @@ module.exports = function createVideoPublishRoutes(deps) {
           data: { ...modalData, ok: true, alreadyAttached: true }
         };
       }
+      const productText = cleanCommerceProductText(commerce && commerce.productText, commerce);
+      combined.code = 0;
+      const direct = await evalBrowserJson(prefix, session, 'douyin commerce completeProduct direct short title', douyinCommerceCompleteProductDirectScript(productText), combined, timeoutMs || 60000);
+      if (direct.data && direct.data.ok) {
+        combined.code = 0;
+        return direct;
+      }
       if (!modalData.modalReady) {
         combined.code = 1;
         combined.stderr += '\n商品编辑弹窗尚未出现，已暂停填写商品文案，避免写入商品链接输入框：' + stringify(modalData);
         return {
           result: modalProbe.result,
-          data: { ...modalData, ok: false, waitingProductModal: true }
+          data: { ...modalData, ok: false, waitingProductModal: true, direct: direct.data || {} }
         };
       }
       combined.code = 0;
@@ -1332,7 +1613,7 @@ module.exports = function createVideoPublishRoutes(deps) {
       if (probed.data.opened || /添加链接|添加商品/.test(String(probed.data.clicked || ''))) {
         const openerData = probed.data;
         combined.code = 0;
-        await runBrowserStep(combined, 'wait product link input after addProduct opener', prefix.concat(['browser', session, 'wait', 'time', '2']), 10000);
+        await runBrowserStep(combined, 'wait product link input after addProduct opener', prefix.concat(['browser', session, 'wait', 'time', '1']), 8000);
         const retried = await evalBrowserJson(prefix, session, 'douyin commerce addProduct retry after opener', douyinCommerceScript(row, commerce, 'addProduct'), combined, timeoutMs || 60000);
         if (retried.data && retried.data.ok) {
           combined.code = 0;
@@ -1352,7 +1633,7 @@ module.exports = function createVideoPublishRoutes(deps) {
           probed.data.fallback = fallback.data;
         } else if (fallback.data && fallback.data.opened) {
           combined.code = 0;
-          await runBrowserStep(combined, 'wait product link input after addProduct fallback', prefix.concat(['browser', session, 'wait', 'time', '2']), 10000);
+          await runBrowserStep(combined, 'wait product link input after addProduct fallback', prefix.concat(['browser', session, 'wait', 'time', '1']), 8000);
           const retried = await evalBrowserJson(prefix, session, 'douyin commerce addProduct retry after fallback opener', douyinCommerceScript(row, commerce, 'addProduct'), combined, timeoutMs || 60000);
           if (retried.data && retried.data.ok) {
             combined.code = 0;
@@ -1400,7 +1681,7 @@ module.exports = function createVideoPublishRoutes(deps) {
         probed.data.retried = retried.data || {};
       }
       if (!probed.data.ok) {
-        const fallbackScript = `(function(){function txt(e){return(e&&((e.innerText||e.textContent)||'')||'').trim().replace(/\\s+/g,' ')}function vis(e){if(!e)return false;var r=e.getBoundingClientRect(),s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth}function clickAt(x,y){x=Math.max(10,Math.min(innerWidth-10,x));y=Math.max(10,Math.min(innerHeight-10,y));var hit=document.elementFromPoint(x,y);if(!hit)return null;['pointermove','mousemove','pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){hit.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{hit.click&&hit.click()}catch(e){}return{text:txt(hit),x:Math.round(x),y:Math.round(y)}}var body=txt(document.body);var raw=Array.from(document.querySelectorAll('div,section,span,label,button,[role=button],[role=option],[role=combobox],[class*=semi-select]')).filter(vis).map(function(e){var r=e.getBoundingClientRect();return{e:e,t:txt(e),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height),cls:String(e.className||'').slice(0,120)}});var cart=raw.filter(function(o){return /购物车/.test(o.t)&&!/已添加商品/.test(o.t)&&o.w>=20&&o.h>=12&&o.w<=320&&o.h<=120}).sort(function(a,b){return (a.w*a.h)-(b.w*b.h)||a.y-b.y||a.x-b.x})[0];if(cart)return{ok:true,stage:'click-cart-option',clicked:clickAt(cart.x+cart.w/2,cart.y+cart.h/2),cart:{text:cart.t,x:cart.x,y:cart.y,w:cart.w,h:cart.h}};var row=raw.filter(function(o){return /添加标签/.test(o.t)&&/(位置|输入地理位置|游戏手柄|添加作品同款游戏)/.test(o.t)&&o.w>160&&o.h>20}).sort(function(a,b){return (a.w*a.h)-(b.w*b.h)||a.y-b.y})[0];var clicked=null;if(row){var points=[[.26,.50],[.32,.50],[.38,.50],[.44,.50],[.50,.50]];for(var i=0;i<points.length;i++){var p=points[i];clicked=clickAt(row.x+row.w*p[0],row.y+row.h*p[1]);var after=txt(document.body);if(/购物车/.test(after)&&!/已添加商品/.test(after))break}}return{ok:!!clicked,stage:'open-row-dropdown',clicked:clicked,row:row&&{text:row.t,x:row.x,y:row.y,w:row.w,h:row.h},tail:body.slice(-900)}})()`;
+        const fallbackScript = `(function(){function txt(e){return(e&&((e.innerText||e.textContent)||'')||'').trim().replace(/\\s+/g,' ')}function vis(e){if(!e)return false;var r=e.getBoundingClientRect(),s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth}function clickAt(x,y){x=Math.max(10,Math.min(innerWidth-10,x));y=Math.max(10,Math.min(innerHeight-10,y));var hit=document.elementFromPoint(x,y);if(!hit)return null;['pointermove','mousemove','mousedown','pointerdown','mouseup','pointerup','click'].forEach(function(t){hit.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{hit.click&&hit.click()}catch(e){}return{text:txt(hit),x:Math.round(x),y:Math.round(y)}}var body=txt(document.body);var raw=Array.from(document.querySelectorAll('div,section,span,label,button,[role=button],[role=option],[role=combobox],[class*=semi-select]')).filter(vis).map(function(e){var r=e.getBoundingClientRect();return{e:e,t:txt(e),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height),cls:String(e.className||'').slice(0,120)}});var cart=raw.filter(function(o){return /购物车/.test(o.t)&&!/已添加商品/.test(o.t)&&o.w>=20&&o.h>=12&&o.w<=320&&o.h<=120}).sort(function(a,b){var ae=/^购物车$/.test(a.t)?0:1,be=/^购物车$/.test(b.t)?0:1;return ae-be||(a.w*a.h)-(b.w*b.h)||a.y-b.y||a.x-b.x})[0];if(cart)return{ok:true,stage:'click-cart-option',clicked:clickAt(cart.x+cart.w/2,cart.y+cart.h/2),cart:{text:cart.t,x:cart.x,y:cart.y,w:cart.w,h:cart.h}};var row=raw.filter(function(o){return /添加标签/.test(o.t)&&/(位置|输入地理位置|游戏手柄|添加作品同款游戏|购物车)/.test(o.t)&&o.w>160&&o.h>20}).sort(function(a,b){return (a.w*a.h)-(b.w*b.h)||a.y-b.y})[0]||raw.filter(function(o){return /(位置|输入地理位置|游戏手柄|添加作品同款游戏)/.test(o.t)&&o.w>=50&&o.h>=20&&o.w<=320&&o.h<=120}).sort(function(a,b){return a.y-b.y||a.x-b.x})[0];var clicked=null;if(row){var points=/位置|输入地理位置/.test(row.t)?[[.86,.50],[.74,.50],[.62,.50],[.50,.50],[.38,.50],[.26,.50]]:[[.50,.50],[.66,.50],[.82,.50],[.34,.50]];for(var i=0;i<points.length;i++){var p=points[i];clicked=clickAt(row.x+row.w*p[0],row.y+row.h*p[1]);var after=txt(document.body);if(/购物车/.test(after)&&!/已添加商品/.test(after))break}}return{ok:!!clicked,stage:'open-row-dropdown',clicked:clicked,row:row&&{text:row.t,x:row.x,y:row.y,w:row.w,h:row.h},tail:body.slice(-900)}})()`;
         const opened = await evalBrowserJson(prefix, session, 'douyin commerce chooseCart open row fallback', fallbackScript, combined, timeoutMs || 60000);
         await runBrowserStep(combined, 'wait cart dropdown coordinate fallback', prefix.concat(['browser', session, 'wait', 'time', '1']), 8000);
         const picked = await evalBrowserJson(prefix, session, 'douyin commerce chooseCart pick fallback', fallbackScript, combined, timeoutMs || 60000);
@@ -1414,8 +1695,8 @@ module.exports = function createVideoPublishRoutes(deps) {
       }
     }
     if (stage === 'completeProduct' && probed.data && !probed.data.ok && /商品短标题|完成编辑/.test(String(probed.data.tail || ''))) {
-      const productText = cleanText(commerce && commerce.productText, 80);
-      const fallbackScript = `(function(){var productText=${jsUriLiteral(productText)};function textOf(el){return (el&&((el.innerText||el.textContent||el.value||el.placeholder||el.getAttribute&&el.getAttribute('aria-label'))||'')||'').trim().replace(/\\s+/g,' ');}function visible(el){if(!el)return false;var r=el.getBoundingClientRect();var s=getComputedStyle(el);return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;}function rectOf(item){return item&&{x:item.x,y:item.y,w:item.w,h:item.h};}function clickAt(x,y){x=Math.max(8,Math.min(innerWidth-8,x));y=Math.max(8,Math.min(innerHeight-8,y));var hit=document.elementFromPoint(x,y);if(!hit)return null;['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(type){hit.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{hit.focus&&hit.focus();hit.click&&hit.click()}catch(e){}return {el:hit,text:textOf(hit),tag:hit.tagName,cls:String(hit.className||'').slice(0,120),x:Math.round(x),y:Math.round(y)};}function typeText(value){var el=document.activeElement;try{document.execCommand&&document.execCommand('selectAll',false,null);document.execCommand&&document.execCommand('delete',false,null);document.execCommand&&document.execCommand('insertText',false,value)}catch(e){}if(el&&('value' in el)){var proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;var desc=Object.getOwnPropertyDescriptor(proto,'value');if(desc&&desc.set)desc.set.call(el,'');else el.value='';el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward',data:null}));if(desc&&desc.set)desc.set.call(el,value);else el.value=value;el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));el.dispatchEvent(new Event('change',{bubbles:true}));}else if(el&&el.isContentEditable){el.textContent=value;el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));el.dispatchEvent(new Event('change',{bubbles:true}));}try{navigator.clipboard&&navigator.clipboard.writeText&&navigator.clipboard.writeText(value)}catch(e){}}function keyPaste(value){try{document.execCommand&&document.execCommand('insertText',false,value)}catch(e){}}var body=textOf(document.body);var raw=Array.from(document.querySelectorAll('button,[role=button],div,span,label,input,textarea,[contenteditable=true],[class*=modal],[role=dialog]')).map(function(el,i){var r=el.getBoundingClientRect();return {el:el,i:i,text:textOf(el),visible:visible(el),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height),cls:String(el.className||'').slice(0,140),tag:el.tagName}});var dialogs=raw.filter(function(item){return item.visible&&item.w>360&&item.h>220&&/商品短标题|完成编辑|商品原标题/.test(item.text)}).sort(function(a,b){return (a.w*a.h)-(b.w*b.h)});var dialog=dialogs[0]||{x:Math.round(innerWidth*0.25),y:Math.round(innerHeight*0.14),w:Math.round(innerWidth*0.5),h:Math.round(innerHeight*0.72)};var inputs=raw.filter(function(item){return item.visible&&/INPUT|TEXTAREA/.test(item.tag)&&item.w>=50&&item.h>=14&&item.x>=dialog.x-20&&item.x<=dialog.x+dialog.w+20&&item.y>=dialog.y-20&&item.y<=dialog.y+dialog.h+20}).sort(function(a,b){return a.y-b.y||a.x-b.x});var shortLabel=raw.filter(function(item){return item.visible&&/商品短标题|最多输入10个汉字/.test(item.text)&&item.w>20&&item.h>10&&item.x>=dialog.x-20&&item.x<=dialog.x+dialog.w+20&&item.y>=dialog.y-20&&item.y<=dialog.y+dialog.h+20}).sort(function(a,b){return a.y-b.y||a.x-b.x})[0];var points=[];inputs.forEach(function(item){points.push({kind:'input',x:item.x+Math.min(item.w-8,Math.max(12,item.w/2)),y:item.y+item.h/2,ref:rectOf(item)})});if(shortLabel){points.push({kind:'label-right',x:shortLabel.x+Math.min(shortLabel.w-12,Math.max(150,shortLabel.w*0.58)),y:shortLabel.y+Math.min(shortLabel.h-6,Math.max(26,shortLabel.h*0.55)),ref:rectOf(shortLabel)});points.push({kind:'label-below',x:shortLabel.x+Math.min(shortLabel.w-12,Math.max(150,shortLabel.w*0.58)),y:shortLabel.y+shortLabel.h+18,ref:rectOf(shortLabel)})}[[0.58,0.52],[0.58,0.58],[0.58,0.64],[0.50,0.60],[0.66,0.60]].forEach(function(p){points.push({kind:'dialog-'+p[0]+'-'+p[1],x:dialog.x+dialog.w*p[0],y:dialog.y+dialog.h*p[1],ref:rectOf(dialog)})});var tried=[],typed=false;for(var i=0;i<points.length;i++){var p=points[i];var clicked=clickAt(p.x,p.y);typeText(productText);keyPaste(productText);var active=document.activeElement;var activeText=textOf(active);var now=textOf(document.body);var okActive=active&&((('value' in active)&&active.value===productText)||activeText===productText||now.indexOf(productText)>=0);tried.push({kind:p.kind,clicked:clicked&&{text:clicked.text,tag:clicked.tag,cls:clicked.cls,x:clicked.x,y:clicked.y},active:active&&active.tagName,activeText:activeText.slice(0,40),okActive:!!okActive});if(okActive){typed=true;break;}}var done=raw.filter(function(item){return item.visible&&/完成编辑|完成|确定|确认/.test(item.text)&&!/取消/.test(item.text)&&item.w>=28&&item.h>=16&&item.w<=280&&item.h<=140&&item.x>=dialog.x-40&&item.x<=dialog.x+dialog.w+60&&item.y>=dialog.y-40&&item.y<=dialog.y+dialog.h+60}).sort(function(a,b){var ae=/完成编辑/.test(a.text)?0:1,be=/完成编辑/.test(b.text)?0:1;return ae-be||b.y-a.y||b.x-a.x})[0];var clickedDone=null;if(typed){if(done){clickedDone=clickAt(done.x+done.w/2,done.y+done.h/2)}else{clickedDone=clickAt(dialog.x+dialog.w-72,dialog.y+dialog.h-32)}}return {ok:typed&&!!clickedDone,typed:typed,clicked:clickedDone&&clickedDone.text,dialog:rectOf(dialog),done:rectOf(done),tried:tried,tail:body.slice(-800),buttons:raw.filter(function(item){return /商品短标题|完成编辑|取消|完成|确定/.test(item.text)}).slice(0,30).map(function(item){return {text:item.text,x:item.x,y:item.y,w:item.w,h:item.h,cls:item.cls}})};})()`;
+      const productText = cleanCommerceProductText(commerce && commerce.productText, commerce);
+      const fallbackScript = `(function(){var productText=${jsUriLiteral(productText)};function textOf(el){return (el&&((el.innerText||el.textContent||el.value||el.placeholder||el.getAttribute&&el.getAttribute('aria-label'))||'')||'').trim().replace(/\\s+/g,' ');}function visible(el){if(!el)return false;var r=el.getBoundingClientRect();var s=getComputedStyle(el);return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth;}function rectOf(item){return item&&{x:item.x,y:item.y,w:item.w,h:item.h};}function clickAt(x,y){x=Math.max(8,Math.min(innerWidth-8,x));y=Math.max(8,Math.min(innerHeight-8,y));var hit=document.elementFromPoint(x,y);if(!hit)return null;['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(type){hit.dispatchEvent(new MouseEvent(type,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{hit.focus&&hit.focus();hit.click&&hit.click()}catch(e){}return {el:hit,text:textOf(hit),tag:hit.tagName,cls:String(hit.className||'').slice(0,120),x:Math.round(x),y:Math.round(y)};}function typeText(value){var el=document.activeElement;try{document.execCommand&&document.execCommand('selectAll',false,null);document.execCommand&&document.execCommand('delete',false,null);document.execCommand&&document.execCommand('insertText',false,value)}catch(e){}if(el&&('value' in el)){var proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;var desc=Object.getOwnPropertyDescriptor(proto,'value');if(desc&&desc.set)desc.set.call(el,'');else el.value='';el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'deleteContentBackward',data:null}));if(desc&&desc.set)desc.set.call(el,value);else el.value=value;el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));el.dispatchEvent(new Event('change',{bubbles:true}));}else if(el&&el.isContentEditable){el.textContent=value;el.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:value}));el.dispatchEvent(new Event('change',{bubbles:true}));}try{navigator.clipboard&&navigator.clipboard.writeText&&navigator.clipboard.writeText(value)}catch(e){}}var body=textOf(document.body);var raw=Array.from(document.querySelectorAll('button,[role=button],div,span,label,input,textarea,[contenteditable=true],[class*=modal],[role=dialog]')).map(function(el,i){var r=el.getBoundingClientRect();return {el:el,i:i,text:textOf(el),visible:visible(el),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height),cls:String(el.className||'').slice(0,140),tag:el.tagName}});var dialogs=raw.filter(function(item){return item.visible&&item.w>360&&item.h>220&&/商品短标题|完成编辑|商品原标题/.test(item.text)}).sort(function(a,b){return (a.w*a.h)-(b.w*b.h)});var dialog=dialogs[0]||{x:Math.round(innerWidth*0.25),y:Math.round(innerHeight*0.14),w:Math.round(innerWidth*0.5),h:Math.round(innerHeight*0.72)};var inputs=raw.filter(function(item){return item.visible&&/INPUT|TEXTAREA/.test(item.tag)&&item.w>=50&&item.h>=14&&item.x>=dialog.x-20&&item.x<=dialog.x+dialog.w+20&&item.y>=dialog.y-20&&item.y<=dialog.y+dialog.h+20}).sort(function(a,b){return a.y-b.y||a.x-b.x});var shortLabel=raw.filter(function(item){return item.visible&&/商品短标题|最多输入10个汉字/.test(item.text)&&item.w>20&&item.h>10&&item.x>=dialog.x-20&&item.x<=dialog.x+dialog.w+20&&item.y>=dialog.y-20&&item.y<=dialog.y+dialog.h+20}).sort(function(a,b){return a.y-b.y||a.x-b.x})[0];var points=[];inputs.forEach(function(item){points.push({kind:'input',x:item.x+Math.min(item.w-8,Math.max(12,item.w/2)),y:item.y+item.h/2,ref:rectOf(item)})});if(shortLabel){points.push({kind:'label-right',x:shortLabel.x+Math.min(shortLabel.w-12,Math.max(150,shortLabel.w*0.58)),y:shortLabel.y+Math.min(shortLabel.h-6,Math.max(26,shortLabel.h*0.55)),ref:rectOf(shortLabel)});points.push({kind:'label-below',x:shortLabel.x+Math.min(shortLabel.w-12,Math.max(150,shortLabel.w*0.58)),y:shortLabel.y+shortLabel.h+18,ref:rectOf(shortLabel)})}[[0.58,0.52],[0.58,0.58],[0.58,0.64],[0.50,0.60],[0.66,0.60]].forEach(function(p){points.push({kind:'dialog-'+p[0]+'-'+p[1],x:dialog.x+dialog.w*p[0],y:dialog.y+dialog.h*p[1],ref:rectOf(dialog)})});var tried=[],typed=false;for(var i=0;i<points.length;i++){var p=points[i];var clicked=clickAt(p.x,p.y);typeText(productText);var active=document.activeElement;var activeText=textOf(active);var now=textOf(document.body);var okActive=active&&((('value' in active)&&active.value===productText)||activeText===productText||now.indexOf(productText)>=0);tried.push({kind:p.kind,clicked:clicked&&{text:clicked.text,tag:clicked.tag,cls:clicked.cls,x:clicked.x,y:clicked.y},active:active&&active.tagName,activeText:activeText.slice(0,40),okActive:!!okActive});if(okActive){typed=true;break;}}var done=raw.filter(function(item){return item.visible&&/完成编辑|完成|确定|确认/.test(item.text)&&!/取消/.test(item.text)&&item.w>=28&&item.h>=16&&item.w<=280&&item.h<=140&&item.x>=dialog.x-40&&item.x<=dialog.x+dialog.w+60&&item.y>=dialog.y-40&&item.y<=dialog.y+dialog.h+60}).sort(function(a,b){var ae=/完成编辑/.test(a.text)?0:1,be=/完成编辑/.test(b.text)?0:1;return ae-be||b.y-a.y||b.x-a.x})[0];var clickedDone=null;if(typed){if(done){clickedDone=clickAt(done.x+done.w/2,done.y+done.h/2)}else{clickedDone=clickAt(dialog.x+dialog.w-72,dialog.y+dialog.h-32)}}return {ok:typed&&!!clickedDone,typed:typed,clicked:clickedDone&&clickedDone.text,dialog:rectOf(dialog),done:rectOf(done),tried:tried,tail:body.slice(-800),buttons:raw.filter(function(item){return /商品短标题|完成编辑|取消|完成|确定/.test(item.text)}).slice(0,30).map(function(item){return {text:item.text,x:item.x,y:item.y,w:item.w,h:item.h,cls:item.cls}})};})()`;
       const fallback = await evalBrowserJson(prefix, session, 'douyin commerce completeProduct fallback', fallbackScript, combined, 60000);
       if (fallback.data && fallback.data.ok) {
         await runBrowserStep(combined, 'wait product attach after complete fallback', prefix.concat(['browser', session, 'wait', 'time', '3']), 12000);
@@ -1440,10 +1721,6 @@ module.exports = function createVideoPublishRoutes(deps) {
         } else {
           probed.data.coordinateType = coordinateType.data || {};
         }
-        const beforeFinishClickStderr = combined.stderr || '';
-        await runBrowserStep(combined, 'douyin commerce click finish product edit', prefix.concat(['browser', session, 'click', '--text', '完成编辑']), 60000);
-        combined.code = 0;
-        combined.stderr = beforeFinishClickStderr;
         const finishScript = `(function(){function txt(e){return(e&&((e.innerText||e.textContent)||'')||'').trim().replace(/\\s+/g,' ')}function vis(e){if(!e)return false;var r=e.getBoundingClientRect(),s=getComputedStyle(e);return s.display!=='none'&&s.visibility!=='hidden'&&r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight&&r.right>0&&r.left<innerWidth}function clickAt(x,y){x=Math.max(10,Math.min(innerWidth-10,x));y=Math.max(10,Math.min(innerHeight-10,y));var hit=document.elementFromPoint(x,y);if(!hit)return null;['pointerdown','mousedown','pointerup','mouseup','click'].forEach(function(t){hit.dispatchEvent(new MouseEvent(t,{bubbles:true,cancelable:true,view:window,clientX:x,clientY:y}))});try{hit.click&&hit.click()}catch(e){}return{text:txt(hit),x:Math.round(x),y:Math.round(y)}}var raw=Array.from(document.querySelectorAll('[role=dialog],.semi-modal,.semi-modal-content,[class*=modal],[class*=dialog],div,span,button')).filter(vis).map(function(e){var r=e.getBoundingClientRect();return{e:e,t:txt(e),x:Math.round(r.x),y:Math.round(r.y),w:Math.round(r.width),h:Math.round(r.height)}});var dialog=raw.filter(function(o){return o.w>360&&o.h>220&&/商品短标题|商品原标题|完成编辑/.test(o.t)}).sort(function(a,b){return(a.w*a.h)-(b.w*b.h)})[0]||{x:Math.round(innerWidth*.25),y:Math.round(innerHeight*.16),w:Math.round(innerWidth*.5),h:Math.round(innerHeight*.68)};var done=raw.filter(function(o){return /完成编辑|完成|确定|确认/.test(o.t)&&!/取消/.test(o.t)&&o.w>=20&&o.h>=12&&o.w<=280&&o.h<=140&&o.x>=dialog.x-40&&o.x<=dialog.x+dialog.w+60&&o.y>=dialog.y-40&&o.y<=dialog.y+dialog.h+60}).sort(function(a,b){var ae=/完成编辑/.test(a.t)?0:1,be=/完成编辑/.test(b.t)?0:1;return ae-be||b.y-a.y||b.x-a.x})[0];return done?{ok:true,clicked:clickAt(done.x+done.w/2,done.y+done.h/2),done:{text:done.t,x:done.x,y:done.y,w:done.w,h:done.h}}:{ok:false,clicked:clickAt(dialog.x+dialog.w-72,dialog.y+dialog.h-32),dialog:dialog};})()`;
         await evalBrowserJson(prefix, session, 'douyin commerce click finish product edit by coordinates', finishScript, combined, 60000);
         await runBrowserStep(combined, 'wait product attach after browser type', prefix.concat(['browser', session, 'wait', 'time', '3']), 12000);
@@ -1496,13 +1773,14 @@ module.exports = function createVideoPublishRoutes(deps) {
       var editor=Array.from(document.querySelectorAll('[contenteditable=true],textarea')).find(function(el){var r=el.getBoundingClientRect();return visible(el)&&r.width>200&&r.height>36});
       var buttons=itemize('button,[role=button],div,span').filter(function(item){return item.visible&&!item.disabled&&item.w>=30&&item.h>=18&&item.w<=280&&item.h<=110});
       var publishButton=buttons.find(function(item){return item.text==='\u53d1\u5e03'});
-      var rawUploading=/\u53d6\u6d88\u4e0a\u4f20|\u5f53\u524d\u901f\u5ea6|\u5269\u4f59\u65f6\u95f4|\u4e0a\u4f20\u4e2d|\u4e0a\u4f20\u8fc7\u7a0b\u4e2d\u8bf7\u4e0d\u8981|\u5df2\u4e0a\u4f20[：:]|\d{1,3}\s*%/.test(body);
-      var stillUploadEntry=/\u70b9\u51fb\u4e0a\u4f20|\u6216\u76f4\u63a5\u5c06\u89c6\u9891\u6587\u4ef6\u62d6\u5165\u6b64\u533a\u57df/.test(body)&&!/\u91cd\u65b0\u4e0a\u4f20|\u9884\u89c8\u89c6\u9891|\u9884\u89c8\u5c01\u9762|\.mp4|\.mov/i.test(body);
+      var uploadComplete=/\u91cd\u65b0\u4e0a\u4f20|\u9884\u89c8\u89c6\u9891|\u9884\u89c8\u5c01\u9762|\u6781\u901f\u4e0a\u4f20\u6210\u529f|\u4e0a\u4f20\u6210\u529f/.test(body);
+      var rawUploading=/\u53d6\u6d88\u4e0a\u4f20|\u5f53\u524d\u901f\u5ea6|\u5269\u4f59\u65f6\u95f4|\u4e0a\u4f20\u4e2d|\u4e0a\u4f20\u8fc7\u7a0b\u4e2d\u8bf7\u4e0d\u8981|\u4e0a\u4f20\u8fc7\u7a0b\u4e2d|\u6587\u4ef6\u89e3\u6790\u4e2d|\u89e3\u6790\u4e2d|\u5df2\u4e0a\u4f20[：:]|(?:\u4e0a\u4f20|\u89e3\u6790|\u6587\u4ef6)[\s\S]{0,40}\d{1,3}\s*%|\d{1,3}\s*%[\s\S]{0,40}(?:\u4e0a\u4f20|\u89e3\u6790|\u6587\u4ef6)/.test(body)&&!uploadComplete;
+      var stillUploadEntry=/\u70b9\u51fb\u4e0a\u4f20|\u6216\u76f4\u63a5\u5c06\u89c6\u9891\u6587\u4ef6\u62d6\u5165\u6b64\u533a\u57df/.test(body)&&!uploadComplete;
       var formSignals=Boolean(title||editor||publishButton||/\u4f5c\u54c1\u63cf\u8ff0|\u57fa\u7840\u4fe1\u606f|\u8bbe\u7f6e\u5c01\u9762|\u9009\u62e9\u5c01\u9762|\u5c01\u9762\u7f3a\u5931|\u6a2a\u5c01\u9762|\u7ad6\u5c01\u9762|\u53d1\u5e03\u8bbe\u7f6e|\u6dfb\u52a0\u6807\u7b7e|\u9884\u89c8\u89c6\u9891|\u9884\u89c8\u5c01\u9762|\u91cd\u65b0\u4e0a\u4f20|\u53d1\u6587\u52a9\u624b/.test(body));
-      var uploadRunning=(rawUploading||stillUploadEntry)&&!formSignals;
-      var strongReady=Boolean(formSignals||publishButton||/\u91cd\u65b0\u4e0a\u4f20|\u9884\u89c8\u89c6\u9891|\u9884\u89c8\u5c01\u9762|\.mp4|\.mov/i.test(body));
+      var uploadRunning=rawUploading||stillUploadEntry;
+      var strongReady=Boolean(uploadComplete||publishButton);
       var formReady=Boolean(formSignals);
-      return{ok:formReady&&!uploadRunning,formReady:formReady,uploadRunning:uploadRunning,titleFound:Boolean(title),editorFound:Boolean(editor),publishButtonFound:Boolean(publishButton),evidence:{rawUploading:rawUploading,stillUploadEntry:stillUploadEntry,strongReady:strongReady,hasCover:/\u8bbe\u7f6e\u5c01\u9762|\u9009\u62e9\u5c01\u9762|\u5c01\u9762\u7f3a\u5931|\u6a2a\u5c01\u9762|\u7ad6\u5c01\u9762/.test(body),hasPreview:/\u9884\u89c8\u89c6\u9891|\u9884\u89c8\u5c01\u9762/.test(body),hasReupload:/\u91cd\u65b0\u4e0a\u4f20/.test(body),hasDescription:/\u4f5c\u54c1\u63cf\u8ff0/.test(body)},tail:body.slice(-700)}
+      return{ok:formReady&&!uploadRunning&&strongReady,formReady:formReady,uploadRunning:uploadRunning,titleFound:Boolean(title),editorFound:Boolean(editor),publishButtonFound:Boolean(publishButton),evidence:{rawUploading:rawUploading,uploadComplete:uploadComplete,stillUploadEntry:stillUploadEntry,strongReady:strongReady,hasCover:/\u8bbe\u7f6e\u5c01\u9762|\u9009\u62e9\u5c01\u9762|\u5c01\u9762\u7f3a\u5931|\u6a2a\u5c01\u9762|\u7ad6\u5c01\u9762/.test(body),hasPreview:/\u9884\u89c8\u89c6\u9891|\u9884\u89c8\u5c01\u9762/.test(body),hasReupload:/\u91cd\u65b0\u4e0a\u4f20/.test(body),hasDescription:/\u4f5c\u54c1\u63cf\u8ff0/.test(body)},tail:body.slice(-700)}
     })()`;
   }
 
@@ -1683,8 +1961,8 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
     await waitMs(20000);
     await evalBrowserJson(prefix, session, 'douyin commerce force click cover card', douyinCommerceForceCoverEntryScript(), combined, 60000);
     if (combined.job_id) await updateJobProgress(combined.job_id, '等待封面弹窗', '封面入口已点击，等待弹窗响应');
-    combined.stdout += '\n$ wait douyin commerce cover card after force click local sleep 3s\n';
-    await waitMs(3000);
+    combined.stdout += '\n$ wait douyin commerce cover card after force click local sleep 10s\n';
+    await waitMs(10000);
     for (let i = 0; i < 18; i += 1) {
       last = await evalBrowserJson(prefix, session, 'douyin commerce select cover ' + (i + 1), douyinCommerceCoverScript(), combined, 60000);
       if (combined.browser_crashed) return last;
@@ -1701,7 +1979,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
         await resetDouyinCommerceCoverDialog(prefix, session, combined, i + 1, data);
         stuckCount = 0;
       }
-      const waitSeconds = /generate|generating|cover-dialog-wait|waiting|wait/.test(String(data.action || '')) ? '30' : '8';
+      const waitSeconds = /generate|generating|cover-dialog-wait|waiting|wait/.test(String(data.action || '')) ? '30' : '10';
       if (combined.job_id) await updateJobProgress(combined.job_id, '等待封面处理 ' + (i + 1), '封面处理中，等待 ' + waitSeconds + ' 秒');
       combined.stdout += '\n$ wait douyin commerce cover step ' + (i + 1) + ' local sleep ' + waitSeconds + 's\n';
       await waitMs(Number(waitSeconds) * 1000);
@@ -1840,21 +2118,27 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
       if (!await step('open douyin upload', prefix.concat(['browser', session, 'open', platformUrl('douyin')]), 120000)) return combined;
       if (!await step('wait page', prefix.concat(['browser', session, 'wait', 'time', '5']), 30000)) return combined;
     }
-    const uploadResult = await runBrowserStep(combined, 'upload video', prefix.concat(['browser', session, 'upload', 'input[type=file]', videoPath]), videoUploadTimeoutMs(row, videoPath));
-    if (uploadResult.code !== 0) {
-      combined.stdout += '\n上传命令返回异常，继续检查抖音发布页是否已经完成上传。\n';
-      combined.code = 0;
-    }
     const needsCover = shouldSetDouyinCommerceCover(row, profileAlias);
     const sizeExtraWaitLoops = videoSizeExtraWaitLoops(row, videoPath);
     if (sizeExtraWaitLoops > 0 && combined.job_id) {
       const extraSeconds = sizeExtraWaitLoops * 5;
       await updateJobProgress(row.id, '大视频等待', '视频超过 40MB，按文件大小额外等待约 ' + Math.ceil(extraSeconds / 60) + ' 分钟');
     }
-    await waitDouyinCommerceUploadReady(prefix, session, combined, {
-      settleCoverAssets: needsCover,
-      extraWaitLoops: sizeExtraWaitLoops + (attempt > 1 ? 6 : 0)
-    });
+    const platformUpload = await preparePlatformUploadVideo(root, row, videoPath);
+    try {
+      combined.stdout += '\n$ platform upload file prepared ' + platformUpload.path + ' ' + stringify(platformUpload.meta || {}) + '\n';
+      const uploadResult = await runBrowserStep(combined, 'upload video', prefix.concat(['browser', session, 'upload', 'input[type=file]', platformUpload.path]), videoUploadTimeoutMs(row, videoPath));
+      if (uploadResult.code !== 0) {
+        combined.stdout += '\n上传命令返回异常，继续检查抖音发布页是否已经完成上传。\n';
+        combined.code = 0;
+      }
+      await waitDouyinCommerceUploadReady(prefix, session, combined, {
+        settleCoverAssets: needsCover,
+        extraWaitLoops: sizeExtraWaitLoops + (attempt > 1 ? 6 : 0)
+      });
+    } finally {
+      await platformUpload.cleanup();
+    }
     if (combined.code !== 0) return combined;
     if (needsCover) {
       await ensureDouyinCommerceCover(prefix, session, combined);
@@ -1872,16 +2156,17 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
     await step('wait cart dropdown', prefix.concat(['browser', session, 'wait', 'time', '1']), 10000);
     await runDouyinCommerceStage(row, commerce, prefix, session, combined, 'chooseCart', 60000);
     if (combined.code !== 0) return combined;
-    await step('wait product link input', prefix.concat(['browser', session, 'wait', 'time', '2']), 10000);
+    await step('wait product link input', prefix.concat(['browser', session, 'wait', 'time', '1']), 8000);
     await runDouyinCommerceStage(row, commerce, prefix, session, combined, 'addProduct', 60000);
     if (combined.code !== 0) return combined;
     let completedProduct = null;
-    for (let productTry = 1; productTry <= 4; productTry += 1) {
-      await step('wait product modal ' + productTry, prefix.concat(['browser', session, 'wait', 'time', '4']), 15000);
+    for (let productTry = 1; productTry <= 6; productTry += 1) {
+      const modalWaitSeconds = productTry <= 3 ? '1' : (productTry <= 5 ? '2' : '3');
+      await step('wait product modal ' + productTry, prefix.concat(['browser', session, 'wait', 'time', modalWaitSeconds]), (Number(modalWaitSeconds) + 6) * 1000);
       combined.code = 0;
       completedProduct = await runDouyinCommerceStage(row, commerce, prefix, session, combined, 'completeProduct', 60000);
       if (combined.code === 0) break;
-      if (productTry >= 4) return combined;
+      if (productTry >= 6) return combined;
       if (completedProduct && completedProduct.data && completedProduct.data.waitingProductModal && completedProduct.data.linkEntryVisible) {
         combined.stderr += '\n商品编辑弹窗未出现，页面仍停在添加链接入口，重新点击添加链接后重试。';
         combined.code = 0;
@@ -1916,7 +2201,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
       row && row.account_name,
       row && row.platform_handle
     ].filter(Boolean).join(' ');
-    return /dvabrcmr|楗崄涓億椋崄涓億fanshiqii|fan.?shi.?qi/i.test(accountText);
+    return /dvabrcmr|楗崄涓億椋崄涓億fanshiqii|fan.?shi.?qi|youxia-bengbeng|vpu8aysj|游侠蹦蹦/i.test(accountText);
   }
 
   function canRestartDouyinCommerceAttempt(combined) {
@@ -1950,13 +2235,13 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
 
   async function runDouyinCommerceJob(row, videoPath, profileAlias, commerce) {
     if (!cleanText(commerce && commerce.productUrl, 1000)) throw new Error('Commerce mode is missing product URL');
-    if (!cleanText(commerce && commerce.productText, 80)) throw new Error('Commerce mode is missing product copy');
+    if (!cleanCommerceProductText(commerce && commerce.productText, commerce)) throw new Error('Commerce mode is missing product copy');
     const session = ['commerce', row.platform_id, profileAlias || row.account_id || row.account_name || 'account', row.id || Date.now(), Date.now()]
       .join('-')
       .replace(/[^a-zA-Z0-9_-]/g, '-')
       .slice(0, 80);
     const prefix = [];
-    if (profileAlias) prefix.push('--profile', profileAlias);
+    prefix.push(...openCliProfileArgs(profileAlias));
     const combined = { code: 0, stdout: '', stderr: '', duration_ms: 0, args: [], commerce_flow: true, job_id: row.id };
     combined.stdout += '\n甯﹁揣鍙戝竷涓婁笅鏂囷細account=' + (row.account_name || row.account_id || '') + ' profile=' + (profileAlias || '') + ' session=' + session + '\n';
     try {
@@ -2027,7 +2312,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
         } : null
       })
       : { code: 0, stdout: '', stderr: '', duration_ms: 0 };
-    combined.stdout += '\n$ ' + label + (args ? ' opencli ' + args.join(' ') : '') + '\n' + (result.stdout || '');
+    combined.stdout += '\n$ ' + label + (args ? ' ' + formatOpenCliCommand(args) : '') + '\n' + (result.stdout || '');
     combined.stderr += result.stderr ? '\n' + result.stderr : '';
     combined.duration_ms += result.duration_ms || 0;
     if (isBrowserCrashText((result.stdout || '') + '\n' + (result.stderr || ''))) {
@@ -2049,7 +2334,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
     if (combined) {
       combined.args = combined.args || [];
       combined.args.push(args);
-      combined.stdout = (combined.stdout || '') + '\n$ opencli ' + args.join(' ') + '\n' + (result.stdout || '');
+      combined.stdout = (combined.stdout || '') + '\n$ ' + formatOpenCliCommand(args) + '\n' + (result.stdout || '');
       combined.stderr = (combined.stderr || '') + (result.stderr ? '\n' + result.stderr : '');
       combined.duration_ms = (combined.duration_ms || 0) + (result.duration_ms || 0);
       if (result.code !== 0) combined.stderr += '\n' + (label || 'browser session close') + ' failed: ' + openCliErrorText(result);
@@ -2357,7 +2642,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
       .replace(/[^a-zA-Z0-9_-]/g, '-')
       .slice(0, 80);
     const prefix = [];
-    if (profileAlias) prefix.push('--profile', profileAlias);
+    prefix.push(...openCliProfileArgs(profileAlias));
     let combined = null;
     try {
     if (row.platform_id === 'wechatVideo') {
@@ -2381,7 +2666,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
     for (let i = 0; i < steps.length; i += 1) {
       const args = steps[i];
       const result = await runOpenCli(args, { timeoutMs: 5 * 60 * 1000, cwd: root });
-      combined.stdout += '\n$ opencli ' + args.join(' ') + '\n' + result.stdout;
+      combined.stdout += '\n$ ' + formatOpenCliCommand(args) + '\n' + result.stdout;
       combined.stderr += result.stderr ? '\n' + result.stderr : '';
       combined.duration_ms += result.duration_ms || 0;
       if (result.code !== 0) {
@@ -2408,7 +2693,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
         const args = prefix.concat(['browser', session, 'click', '--text', text]);
         combined.args.push(args);
         const result = await runOpenCli(args, { timeoutMs: 60 * 1000, cwd: root });
-        combined.stdout += '\n$ opencli ' + args.join(' ') + '\n' + result.stdout;
+        combined.stdout += '\n$ ' + formatOpenCliCommand(args) + '\n' + result.stdout;
         combined.stderr += result.stderr ? '\n' + result.stderr : '';
         combined.duration_ms += result.duration_ms || 0;
         if (result.code === 0) {
@@ -2495,11 +2780,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
         if (!ok) throw new Error(errorText);
         return { ok: true, status: nextStatus, result_url: resultUrl, commerce_ready: commerceFlow, needs_confirm: needsConfirm, stdout: result.stdout };
       } finally {
-        const profileDir = launched && launched.profile_directory || chromeProfileDirectory(row.account_id, profileAlias);
-        const profileClosed = await closeProfileDirectory(profileDir, 'job finished #' + row.id);
-        if (result) {
-          result.stdout = (result.stdout || '') + '\n$ close chrome profile after job\n' + stringify(profileClosed) + '\n';
-        }
+        if (result) result.stdout = (result.stdout || '') + '\n$ keep chrome profile open after job\n' + stringify({ ok: true, reason: 'normal job cleanup only closes the OpenCLI session tab' }) + '\n';
       }
     }).finally(() => {
       runningJobs.delete(Number(row.id));
@@ -2665,6 +2946,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
         }
         cb({
           ok: true,
+          catalog_accounts: publishAccountCatalog(),
           accounts: (rows || []).map(row => ({
             id: row.id,
             account_id: row.account_id,
@@ -2702,13 +2984,13 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
         wechatVideo: ['browser', 'publish-login-wechatVideo', 'open', platformUrl('wechatVideo')]
       };
       const actualProfile = await resolveProfileAlias(profileAlias);
-      const args = ['--profile', actualProfile].concat(commandByPlatform[platformId] || ['browser', 'publish-login-' + platformId, 'open', platformUrl(platformId) || 'about:blank']);
+      const args = openCliProfileArgs(actualProfile).concat(commandByPlatform[platformId] || ['browser', 'publish-login-' + platformId, 'open', platformUrl(platformId) || 'about:blank']);
       const result = await runOpenCli(args, { timeoutMs: 120000, cwd: root });
       let loginStatus = result.code === 0 ? 'ready' : 'login';
       let probe = null;
       let error = result.code === 0 ? '' : openCliErrorText(result, 'login check failed');
       if (result.code === 0 && platformId === 'wechatVideo') {
-        probe = await probeWechatVideoPage(['--profile', actualProfile], 'publish-login-wechatVideo');
+        probe = await probeWechatVideoPage(openCliProfileArgs(actualProfile), 'publish-login-wechatVideo');
         loginStatus = probe.ready ? 'ready' : (probe.loggedIn ? 'blocked' : 'login');
         error = probe.ready ? '' : wechatVideoProbeMessage(probe);
       }
@@ -2744,7 +3026,7 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
       if (!profileAlias) { cb({ error: 'missing profile alias' }); return; }
       const actualProfile = await resolveProfileAlias(profileAlias);
       const session = ('publish-login-' + platformId + '-' + actualProfile).replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 80);
-      const args = ['--profile', actualProfile, 'browser', session, 'open', url];
+      const args = openCliProfileArgs(actualProfile).concat(['browser', session, 'open', url]);
       const result = await runOpenCli(args, { timeoutMs: 60000, cwd: root });
       cb({ ok: result.code === 0, url, stdout: result.stdout, stderr: result.stderr, error: result.code === 0 ? '' : (result.stderr || result.stdout || 'open login failed') });
     },
@@ -2753,17 +3035,18 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
       const accountId = cleanText(body.account_id || body.accountId, 80);
       const platformId = cleanText(body.platform_id || body.platformId || 'douyin', 80);
       const profileAlias = await resolveProfileAlias(cleanText(body.profile_alias || body.profileAlias, 120));
-      const url = platformUrl(platformId) || 'about:blank';
       const profileDirectory = chromeProfileDirectory(accountId, profileAlias);
       if (!profileDirectory) { cb({ ok: false, error: '鏈厤缃?Chrome Profile 鐩綍', profile_alias: profileAlias }); return; }
-      const launched = await launchChromeProfile(profileDirectory, url);
+      const launched = await ensureChromeProfileWindow(accountId, platformId, profileAlias);
       cb(Object.assign({
         ok: Boolean(launched.ok),
         account_id: accountId,
         platform_id: platformId,
         profile_alias: profileAlias,
         profile_directory: profileDirectory,
-        url
+        url: 'about:blank',
+        skipped: Boolean(launched.skipped),
+        reason: launched.reason || ''
       }, launched.ok ? {} : { error: launched.error || 'Chrome 鍚姩澶辫触' }));
     },
 
@@ -2977,10 +3260,8 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
         const killed = requestCancelRunningJob(id);
         const binding = await getBinding(row.account_id, row.platform_id);
         const profileAlias = await resolveProfileAlias(row.profile_alias || (binding && binding.profile_alias) || '');
-        const profileDir = chromeProfileDirectory(row.account_id, profileAlias);
-        const profileClosed = await closeProfileDirectory(profileDir, 'cancel job #' + id);
         await updateJobStatus(id, 'cancelled', '用户已取消发布任务', '');
-        await updateJobProgress(id, '已取消', profileClosed.ok ? '已停止发布任务并关闭对应 Chrome Profile' : (killed ? '已请求停止正在执行的发布任务' : '任务已取消，未发现正在执行的子进程'));
+        await updateJobProgress(id, '已取消', killed ? '已请求停止正在执行的发布任务，Chrome Profile 保持打开' : '任务已取消，未发现正在执行的子进程');
         logRun({
           job_id: id,
           account_id: row.account_id,
@@ -2988,10 +3269,10 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
           profile_alias: profileAlias || row.profile_alias,
           action: 'cancel',
           status: 'cancelled',
-          stdout: stringify({ killed, profileClosed }),
-          error: profileClosed.ok ? '用户已取消发布任务，已关闭对应 Profile' : (killed ? '用户已取消发布任务，已停止运行中的子进程' : '用户已取消发布任务')
+          stdout: stringify({ killed, profile_closed: false, reason: 'cancel no longer closes Chrome Profile' }),
+          error: killed ? '用户已取消发布任务，已停止运行中的子进程' : '用户已取消发布任务'
         });
-        cb({ ok: true, id, killed, profile_closed: profileClosed });
+        cb({ ok: true, id, killed, profile_closed: false });
       });
     },
 
@@ -3060,24 +3341,13 @@ var candidate=itemize('img,canvas,video').filter(function(item){return item.visi
         db.close();
         if (err) { cb({ error: err.message }); return; }
         const results = [];
-        const profileDirsToClose = new Set();
-        try {
-          for (const row of rows || []) {
-            try {
-              const binding = await getBinding(row.account_id, row.platform_id);
-              const profileAlias = await resolveProfileAlias(row.profile_alias || (binding && binding.profile_alias) || '');
-              const profileDir = chromeProfileDirectory(row.account_id, profileAlias);
-              if (profileDir) profileDirsToClose.add(profileDir);
-              const result = await executeJob(row);
-              results.push(Object.assign({ id: row.id, ok: true }, result));
-            } catch(e) {
-              await updateJobStatus(row.id, 'failed', e.message, '');
-              results.push({ id: row.id, ok: false, error: e.message });
-            }
-          }
-        } finally {
-          for (const profileDir of profileDirsToClose) {
-            await closeProfileDirectory(profileDir, 'batch finished');
+        for (const row of rows || []) {
+          try {
+            const result = await executeJob(row);
+            results.push(Object.assign({ id: row.id, ok: true }, result));
+          } catch(e) {
+            await updateJobStatus(row.id, 'failed', e.message, '');
+            results.push({ id: row.id, ok: false, error: e.message });
           }
         }
         cb({ ok: true, count: results.length, results });

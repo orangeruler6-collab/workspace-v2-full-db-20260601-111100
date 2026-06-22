@@ -136,3 +136,24 @@ export function getWeeklyReport(payload) {
     body: payload
   })
 }
+
+export function createDailyReportDraft(payload) {
+  return request('/api/agent/daily-report/draft', {
+    method: 'POST',
+    body: payload
+  })
+}
+
+export function generateDailyReportImage(payload) {
+  return request('/api/agent/daily-report/image', {
+    method: 'POST',
+    body: payload
+  })
+}
+
+export function reviseDailyReportDraft(payload) {
+  return request('/api/agent/daily-report/revise', {
+    method: 'POST',
+    body: payload
+  })
+}

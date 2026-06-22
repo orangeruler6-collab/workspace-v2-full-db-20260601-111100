@@ -5,6 +5,7 @@ import type { AccountDetail, Platform, ProjectDetail } from "@/lib/types";
 
 type DetailCacheOptions = {
   includeStyle?: boolean;
+  styleOnly?: boolean;
   version?: string;
   force?: boolean;
 };
@@ -31,7 +32,8 @@ export function cachedGetAccountDetail(input: {
   const request = getAccountDetail({
     platform: input.platform,
     accountId: input.accountId,
-    includeStyle: input.includeStyle
+    includeStyle: input.includeStyle,
+    styleOnly: input.styleOnly
   })
     .then((detail) => {
       remember(accountDetailCache, cacheKey, detail);
@@ -56,7 +58,8 @@ export function cachedGetProjectDetail(projectId: string, options: DetailCacheOp
   if (pending && !options.force) return pending;
 
   const request = getProjectDetail(projectId, {
-    includeStyle: options.includeStyle
+    includeStyle: options.includeStyle,
+    styleOnly: options.styleOnly
   })
     .then((detail) => {
       remember(projectDetailCache, cacheKey, detail);
@@ -87,7 +90,7 @@ function accountDetailPrefix(platform: Platform, accountId: string) {
 }
 
 function accountDetailCacheKey(platform: Platform, accountId: string, options: DetailCacheOptions) {
-  return `${accountDetailPrefix(platform, accountId)}${options.includeStyle ? "style" : "base"}|${options.version || "current"}`;
+  return `${accountDetailPrefix(platform, accountId)}${options.styleOnly ? "style-only" : options.includeStyle ? "style" : "base"}|${options.version || "current"}`;
 }
 
 function projectDetailPrefix(projectId: string) {
@@ -95,7 +98,7 @@ function projectDetailPrefix(projectId: string) {
 }
 
 function projectDetailCacheKey(projectId: string, options: DetailCacheOptions) {
-  return `${projectDetailPrefix(projectId)}${options.includeStyle ? "style" : "base"}|${options.version || "current"}`;
+  return `${projectDetailPrefix(projectId)}${options.styleOnly ? "style-only" : options.includeStyle ? "style" : "base"}|${options.version || "current"}`;
 }
 
 function remember<T>(cache: Map<string, T>, key: string, value: T) {

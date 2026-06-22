@@ -123,7 +123,7 @@
 import { ref, onMounted, nextTick } from 'vue'
 import { addVectorItem, listVectorItems } from './api/vector'
 
-const ACCOUNTS = ['天机妹', '花蛮楼', '麦晓花', '夏天丶Cat', '有事找学姐', '小张同学', '通用']
+const ACCOUNTS = ['天机妹', '花蛮楼', '麦小雯', '夏天丶Cat', '有事找学姐', '小张同学', '通用']
 const SCENES = ['开场', '承接', '结尾', '梗', '素材']
 
 const graphArea = ref(null)

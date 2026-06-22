@@ -2,11 +2,11 @@ import { computed, reactive, ref, watch } from 'vue'
 
 export const DOUYIN_STANDARDS = [
   ['花无缺', 12250, 408333, 20000, 200, 300, 200, 4716, 61.5, 5595, 54.33, 1895, 84.53],
-  ['尼大木', 7000, 233333, 20000, 200, 300, 200, 3753, 46.38, 5070, 27.57, 1370, 80.43],
-  ['苏大强', 5600, 186667, 20000, 200, 300, 200, 3497, 37.56, 4930, 11.96, 1230, 78.04],
+  ['木游话说', 7000, 233333, 20000, 200, 300, 200, 3753, 46.38, 5070, 27.57, 1370, 80.43],
+  ['策划克星阿强', 5600, 186667, 20000, 200, 300, 200, 3497, 37.56, 4930, 11.96, 1230, 78.04],
   ['天机妹', 10500, 350000, 20000, 200, 300, 200, 4395, 58.14, 5420, 48.38, 1720, 83.62],
-  ['麦晓花', 3360, 112000, 10000, 200, 300, 200, 1986, 40.89, 2061, 38.66, 806, 76.01],
-  ['最翁说游', 9310, 310333, 20000, 200, 300, 200, 4177, 55.14, 5301, 43.06, 1601, 82.8],
+  ['麦小雯', 3360, 112000, 10000, 200, 300, 200, 1986, 40.89, 2061, 38.66, 806, 76.01],
+  ['最翁Damnnn', 9310, 310333, 20000, 200, 300, 200, 4177, 55.14, 5301, 43.06, 1601, 82.8],
   ['报告砖家', 9975, 332500, 20000, 200, 300, 200, 4299, 56.9, 5368, 46.19, 1668, 83.28],
   ['麦冬冬', 7000, 233333, 20000, 200, 300, 200, 3753, 46.38, 5070, 27.57, 1370, 80.43],
   ['超玩教授', 2240, 74667, 10000, 200, 300, 200, 1781, 20.51, 1949, 12.99, 694, 69.02],
@@ -83,7 +83,7 @@ export const BILIBILI_STANDARDS = [
 
 const ACCOUNT_PROFILES = {
   天机妹: { douyinId: '783586217', uid: '96439098937', xtId: '', cooperationCode: '85729365814' },
-  麦晓花: { douyinId: 'maihua12345678', uid: '3865503336239772', xtId: '6823619490735980552', cooperationCode: '16641924918' },
+  麦小雯: { douyinId: 'maihua12345678', uid: '3865503336239772', xtId: '6823619490735980552', cooperationCode: '16641924918' },
   有事找学姐: { douyinId: '2142588510', uid: '83991008833', xtId: '6687444049818812420', cooperationCode: '12753698611' },
   花蛮楼: { douyinId: 'huaml12345678', uid: '4133752889687031', xtId: '6920170232069750791', cooperationCode: '28784178590' },
   中二探长: { douyinId: '2068472561', uid: '237914238758142', xtId: '', cooperationCode: '22542874010' },
@@ -93,6 +93,12 @@ const ACCOUNT_PROFILES = {
 }
 
 const PROFILE_STORAGE_KEY = 'usagi_maintenance_account_profiles'
+const ACCOUNT_NAME_ALIASES = [
+  { canonical: '木游话说', aliases: ['尼大木'] },
+  { canonical: '策划克星阿强', aliases: ['苏大强'] },
+  { canonical: '最翁Damnnn', aliases: ['最翁说游'] },
+  { canonical: '麦小雯', aliases: ['麦晓花'] }
+]
 
 function toMoney(value) {
   const n = Number(value || 0)
@@ -127,6 +133,12 @@ function buildMaintenanceApplicationPhaseLines(result) {
 
 function normalizeAccountName(name) {
   const text = String(name || '').trim()
+  const key = text.replace(/\s+/g, '').toLowerCase()
+  const alias = ACCOUNT_NAME_ALIASES.find(item => [item.canonical, ...(item.aliases || [])].some(value => {
+    const aliasKey = String(value || '').replace(/\s+/g, '').toLowerCase()
+    return aliasKey && (key === aliasKey || key.includes(aliasKey))
+  }))
+  if (alias) return alias.canonical
   if (text.toLowerCase() === 'lee小强') return 'lee小强'
   if (text.toLowerCase() === '雷鸭fist') return '雷鸭fist'
   return text

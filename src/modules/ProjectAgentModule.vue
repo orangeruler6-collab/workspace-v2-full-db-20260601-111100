@@ -8,7 +8,7 @@
         <div class="module-page-copy">
           <div class="module-page-kicker">USAGI AGENT</div>
           <h2>项目助手</h2>
-          <p>一个自由聊天入口，可以转写链接、读取飞书、查资料、做 BF 分析、周报和项目复盘。</p>
+          <p>一个自由聊天入口，可以转写链接、读取飞书、查资料、做 BF 分析、日报、周报和项目复盘。</p>
         </div>
       </div>
       <div class="agent-header-status">
@@ -19,35 +19,6 @@
 
     <section class="agent-shell">
       <main class="agent-chat" :class="{ 'attachment-dragging': attachmentDragging }">
-        <div class="agent-mode-row" role="radiogroup" aria-label="Agent 模式">
-          <button
-            v-for="mode in agentModes"
-            :key="mode.id"
-            type="button"
-            class="agent-mode"
-            :class="{ active: agentMode === mode.id }"
-            :title="mode.hint"
-            @click="agentMode = mode.id">
-            <span class="agent-mode-icon">{{ mode.icon }}</span>
-            {{ mode.label }}
-          </button>
-        </div>
-        <div class="agent-prompt-row">
-          <button
-            v-for="chip in promptChips"
-            :key="chip.type"
-            type="button"
-            class="agent-chip"
-            @click="applyChip(chip)">
-              <span class="agent-chip-icon">{{ chip.icon }}</span>
-              {{ chip.label }}
-          </button>
-          <button type="button" class="agent-chip weekly-toggle-chip" :class="{ active: weeklyOpen }" @click="weeklyOpen = !weeklyOpen">
-            <span class="agent-chip-icon">周</span>
-            写周报
-          </button>
-        </div>
-
         <section v-if="weeklyOpen" class="weekly-card weekly-dialog-card">
           <div class="weekly-card-head">
             <div>
@@ -86,6 +57,14 @@
               <label class="weekly-field">
                 <span>落地项推进进度</span>
                 <textarea v-model="weeklyForm.landingText" class="inp" rows="2" placeholder="可空，空着会保留填写位置。"></textarea>
+              </label>
+              <label class="weekly-field">
+                <span>战略项</span>
+                <textarea v-model="weeklyForm.strategyText" class="inp" rows="4" placeholder="一行一个战略项，系统只负责写入，不自动编造。"></textarea>
+              </label>
+              <label class="weekly-field">
+                <span>战略项完成情况</span>
+                <textarea v-model="weeklyForm.strategyStatusText" class="inp" rows="2" placeholder="人工填写；不填则周报显示待补充。"></textarea>
               </label>
               <label class="weekly-field">
                 <span>账号数据总结</span>
@@ -161,7 +140,7 @@
             </div>
             <div class="agent-bubble">
               <strong>乌萨奇在岗，今天先拆哪一团？</strong>
-              <p>直接贴抖音、B站、飞书链接，或者说“按内容二组格式生成本周周报并给我飞书”。我会自己调工具、写飞书，最后把链接和数据源交代清楚。</p>
+              <p>直接贴抖音、B站、飞书链接，或者说“内容四组写日报”或“按内容二组格式生成本周周报并给我飞书”。我会自己调工具、写飞书，最后把链接和数据源交代清楚。</p>
             </div>
           </article>
 
@@ -181,12 +160,32 @@
                 <em>{{ runningLabel }}</em>
               </div>
               <div v-else class="agent-markdown">{{ message.content }}</div>
+              <div v-if="!message.pending && message.images?.length" class="agent-image-list">
+                <figure
+                  v-for="image in message.images"
+                  :key="image.id || image.url || image.name"
+                  class="agent-image-card">
+                  <button class="agent-image-preview" type="button" @click="previewImageUrl = image.url">
+                    <img :src="image.url" :alt="image.name || 'AI 生成图片'" loading="lazy" />
+                  </button>
+                  <figcaption>
+                    <strong>{{ image.name || 'AI 生成图片' }}</strong>
+                    <span>{{ image.hint || '可预览、下载或继续改图' }}</span>
+                    <div class="agent-image-actions">
+                      <button class="btn btn-ghost btn-sm" type="button" @click="previewImageUrl = image.url">预览</button>
+                      <button class="btn btn-ghost btn-sm" type="button" @click="downloadAgentImage(image)">下载</button>
+                      <button class="btn btn-primary btn-sm" type="button" @click="useAgentImageAsReference(image)">继续改图</button>
+                    </div>
+                  </figcaption>
+                </figure>
+              </div>
               <div v-if="!message.pending && message.files?.length" class="agent-file-list">
                 <button
                   v-for="file in message.files"
                   :key="file.url || file.name"
                   type="button"
                   class="agent-file-card"
+                  :disabled="!file.url && !file.dataUrl"
                   @click="downloadAgentFile(file)">
                   <span class="agent-file-icon">文</span>
                   <span class="agent-file-main">
@@ -234,17 +233,16 @@
             v-model="input"
             class="agent-input"
             rows="4"
-            placeholder="贴链接，或者输入：读取这个飞书 BF 并分析 / 按内容二组格式生成本周周报 / 复盘一下这个项目"
+            placeholder="贴链接，或者输入：内容四组写日报 / 读取这个飞书 BF 并分析 / 按内容二组格式生成本周周报"
             @keydown.enter.exact.prevent="sendMessage"></textarea>
           <input ref="attachmentInputRef" class="agent-file-input" type="file" multiple :accept="acceptedAttachmentTypes" @change="handleAttachmentSelect" />
           <div class="agent-composer-actions">
-            <button class="btn btn-ghost btn-sm" type="button" @click="openAttachmentPicker" :disabled="running || attachmentParsing">
-              {{ attachmentParsing ? '解析中' : '附件' }}
+            <button class="btn btn-ghost btn-sm" type="button" @click="openAttachmentPicker" :disabled="running">
+              附件
             </button>
-            <button class="btn btn-ghost btn-sm" type="button" @click="previewTools" :disabled="running || !canSend">预览工具</button>
             <button v-if="running" class="btn btn-ghost btn-sm" type="button" @click="stopStreaming">停止</button>
-            <button class="btn btn-primary" type="button" @click="sendMessage" :disabled="running || !canSend">
-              {{ running ? '运行中...' : '发送' }}
+            <button class="btn btn-primary" type="button" @click="sendMessage" :disabled="running || preparingSend || !canSend">
+              {{ preparingSend ? '载入图片...' : (running ? '运行中...' : '发送') }}
             </button>
           </div>
           <div v-if="attachmentDragging" class="agent-drop-overlay">
@@ -258,7 +256,7 @@
         <section class="agent-panel">
           <div class="agent-panel-head">
             <strong>任务状态</strong>
-            <span>{{ currentTaskLabel }} · {{ currentAgentModeLabel }}</span>
+            <span>{{ currentTaskLabel }}</span>
           </div>
           <div v-if="!toolSteps.length" class="agent-empty">还没有调用工具</div>
           <div v-else class="tool-list">
@@ -329,42 +327,35 @@
         </section>
       </aside>
     </section>
+
+    <div v-if="previewImageUrl" class="agent-image-modal" @click.self="previewImageUrl = ''">
+      <button class="agent-image-modal-close" type="button" @click="previewImageUrl = ''">×</button>
+      <img :src="previewImageUrl" alt="图片预览" />
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
-import { chatAgentStream, deleteAgentDraft, getWeeklyReport, getWeeklyReportJob, listAgentDrafts, listWeeklyReports, previewAgentTools, saveAgentDraft, startWeeklyReport, updateAgentDraft, writeAgentFeishu } from '../api/agent'
+import { chatAgentStream, deleteAgentDraft, getWeeklyReport, getWeeklyReportJob, listAgentDrafts, listWeeklyReports, saveAgentDraft, startWeeklyReport, updateAgentDraft, writeAgentFeishu } from '../api/agent'
 import { getCurrentAuthUser } from '../api/client'
+import { normalizeImageUrl } from '../api/imagegen'
 import { parseWorkflowDocument } from '../api/tools'
 import { useConfirm } from '../composables/useConfirm'
 import { useToast } from '../composables/useToast'
+import { compressImageFile } from './imagegen/fileUtils'
 import agentHappyImage from '../assets/usagi-pet-states/happy.png'
 import agentIdleImage from '../assets/usagi-pet-states/idle.png'
 import agentSignImage from '../assets/usagi-pet-states/sign.png'
-
-const promptChips = [
-  { type: 'transcribe_link', icon: '链', label: '转写', prompt: '帮我转写并整理这个链接：' },
-  { type: 'read_link', icon: '读', label: '读链接', prompt: '读取这个抖音/B站链接，提取文案和可复用结构：' },
-  { type: 'bf_analysis', icon: 'BF', label: 'BF', prompt: '读取这个飞书 BF 并分析客户诉求、卖点、内容角度和风险：' },
-  { type: 'weekly_report', icon: '周', label: '周报', prompt: '按内容二组格式生成本周周报，包含营收、账号数据、工时、计划和风险：' },
-  { type: 'project_review', icon: '盘', label: '复盘', prompt: '复盘这个项目这周的问题、进展、数据表现和下周动作：' },
-  { type: 'free_writing', icon: '写', label: '写作', prompt: '帮我写一版：' },
-  { type: 'research', icon: '查', label: '查资料', prompt: '帮我查资料并整理成可用于文案/复盘的要点：' }
-]
-
-const agentModes = [
-  { id: 'auto', icon: '自', label: '自动', hint: '日常推荐：乌萨奇自己判断用平台工具还是深度分析' },
-  { id: 'platform', icon: '数', label: '平台', hint: '只读网页已有数据和工具，不额外做 Codex 长分析' },
-  { id: 'codex', icon: '深', label: '深度', hint: '强制加一轮 Codex 长分析，适合复杂复盘、周报、方案诊断' }
-]
 
 const taskLabels = {
   transcribe_link: '链接转写',
   read_feishu: '飞书读取',
   bf_analysis: 'BF 分析',
   weekly_report: '周报生成',
+  daily_report: '日报生成',
   project_review: '项目复盘',
+  image_generation: '图片生成',
   research: '资料整理',
   free_writing: '自由写作'
 }
@@ -380,13 +371,13 @@ const lastDraft = ref(null)
 const lastReply = ref('')
 const feishuUrl = ref('')
 const currentTask = ref('')
-const agentMode = ref('auto')
 const renamingDraft = ref(false)
 const sessionTitle = ref('')
 const chatBodyRef = ref(null)
 const attachmentInputRef = ref(null)
 const askConfirm = useConfirm()
 const { showToast } = useToast()
+const ATTACHMENT_PARSE_TIMEOUT_MS = 18000
 const autoScroll = ref(true)
 const attachments = ref([])
 const attachmentDragging = ref(false)
@@ -400,7 +391,17 @@ const weeklyReports = ref([])
 const weeklyTimer = ref(null)
 const streamController = ref(null)
 const deletingDraftIds = ref(new Set())
+const preparingSend = ref(false)
+const previewImageUrl = ref('')
 const weeklyGroups = ['内容一组', '内容二组', '内容三组', '内容四组', '内容五组', '内容六组']
+const weeklyGroupMembers = {
+  '内容一组': ['许树杰', '许梦婷', '刘登魁', '许国锬', '叶进生', '高明镇', '薛荐轩', '叶颖'],
+  '内容二组': ['傅思敏', '赵良杰', '陈乐恒', '吴恒', '李扬林', '施律彬', '罗晓棋'],
+  '内容三组': ['曹媛', '陈泓睿', '陈鸿睿', '林文涛', '刘佳琳', '肖子璇'],
+  '内容四组': ['姚希', '陈健伊', '宋丽佳', '林宇辰'],
+  '内容五组': ['朱信宇', '林心语', '商光涵', '杨鸿霆', '吴楷煌'],
+  '内容六组': ['廖李星', '吴皓轩', '林孝添', '林语婷', '张碧珊', '叶子健']
+}
 const weeklyGroupIds = {
   '内容一组': 1,
   '内容二组': 2,
@@ -419,10 +420,11 @@ const weeklyForm = ref({
   accountsText: '',
   performanceText: '',
   landingText: '',
+  strategyText: '',
+  strategyStatusText: '',
   summaryText: '',
   nextPlansText: ''
 })
-
 function currentAuthSignature() {
   const user = getCurrentAuthUser() || {}
   return String(user.id || user.username || user.display_name || 'anonymous')
@@ -449,12 +451,12 @@ function forgetCurrentDraft(draftId) {
 }
 
 const currentTaskLabel = computed(() => currentTask.value === 'outline_writing' ? '大纲写作' : (taskLabels[currentTask.value] || '自由对话'))
-const currentAgentModeLabel = computed(() => agentModes.find(item => item.id === agentMode.value)?.label || '自动')
 const conversationCount = computed(() => messages.value.filter(item => item.role === 'user' || item.role === 'assistant').length)
 const currentSessionMeta = computed(() => draftSessionMeta(lastDraft.value, conversationCount.value))
-const attachmentParsing = computed(() => attachments.value.some(item => item.status === 'parsing'))
-const readyAttachments = computed(() => attachments.value.filter(item => item.status === 'ready' && item.text))
-const canSend = computed(() => Boolean(input.value.trim() || readyAttachments.value.length) && !attachmentParsing.value)
+const attachmentParsing = computed(() => attachments.value.some(item => item.status === 'parsing' && item.kind !== 'image'))
+const readyAttachments = computed(() => attachments.value.filter(item => item.status === 'ready' && (item.text || (item.kind === 'image' && item.imageBase64) || (item.kind === 'document' && item.fileBase64))))
+const imageAttachmentsLoading = computed(() => attachments.value.some(item => item.kind === 'image' && item.status === 'loading'))
+const canSend = computed(() => Boolean(input.value.trim() || readyAttachments.value.length || imageAttachmentsLoading.value))
 const weeklyStatusTitle = computed(() => {
   const status = weeklyJob.value?.status || ''
   if (status === 'done') return '周报已生成'
@@ -489,11 +491,6 @@ function draftSessionMeta(draft, visibleCount) {
   const count = Math.max(rawCount, visible, 0)
   const prefix = count ? `${count} 条上下文` : '新会话'
   return draft?.summary ? `${prefix} · 已压缩` : prefix
-}
-
-function applyChip(chip) {
-  input.value = chip.prompt
-  currentTask.value = chip.type === 'read_link' ? 'transcribe_link' : chip.type
 }
 
 function statusIcon(status) {
@@ -557,13 +554,60 @@ function isSupportedAttachment(file) {
   return /^(image\/)/i.test(type) || /\.(pdf|docx|doc|png|jpe?g|webp|gif|bmp)$/i.test(name)
 }
 
-function readFileAsBase64(file) {
+function isImageAttachment(file) {
+  const name = String(file?.name || '')
+  const type = String(file?.type || '')
+  return /^(image\/)/i.test(type) || /\.(png|jpe?g|webp|gif|bmp)$/i.test(name)
+}
+
+function readFileAsBase64(file, timeoutMs = 12000) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
-    reader.onload = () => resolve(String(reader.result || '').split(',', 2)[1] || '')
-    reader.onerror = () => reject(reader.error || new Error('read file failed'))
+    let settled = false
+    const timer = window.setTimeout(() => {
+      if (settled) return
+      settled = true
+      try { reader.abort() } catch (e) {}
+      reject(new Error(`读取文件超过 ${Math.round(timeoutMs / 1000)} 秒，请重新选择或压缩后再试`))
+    }, timeoutMs)
+    reader.onload = () => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      resolve(String(reader.result || '').split(',', 2)[1] || '')
+    }
+    reader.onerror = () => {
+      if (settled) return
+      settled = true
+      window.clearTimeout(timer)
+      reject(reader.error || new Error('read file failed'))
+    }
     reader.readAsDataURL(file)
   })
+}
+
+async function prepareAgentImageFile(file) {
+  const compressed = await compressImageFile(file, {
+    maxSide: 1280,
+    maxBytes: 900 * 1024,
+    quality: 0.72,
+    minQuality: 0.54,
+    always: file.size > 900 * 1024
+  })
+  return compressed || file
+}
+
+function parseWorkflowDocumentWithTimeout(payload, timeoutMs = ATTACHMENT_PARSE_TIMEOUT_MS) {
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), timeoutMs)
+  return parseWorkflowDocument(payload, controller.signal)
+    .finally(() => window.clearTimeout(timer))
+    .catch(error => {
+      if (error?.name === 'AbortError' || /abort/i.test(String(error?.message || ''))) {
+        throw new Error(`解析超过 ${Math.round(timeoutMs / 1000)} 秒，已转为发送后解析`)
+      }
+      throw error
+    })
 }
 
 async function importAttachments(files) {
@@ -580,33 +624,114 @@ async function importAttachments(files) {
       name: file.name || 'attachment',
       size: file.size || 0,
       mime: file.type || '',
-      kind: String(file.type || '').startsWith('image/') ? 'image' : 'document',
-      status: 'parsing',
+      kind: isImageAttachment(file) ? 'image' : 'document',
+      status: 'loading',
       text: '',
       error: ''
     }
     attachments.value.push(item)
     toolSteps.value = [
-      { id: item.id, label: `解析附件：${item.name}`, status: 'running', detail: item.kind === 'image' ? '正在识别图片内容' : '正在提取文档文字' },
+      { id: item.id, label: `添加附件：${item.name}`, status: 'running', detail: item.kind === 'image' ? '正在载入图片' : '正在读取文件' },
       ...toolSteps.value
     ]
+    let fileData = ''
     try {
-      const fileData = await readFileAsBase64(file)
-      if (item.kind === 'image') item.imageBase64 = fileData
-      const data = await parseWorkflowDocument({ filename: item.name, size: item.size, mime: item.mime, file_data: fileData })
-      const text = cleanAttachmentText(data.text || '')
-      if (!text) throw new Error(data.error || '没有提取到可用内容')
+      if (item.kind === 'image') {
+        item.loadPromise = readFileAsBase64(file)
+        fileData = await item.loadPromise
+        item.loadPromise = null
+        item.imageBase64 = fileData
+        item.originalSize = file.size || 0
+        item.size = file.size || 0
+        item.mime = file.type || ''
+        item.compressed = false
+        item.status = 'ready'
+        item.title = item.name.replace(/\.[^.]+$/, '')
+        item.text = ''
+        toolSteps.value = toolSteps.value.map(step => step.id === item.id
+          ? { ...step, status: 'done', detail: item.compressed ? `已压缩并载入图片参考：${formatFileSize(item.originalSize)} → ${formatFileSize(item.size)}` : '已载入图片参考，发送后再看图/改图' }
+          : step)
+        sources.value = [
+          { route: 'attachment', label: item.name, summary: item.compressed ? `图片参考 · 已压缩 ${formatFileSize(item.originalSize)} → ${formatFileSize(item.size)}` : '图片参考 · 可用于看图、图生图或改图' },
+          ...sources.value.filter(source => source.label !== item.name)
+        ]
+        continue
+      }
+      fileData = await readFileAsBase64(file)
+      item.fileBase64 = fileData
       item.status = 'ready'
-      item.title = data.title || item.name.replace(/\.[^.]+$/, '')
-      item.text = text
+      item.pendingParse = true
+      item.title = item.name.replace(/\.[^.]+$/, '')
       toolSteps.value = toolSteps.value.map(step => step.id === item.id
-        ? { ...step, status: 'done', detail: `已提取 ${text.length} 字` }
+        ? { ...step, status: 'done', detail: '已添加文件，后台解析中；可直接发送' }
         : step)
       sources.value = [
-        { route: 'attachment', label: item.name, summary: `${item.kind === 'image' ? '图片识别' : '文档解析'} · ${text.length} 字` },
+        { route: 'attachment', label: item.name, summary: '文件已添加 · 可直接发送，后台解析中' },
         ...sources.value.filter(source => source.label !== item.name)
       ]
+      parseWorkflowDocumentWithTimeout({ filename: item.name, size: item.size, mime: item.mime, file_data: fileData })
+        .then(data => {
+          if (!attachments.value.some(entry => entry.id === item.id)) return
+          const text = cleanAttachmentText(data.text || '')
+          if (!text) throw new Error(data.error || '没有提取到可用内容')
+          item.pendingParse = false
+          item.error = ''
+          item.title = data.title || item.title
+          item.text = text
+          toolSteps.value = toolSteps.value.map(step => step.id === item.id
+            ? { ...step, status: 'done', detail: `已提取 ${text.length} 字` }
+            : step)
+          sources.value = [
+            { route: 'attachment', label: item.name, summary: `文档解析 · ${text.length} 字` },
+            ...sources.value.filter(source => source.label !== item.name)
+          ]
+        })
+        .catch(error => {
+          if (!attachments.value.some(entry => entry.id === item.id)) return
+          item.pendingParse = true
+          item.error = error.message || String(error)
+          toolSteps.value = toolSteps.value.map(step => step.id === item.id
+            ? { ...step, status: 'done', detail: '后台解析未完成，发送后由 AI 继续处理' }
+            : step)
+          sources.value = [
+            { route: 'attachment', label: item.name, summary: '文件已添加 · 发送后继续解析' },
+            ...sources.value.filter(source => source.label !== item.name)
+          ]
+        })
+      continue
     } catch (e) {
+      item.loadPromise = null
+      if (item.kind === 'image' && (item.imageBase64 || fileData)) {
+        item.imageBase64 = item.imageBase64 || fileData
+        item.status = 'ready'
+        item.title = item.name.replace(/\.[^.]+$/, '')
+        item.text = ''
+        item.error = e.message || String(e)
+        toolSteps.value = toolSteps.value.map(step => step.id === item.id
+          ? { ...step, status: 'done', detail: '已保留为图片参考，OCR 未提取到文字' }
+          : step)
+        sources.value = [
+          { route: 'attachment', label: item.name, summary: '图片参考 · 可用于看图、图生图或改图' },
+          ...sources.value.filter(source => source.label !== item.name)
+        ]
+        continue
+      }
+      if (item.kind === 'document' && (item.fileBase64 || fileData)) {
+        item.fileBase64 = item.fileBase64 || fileData
+        item.status = 'ready'
+        item.pendingParse = true
+        item.title = item.name.replace(/\.[^.]+$/, '')
+        item.text = ''
+        item.error = e.message || String(e)
+        toolSteps.value = toolSteps.value.map(step => step.id === item.id
+          ? { ...step, status: 'done', detail: '已上传文件，发送消息后再交给后端解析' }
+          : step)
+        sources.value = [
+          { route: 'attachment', label: item.name, summary: '文件已上传 · 发送后解析正文' },
+          ...sources.value.filter(source => source.label !== item.name)
+        ]
+        continue
+      }
       item.status = 'failed'
       item.error = e.message || String(e)
       attachmentError.value = `${item.name} 解析失败：${item.error}`
@@ -681,8 +806,11 @@ function removeAttachment(id) {
 }
 
 function attachmentMeta(file) {
+  if (file.status === 'loading') return file.kind === 'image' ? '正在载入图片...' : '正在读取文件...'
   if (file.status === 'parsing') return '正在解析...'
   if (file.status === 'failed') return file.error || '解析失败'
+  if (file.kind === 'image' && !file.text) return `图片参考 · ${formatFileSize(file.size)}`
+  if (file.kind === 'document' && !file.text) return `文件已上传 · ${formatFileSize(file.size)} · 发送后解析`
   return `${file.kind === 'image' ? '图片识别' : '文档解析'} · ${formatFileSize(file.size)} · ${file.text.length} 字`
 }
 
@@ -697,15 +825,99 @@ function cleanAttachmentText(text) {
   return String(text || '').replace(/\r/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim()
 }
 
+function delay(ms) {
+  return new Promise(resolve => window.setTimeout(resolve, ms))
+}
+
+async function waitForImageAttachmentsReady() {
+  const pending = attachments.value.filter(item => item.kind === 'image' && item.status === 'loading')
+  if (!pending.length) return
+  attachmentError.value = '图片正在载入，马上发送...'
+  await Promise.allSettled(pending.map(item => item.loadPromise || delay(80)))
+  const failed = pending.filter(item => item.status !== 'ready' || !item.imageBase64)
+  if (failed.length) {
+    const names = failed.map(item => item.name).join('、')
+    throw new Error(`${names} 没有载入成功，请重新上传图片`)
+  }
+  attachmentError.value = ''
+}
+
 function buildAttachmentContext() {
   const list = readyAttachments.value
   if (!list.length) return ''
   return list.map((file, index) => [
     `【附件 ${index + 1}】${file.name}`,
-    `类型：${file.kind === 'image' ? '图片识别 / OCR' : '文档解析'}`,
+    `类型：${file.kind === 'image' ? '图片参考 / OCR' : '文档解析'}`,
     '内容：',
-    file.text.slice(0, 18000)
+    file.text
+      ? file.text.slice(0, 18000)
+      : (file.kind === 'image'
+          ? '这是一张图片附件；若需要请结合随请求上传的图片本体进行视觉理解或图生图。'
+          : '这个文件已上传但尚未完成正文解析；发送后请后端继续解析原文件并基于正文回答。')
   ].join('\n')).join('\n\n---\n\n')
+}
+
+function pendingDocumentPayloads(list = readyAttachments.value) {
+  return list
+    .filter(item => item.kind === 'document' && item.fileBase64 && !item.text)
+    .map(item => ({
+      filename: item.name,
+      size: item.size || 0,
+      mime: item.mime || '',
+      file_data: item.fileBase64
+    }))
+    .slice(0, 4)
+}
+
+function imageAttachmentPayloads(list = readyAttachments.value) {
+  return list
+    .filter(item => item.kind === 'image' && item.imageBase64)
+    .map(item => ({
+      base64: item.imageBase64,
+      mime: item.mime || 'image/jpeg',
+      name: item.name,
+      size: item.size || 0
+    }))
+    .slice(0, 4)
+}
+
+function attachmentImageUrl(item) {
+  if (!item?.imageBase64) return ''
+  return `data:${item.mime || 'image/jpeg'};base64,${item.imageBase64}`
+}
+
+function attachmentFileDataUrl(item) {
+  if (!item?.fileBase64) return ''
+  const fallbackMime = /\.pdf$/i.test(item.name || '')
+    ? 'application/pdf'
+    : 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  return `data:${item.mime || fallbackMime};base64,${item.fileBase64}`
+}
+
+function attachmentMessageImages(list = readyAttachments.value) {
+  return list
+    .filter(item => item.kind === 'image' && item.imageBase64)
+    .map(item => ({
+      id: item.id,
+      name: item.name,
+      url: attachmentImageUrl(item),
+      hint: `用户上传图片 · ${formatFileSize(item.size)}`
+    }))
+}
+
+function attachmentMessageFiles(list = readyAttachments.value) {
+  return list
+    .filter(item => item.kind === 'document')
+    .map(item => ({
+      id: item.id,
+      name: item.name,
+      dataUrl: attachmentFileDataUrl(item),
+      size: item.size || 0,
+      mime: item.mime || '',
+      hint: item.text
+        ? `用户上传文件 · 已解析 ${item.text.length} 字`
+        : `用户上传文件 · ${formatFileSize(item.size)} · 发送后解析`
+    }))
 }
 
 function defaultWeeklyRange() {
@@ -723,7 +935,10 @@ function defaultWeeklyRange() {
 function resolveWeeklyGroup() {
   const user = getCurrentAuthUser() || {}
   const group = String(user.group_name || user.groupName || '').trim()
-  return weeklyGroups.includes(group) ? group : '内容二组'
+  if (weeklyGroups.includes(group)) return group
+  const name = String(user.real_name || user.display_name || user.username || '').trim()
+  const matched = weeklyGroups.find(item => (weeklyGroupMembers[item] || []).includes(name))
+  return matched || '内容二组'
 }
 
 function weeklyProfitTarget(groupName, range) {
@@ -741,17 +956,34 @@ function weeklyProfitTarget(groupName, range) {
   return Number(weeklyGroupTargets[groupId] || 0)
 }
 
+function defaultWeeklyStrategyText(groupName, range) {
+  const month = String(range?.start || '').slice(5, 7)
+  if (groupName === '内容四组' && month === '06') {
+    return [
+      '按照账号更新标准完成月度账号更新条数，账号主编责任制落实到位（需要配合抽查与提交运营文档）',
+      '商单评论区抽奖测试',
+      'AI工作台热点及文案撰写功能优化'
+    ].join('\n')
+  }
+  return ''
+}
+
 function applyWeeklyDefaults() {
   const range = defaultWeeklyRange()
   weeklyForm.value.group = resolveWeeklyGroup()
   weeklyForm.value.start = range.start
   weeklyForm.value.end = range.end
+  if (!weeklyForm.value.strategyText.trim()) {
+    weeklyForm.value.strategyText = defaultWeeklyStrategyText(weeklyForm.value.group, range)
+  }
   return range
 }
 
 function clearWeeklySupplement() {
   weeklyForm.value.performanceText = ''
   weeklyForm.value.landingText = ''
+  weeklyForm.value.strategyText = ''
+  weeklyForm.value.strategyStatusText = ''
   weeklyForm.value.summaryText = ''
   weeklyForm.value.nextPlansText = ''
 }
@@ -818,6 +1050,8 @@ async function startWeekly() {
       accountsText: weeklyForm.value.accountsText,
       performanceText: weeklyForm.value.performanceText,
       landingText: weeklyForm.value.landingText,
+      strategyText: weeklyForm.value.strategyText,
+      strategyStatusText: weeklyForm.value.strategyStatusText,
       summaryText: weeklyForm.value.summaryText,
       nextPlansText: weeklyForm.value.nextPlansText
     })
@@ -857,6 +1091,16 @@ function weeklyDocFileName(report) {
 async function downloadFileFromUrl(docUrl, filename) {
   if (docUrl) {
     try {
+      if (String(docUrl).startsWith('data:')) {
+        const anchor = document.createElement('a')
+        anchor.href = docUrl
+        anchor.download = String(filename || 'download.docx').replace(/[\\/:*?"<>|]/g, '_')
+        document.body.appendChild(anchor)
+        anchor.click()
+        document.body.removeChild(anchor)
+        showToast('文件已开始下载', 'success', { quiet: true })
+        return true
+      }
       const resp = await fetch(docUrl)
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
       const blob = await resp.blob()
@@ -868,13 +1112,202 @@ async function downloadFileFromUrl(docUrl, filename) {
       anchor.click()
       document.body.removeChild(anchor)
       URL.revokeObjectURL(url)
-      showToast('Word download started', 'success', { quiet: true })
+      showToast('文件已开始下载', 'success', { quiet: true })
       return true
     } catch (e) {
-      showToast('Word download failed: ' + (e.message || 'please retry'), 'error')
+      showToast('文件下载失败：' + (e.message || '请稍后重试'), 'error')
     }
   }
   return false
+}
+
+function absoluteAssetUrl(raw) {
+  const url = normalizeImageUrl(String(raw || '').trim())
+  if (!url || url.startsWith('data:')) return url
+  try {
+    return new URL(escapeBadPercent(url), window.location.origin).toString()
+  } catch (e) {
+    return escapeBadPercent(url)
+  }
+}
+
+function escapeBadPercent(value) {
+  return String(value || '').replace(/%(?![0-9A-Fa-f]{2})/g, '%25')
+}
+
+function safeDecodeURIComponent(value) {
+  const raw = String(value || '')
+  try {
+    return decodeURIComponent(raw)
+  } catch (e) {
+    try {
+      return decodeURIComponent(escapeBadPercent(raw))
+    } catch (inner) {
+      return raw
+    }
+  }
+}
+
+function safeImageFileName(value, index = 0) {
+  const fallback = `agent-image-${index + 1}.png`
+  try {
+    const pathname = new URL(absoluteAssetUrl(value), window.location.origin).pathname
+    const name = safeDecodeURIComponent(pathname.split('/').filter(Boolean).pop() || fallback)
+    return String(name || fallback).replace(/[\\/:*?"<>|]/g, '_')
+  } catch (e) {
+    return fallback
+  }
+}
+
+function addImageUrl(list, seen, raw, source = 'AI 生成图片') {
+  const clean = String(raw || '').trim().replace(/[，。；;、)）\]】"'<>]+$/g, '')
+  if (!clean) return
+  const url = normalizeImageUrl(clean)
+  if (!url || seen.has(url)) return
+  seen.add(url)
+  list.push({
+    url,
+    name: `${source} ${list.length + 1}`,
+    hint: '点击可预览，或作为参考图继续修改'
+  })
+}
+
+function extractAgentImages(data, content = '') {
+  const list = []
+  const seen = new Set()
+  const add = (value, source) => addImageUrl(list, seen, value, source)
+  if (data) {
+    add(data.image_url || data.imageUrl || data.result_url || data.url, 'AI 生成图片')
+    if (data.image) add(data.image.url || data.image.image_url || data.image.result_url, 'AI 生成图片')
+    ;['images', 'urls', 'results'].forEach(key => {
+      const values = Array.isArray(data[key]) ? data[key] : []
+      values.forEach(item => add(typeof item === 'string' ? item : (item?.url || item?.image_url || item?.result_url), 'AI 生成图片'))
+    })
+  }
+  const text = String(content || '')
+  const labeled = /图片链接[：:]\s*(https?:\/\/[^\s)）\]】"'，。；;]+|\/uploads\/imagegen\/[^\s)）\]】"'，。；;]+)/gi
+  let match = null
+  while ((match = labeled.exec(text))) add(match[1], 'AI 生成图片')
+  const general = /(https?:\/\/[^\s)）\]】"'，。；;]+|\/uploads\/imagegen\/[^\s)）\]】"'，。；;]+)/gi
+  while ((match = general.exec(text))) {
+    const value = match[1]
+    if (/\.(png|jpe?g|webp|gif|bmp)(\?|$)/i.test(value) || value.includes('/uploads/imagegen/')) {
+      add(value, 'AI 生成图片')
+    }
+  }
+  return list
+}
+
+function addAgentFile(list, seen, file, fallbackName = 'AI 返回文档') {
+  if (!file) return
+  const rawUrl = typeof file === 'string'
+    ? file
+    : (file.url || file.word_url || file.wordUrl || file.docx_url || file.docxUrl || file.file_url || file.fileUrl || file.relative_url || file.relativeUrl || '')
+  const url = String(rawUrl || '').trim()
+  const dataUrl = typeof file === 'object' ? String(file.dataUrl || file.data_url || '').trim() : ''
+  if (!url && !dataUrl) return
+  const key = url || dataUrl.slice(0, 80)
+  if (seen.has(key)) return
+  seen.add(key)
+  const name = typeof file === 'object'
+    ? (file.name || file.filename || file.title || fallbackName)
+    : fallbackName
+  list.push({
+    name: String(name || fallbackName).replace(/[\\/:*?"<>|]/g, '_'),
+    url,
+    dataUrl,
+    relative_url: typeof file === 'object' ? (file.relative_url || file.relativeUrl || '') : '',
+    hint: typeof file === 'object' ? (file.hint || file.type || '点击下载文档') : '点击下载文档'
+  })
+}
+
+function extractAgentFiles(data) {
+  const list = []
+  const seen = new Set()
+  if (!data) return list
+  if (data.report && (data.report.word_url || data.report.word_relative_url)) {
+    addAgentFile(list, seen, {
+      name: data.report.filename || `${data.report.title || '周报'}.docx`,
+      url: data.report.word_url,
+      relative_url: data.report.word_relative_url || '',
+      hint: 'Word 文档'
+    })
+  }
+  addAgentFile(list, seen, {
+    name: data.filename || data.file_name || data.title || 'AI 返回文档.docx',
+    url: data.word_url || data.wordUrl || data.docx_url || data.docxUrl || data.file_url || data.fileUrl,
+    relative_url: data.word_relative_url || data.relative_url || data.relativeUrl || '',
+    hint: data.file_hint || data.hint || '点击下载文档'
+  })
+  ;['files', 'documents', 'attachments'].forEach(key => {
+    const values = Array.isArray(data[key]) ? data[key] : []
+    values.forEach(item => addAgentFile(list, seen, item, 'AI 返回文档'))
+  })
+  return list
+}
+
+async function imageUrlToBase64(rawUrl) {
+  const url = absoluteAssetUrl(rawUrl)
+  if (!url) throw new Error('图片地址为空')
+  if (url.startsWith('data:')) return url.split(',', 2)[1] || ''
+  const resp = await fetch(url)
+  if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+  const blob = await resp.blob()
+  const name = safeImageFileName(url)
+  const file = new File([blob], name, { type: blob.type || 'image/png' })
+  const imageFile = await prepareAgentImageFile(file)
+  return await readFileAsBase64(imageFile)
+}
+
+async function downloadAgentImage(image) {
+  try {
+    const url = absoluteAssetUrl(image?.url)
+    if (!url) throw new Error('图片地址为空')
+    const resp = await fetch(url)
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+    const blob = await resp.blob()
+    const objectUrl = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = objectUrl
+    anchor.download = safeImageFileName(image?.url, 0)
+    document.body.appendChild(anchor)
+    anchor.click()
+    document.body.removeChild(anchor)
+    URL.revokeObjectURL(objectUrl)
+    showToast('图片已开始下载', 'success', { quiet: true })
+  } catch (e) {
+    showToast('图片下载失败：' + (e.message || '请稍后重试'), 'error')
+  }
+}
+
+async function useAgentImageAsReference(image) {
+  try {
+    const base64 = await imageUrlToBase64(image?.url)
+    if (!base64) throw new Error('没有读取到图片数据')
+    const name = safeImageFileName(image?.url, attachments.value.length)
+    const item = {
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      name,
+      size: 0,
+      mime: 'image/png',
+      kind: 'image',
+      status: 'ready',
+      text: '',
+      error: '',
+      imageBase64: base64,
+      title: name.replace(/\.[^.]+$/, '')
+    }
+    attachments.value.push(item)
+    sources.value = [
+      { route: 'imagegen', label: name, summary: '生成图参考 · 可继续图生图或改图' },
+      ...sources.value.filter(source => source.label !== name)
+    ]
+    if (!input.value.trim()) input.value = '基于这张参考图继续修改：'
+    currentTask.value = 'image_generation'
+    showToast('已放入参考图，可以继续描述怎么改', 'success')
+  } catch (e) {
+    showToast('放入参考图失败：' + (e.message || '请稍后重试'), 'error')
+  }
 }
 
 async function downloadWeeklyDoc() {
@@ -895,7 +1328,11 @@ async function downloadWeeklyDoc() {
 }
 
 async function downloadAgentFile(file) {
-  if (!file?.url) return
+  if (!file?.url && !file?.dataUrl) return
+  if (file.dataUrl) {
+    await downloadFileFromUrl(file.dataUrl, file.name || 'attachment')
+    return
+  }
   await downloadFileFromUrl(weeklyDocDownloadUrl({
     word_url: file.url,
     word_relative_url: file.relative_url || file.relativeUrl || ''
@@ -925,6 +1362,8 @@ async function openWeeklyRecord(record) {
     }
     weeklyJob.value.report.word_url = detail.word_url || weeklyJob.value.report.word_url || ''
     weeklyJob.value.report.feishu_url = detail.feishu_url || weeklyJob.value.report.feishu_url || ''
+    weeklyForm.value.strategyText = (weeklyJob.value.report.strategy_items || []).join('\n')
+    weeklyForm.value.strategyStatusText = weeklyJob.value.report.strategy_status || weeklyJob.value.report.strategyStatus || ''
   } catch (e) {
     weeklyJob.value = {
       status: 'failed',
@@ -948,19 +1387,6 @@ function sendWeeklyToChat() {
   scrollToBottom(true)
 }
 
-async function previewTools() {
-  if (!canSend.value) return
-  runningLabel.value = '正在预览工具'
-  try {
-    const text = [input.value.trim(), buildAttachmentContext()].filter(Boolean).join('\n\n')
-    const data = await previewAgentTools({ message: text, task_type: currentTask.value, agent_mode: agentMode.value })
-    currentTask.value = data.task_type || currentTask.value
-    toolSteps.value = data.tools || []
-  } catch (e) {
-    toolSteps.value = [{ id: 'preview_error', label: '工具预览失败', status: 'failed', detail: e.message }]
-  }
-}
-
 function stopStreaming() {
   if (!running.value || !streamController.value) return
   runningLabel.value = '正在停止'
@@ -968,25 +1394,45 @@ function stopStreaming() {
 }
 
 async function sendMessage() {
+  if (running.value || preparingSend.value) return
+  preparingSend.value = true
+  try {
+    await waitForImageAttachmentsReady()
+  } catch (e) {
+    attachmentError.value = e.message || String(e)
+    showToast(attachmentError.value, 'error')
+    preparingSend.value = false
+    return
+  }
+  preparingSend.value = false
   const typedText = input.value.trim()
+  const readySnapshot = readyAttachments.value.slice()
   const attachmentContext = buildAttachmentContext()
   const text = [typedText, attachmentContext].filter(Boolean).join('\n\n')
-  if (!text || running.value || attachmentParsing.value) return
-  const attachmentSummary = readyAttachments.value.length
-    ? `\n\n宸查檮鍔狅細${readyAttachments.value.map(item => item.name).join('銆?')}`
+  if (!text || running.value) return
+  const attachmentSummary = readySnapshot.length
+    ? `\n\n已附加：${readySnapshot.map(item => item.name).join('、')}`
     : ''
   const baseId = Date.now()
-  const userMessage = { id: baseId + '-u', role: 'user', content: (typedText || '请解读这些附件') + attachmentSummary }
+  const userMessage = {
+    id: baseId + '-u',
+    role: 'user',
+    content: (typedText || '请解读这些附件') + attachmentSummary,
+    images: attachmentMessageImages(readySnapshot),
+    files: attachmentMessageFiles(readySnapshot)
+  }
   const assistantMessage = { id: baseId + '-a', role: 'assistant', content: '', pending: true }
   messages.value.push(userMessage, assistantMessage)
   input.value = ''
   running.value = true
   runningLabel.value = '正在调度工具'
   autoScroll.value = true
-  const attachmentSources = readyAttachments.value.map(item => ({
+  const attachmentSources = readySnapshot.map(item => ({
     route: 'attachment',
     label: item.name,
-    summary: `${item.kind === 'image' ? '????' : '????'} ? ${item.text.length} ?`
+    summary: item.kind === 'image'
+      ? `图片附件 · ${formatFileSize(item.size)}`
+      : (item.text ? `文件附件 · 已解析 ${item.text.length} 字` : `文件附件 · ${formatFileSize(item.size)} · 发送后解析`)
   }))
   toolSteps.value = []
   sources.value = attachmentSources
@@ -1020,13 +1466,14 @@ async function sendMessage() {
     await chatAgentStream({
       message: text,
       task_type: currentTask.value,
-      agent_mode: agentMode.value,
+      agent_mode: 'auto',
       draft_id: draftId,
       history: messages.value
         .filter(item => item.id !== assistantMessage.id)
         .slice(-10)
         .map(item => ({ role: item.role, content: item.content })),
-      images: readyAttachments.value.filter(item => item.kind === 'image' && item.imageBase64).map(item => item.imageBase64).slice(0, 4)
+      images: imageAttachmentPayloads(readySnapshot),
+      documents: pendingDocumentPayloads(readySnapshot)
     }, {
       onEvent(event, payload) {
         if (event === 'status') {
@@ -1038,7 +1485,6 @@ async function sendMessage() {
         }
         if (event === 'plan') {
           currentTask.value = payload?.task_type || currentTask.value
-          agentMode.value = payload?.agent_mode || agentMode.value
           toolSteps.value = payload?.tools || toolSteps.value
           return
         }
@@ -1066,9 +1512,12 @@ async function sendMessage() {
 
     if (finalData) {
       const isWeeklyReportResult = finalData.task_type === 'weekly_report' || Boolean(finalData.report?.word_url)
+      const finalText = finalData.reply || finalData.output || assistantMessage.content || ''
+      const finalImages = extractAgentImages(finalData, finalText)
+      const finalFiles = extractAgentFiles(finalData)
+      const isImageResult = Boolean(finalImages.length || finalData.image_url || finalData.imageUrl || finalData.result_url || finalData.image?.url)
       currentTask.value = finalData.task_type || currentTask.value
       toolSteps.value = finalData.tools || toolSteps.value
-      agentMode.value = finalData.agent_mode || agentMode.value
       sources.value = [...attachmentSources, ...(finalData.sources || [])]
       if (finalData.job) {
         weeklyJob.value = finalData.job
@@ -1087,8 +1536,8 @@ async function sendMessage() {
       lastDraft.value = finalData.draft || null
       rememberCurrentDraft(lastDraft.value)
       sessionTitle.value = lastDraft.value?.title || sessionTitle.value
-      lastReply.value = finalData.reply || finalData.output || assistantMessage.content || ''
-      feishuUrl.value = isWeeklyReportResult ? '' : (finalData.feishu_url || finalData.doc_url || finalData.url || finalData.link || finalData.feishu?.doc_url || finalData.feishu?.url || lastDraft.value?.feishu_url || lastDraft.value?.feishuUrl || '')
+      lastReply.value = finalText
+      feishuUrl.value = (isWeeklyReportResult || isImageResult) ? '' : (finalData.feishu_url || finalData.doc_url || finalData.url || finalData.link || finalData.feishu?.doc_url || finalData.feishu?.url || lastDraft.value?.feishu_url || lastDraft.value?.feishuUrl || '')
       if (!isWeeklyReportResult && !feishuUrl.value && wantsFeishuOutput(typedText || text) && lastReply.value) {
         runningLabel.value = '乌萨奇正在写入飞书'
         toolSteps.value = [
@@ -1108,13 +1557,11 @@ async function sendMessage() {
       assistantMessage.pending = false
       const hasFeishuLink = feishuUrl.value && String(lastReply.value || '').includes(feishuUrl.value)
       assistantMessage.content = (lastReply.value || '这次没有生成内容。') + (feishuUrl.value && !hasFeishuLink ? '\n\n飞书文档：' + feishuUrl.value : '')
-      if (isWeeklyReportResult && finalData.report?.word_url) {
-        assistantMessage.files = [{
-          name: finalData.report.filename || `${finalData.report.title || '周报'}.doc`,
-          url: finalData.report.word_url,
-          relative_url: finalData.report.word_relative_url || '',
-          hint: 'Word 文档'
-        }]
+      if (finalImages.length) {
+        assistantMessage.images = finalImages
+      }
+      if (finalFiles.length) {
+        assistantMessage.files = finalFiles
       }
     } else {
       lastReply.value = assistantMessage.content
@@ -1210,7 +1657,6 @@ function newConversation() {
   toolSteps.value = []
   sources.value = []
   currentTask.value = ''
-  agentMode.value = 'auto'
   input.value = ''
   autoScroll.value = true
 }
@@ -1352,63 +1798,6 @@ onBeforeUnmount(() => {
 .agent-chat.attachment-dragging {
   border-color: var(--primary);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 22%, transparent), var(--shadow);
-}
-
-.agent-mode-row,
-.agent-prompt-row {
-  display: flex;
-  gap: 6px;
-  padding: 10px 12px;
-  overflow-x: auto;
-}
-
-.agent-mode-row {
-  padding-bottom: 0;
-  background: var(--card-header-bg);
-}
-
-.agent-prompt-row {
-  border-bottom: 1px solid var(--divider);
-  background: var(--card-header-bg);
-}
-
-.agent-mode,
-.agent-chip {
-  border: 1px solid var(--chip-border);
-  background: var(--chip-bg);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 6px 9px;
-  white-space: nowrap;
-  cursor: pointer;
-  font-size: 12px;
-  line-height: 1;
-  transition: transform var(--t-base) var(--ease-spring), border-color var(--t-base);
-}
-
-.agent-mode-icon,
-.agent-chip-icon {
-  display: inline-grid;
-  place-items: center;
-  min-width: 18px;
-  height: 18px;
-  margin-right: 3px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--primary) 10%, transparent);
-  font-size: 11px;
-  font-weight: 800;
-}
-
-.agent-chip:hover {
-  transform: translateY(-1px);
-  border-color: var(--card-border-hover);
-}
-
-.agent-mode.active,
-.weekly-toggle-chip.active {
-  color: var(--primary);
-  border-color: var(--primary);
-  background: var(--active-bg);
 }
 
 .weekly-card {
@@ -1908,11 +2297,22 @@ onBeforeUnmount(() => {
   background: var(--chip-bg);
   color: var(--text);
   text-decoration: none;
+  cursor: pointer;
 }
 
 .agent-file-card:hover {
   border-color: var(--card-border-hover);
   transform: translateY(-1px);
+}
+
+.agent-file-card:disabled {
+  cursor: default;
+  opacity: 0.9;
+}
+
+.agent-file-card:disabled:hover {
+  border-color: var(--chip-border);
+  transform: none;
 }
 
 .agent-file-icon {
@@ -1943,6 +2343,95 @@ onBeforeUnmount(() => {
 .agent-file-main small {
   color: var(--text-muted);
   font-size: 12px;
+}
+
+.agent-image-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 240px));
+  gap: 10px;
+  margin-top: 10px;
+  white-space: normal;
+}
+
+.agent-image-card {
+  overflow: hidden;
+  margin: 0;
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.agent-image-preview {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border: 0;
+  padding: 0;
+  background: var(--surface2);
+  cursor: zoom-in;
+}
+
+.agent-image-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+.agent-image-card figcaption {
+  display: grid;
+  gap: 5px;
+  padding: 9px;
+}
+
+.agent-image-card strong {
+  font-size: 13px;
+}
+
+.agent-image-card span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.agent-image-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 3px;
+}
+
+.agent-image-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.72);
+}
+
+.agent-image-modal img {
+  max-width: min(96vw, 1100px);
+  max-height: 92vh;
+  object-fit: contain;
+  border-radius: 12px;
+  background: white;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.35);
+}
+
+.agent-image-modal-close {
+  position: fixed;
+  top: 18px;
+  right: 18px;
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.36);
+  border-radius: 50%;
+  background: rgba(15, 23, 42, 0.6);
+  color: white;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
 }
 
 .typing-bubble {

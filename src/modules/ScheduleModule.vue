@@ -8,21 +8,89 @@
           <h2>排期看板</h2>
         </div>
       </div>
-      <div class="view-toggle module-page-actions">
+      <div v-if="activeGroup !== DEPARTMENT_TODO_TAB" class="view-toggle module-page-actions">
         <button :class="{ active: viewMode === 'person' }" @click="viewMode = 'person'">👤 按人</button>
         <button :class="{ active: viewMode === 'week' }" @click="viewMode = 'week'">📆 按周</button>
       </div>
-      <button class="undo-btn" @click="undo" title="撤销 (Ctrl+Z)">↩️ 撤销</button>
-      <button class="ai-import-btn" @click="showAiImport = true" title="AI导入">🤖 AI导入</button>
+      <button v-if="activeGroup !== DEPARTMENT_TODO_TAB" class="undo-btn" @click="undo" title="撤销 (Ctrl+Z)">↩️ 撤销</button>
+      <button v-if="activeGroup !== DEPARTMENT_TODO_TAB" class="ai-import-btn" @click="showAiImport = true" title="AI导入">🤖 AI导入</button>
     </div>
 
     <!-- 组选择 tabs（组长/部长可见，组员隐藏） -->
     <div v-if="canViewAllGroups" class="group-tabs">
       <button v-for="g in GROUPS" :key="g.id" class="group-tab" :class="{ active: activeGroup === g.id }" @click="activeGroup = g.id">{{ g.label }}</button>
+      <button class="group-tab department-todo-tab" :class="{ active: activeGroup === DEPARTMENT_TODO_TAB }" @click="activeGroup = DEPARTMENT_TODO_TAB">部门待办</button>
     </div>
 
+    <section v-if="activeGroup === DEPARTMENT_TODO_TAB" class="todo-board" aria-label="组待办事项">
+      <div class="todo-board-head">
+        <div>
+          <div class="todo-kicker">GROUP TODO</div>
+          <h3>组待办 / 日程提醒</h3>
+        </div>
+        <div class="todo-board-hint">支持“AI培训会 周四 14:00 重要”这类快速录入</div>
+      </div>
+      <div class="todo-group-grid">
+        <article
+          v-for="g in visibleTodoGroups"
+          :key="g.id"
+          class="todo-group"
+          :class="{ active: activeGroup === g.id }">
+          <header class="todo-group-head">
+            <button type="button" class="todo-group-title" @click="activeGroup = g.id">
+              <span>{{ g.label }}</span>
+              <small>组长：{{ groupLeaderName(g) }}</small>
+            </button>
+            <span class="todo-open-count">{{ getGroupOpenTodoCount(g) }}</span>
+          </header>
+          <div class="todo-quick-row">
+            <input
+              class="todo-input"
+              v-model="todoDraftFor(g).title"
+              placeholder="输入待办，如：AI培训会 周四 重要"
+              @keydown.enter.prevent="addGroupTodo(g)">
+            <input class="todo-date" type="date" v-model="todoDraftFor(g).dueDate">
+            <input class="todo-time" type="time" v-model="todoDraftFor(g).dueTime">
+            <label class="todo-important" title="重要提醒">
+              <input type="checkbox" v-model="todoDraftFor(g).important">
+              <span>重要</span>
+            </label>
+            <button class="todo-add-btn" type="button" @click="addGroupTodo(g)">添加</button>
+          </div>
+          <div class="todo-list">
+            <div
+              v-for="todo in getGroupTodos(g).slice(0, 6)"
+              :key="todo.id"
+              class="todo-item"
+              :class="[todo.status, todoAlarmLevel(todo)]">
+              <button
+                type="button"
+                class="todo-check"
+                :class="{ checked: todo.status === 'done' }"
+                @click="toggleTodoDone(todo)"
+                :title="todo.status === 'done' ? '标记未完成' : '标记完成'">
+                {{ todo.status === 'done' ? '✓' : '' }}
+              </button>
+              <div class="todo-main">
+                <div class="todo-title-line">
+                  <span class="todo-title">{{ todo.title }}</span>
+                  <span v-if="todoReminderLabel(todo)" class="todo-badge">{{ todoReminderLabel(todo) }}</span>
+                </div>
+                <div class="todo-meta">
+                  <span>{{ todoDueLabel(todo) }}</span>
+                  <span v-if="todo.created_by">由 {{ todo.created_by }} 创建</span>
+                </div>
+              </div>
+              <button class="todo-delete" type="button" title="删除待办" @click="removeTodo(todo)">×</button>
+            </div>
+            <div v-if="getGroupTodos(g).length === 0" class="todo-empty">暂无待办</div>
+          </div>
+        </article>
+      </div>
+    </section>
+
     <!-- ===== 按人视图 ===== -->
-    <div v-if="viewMode === 'person'" class="board" ref="boardRef"
+    <div v-if="activeGroup !== DEPARTMENT_TODO_TAB && viewMode === 'person'" class="board" ref="boardRef"
       @mousedown="startPan"
       @mousemove="doPan"
       @mouseup="endPan"
@@ -66,7 +134,7 @@
             <div class="task-actions">
               <span class="task-inline-tools">
                 <button class="tbtn" @click.stop="editItem(item)">改</button>
-                <button v-if="canDeleteTasks" class="tbtn" @click.stop="delItem(item.id)">删</button>
+                <button class="tbtn" @click.stop="delItem(item.id)">删</button>
               </span>
               <button
                 class="stage-advance-btn"
@@ -87,7 +155,7 @@
     </div>
 
     <!-- ===== 按周视图 ===== -->
-    <div v-if="viewMode === 'week'" class="week-board-wrap">
+    <div v-if="activeGroup !== DEPARTMENT_TODO_TAB && viewMode === 'week'" class="week-board-wrap">
       <div class="week-nav">
         <button class="week-arrow" @click="weekOffset--">&lt;</button>
         <span class="week-label">{{ weekRangeLabel }}</span>
@@ -226,6 +294,7 @@
           </div>
         </div>
         <div class="modal-foot">
+          <button v-if="editing" class="btn btn-danger modal-delete-btn" type="button" @click="deleteEditingItem">删除</button>
           <button class="btn btn-ghost" @click="formShow = false">取消</button>
           <button class="btn btn-primary" @click="saveItem">保存</button>
         </div>
@@ -546,7 +615,7 @@ function parseLocalMaterialTask(text, person, takenRanges = []) {
 
 function accountSearchTerms(account) {
   const aliases = {
-    麦晓花: ['麦晓花', '晓花', '晓晓花'],
+    麦小雯: ['麦小雯', '小雯'],
     天机妹: ['天机妹'],
     花蛮楼: ['花蛮楼'],
     有事找学姐: ['有事找学姐', '学姐'],
@@ -757,11 +826,13 @@ function confirmAiImport() {
 
 const {
   ALL_ACCOUNTS,
+  DEPARTMENT_TODO_TAB,
   GROUPS,
   MEMBERS,
   activeGroup,
   activePasteTarget,
   activeTask,
+  addGroupTodo,
   boardRef,
   canViewAllGroups,
   canDeleteTasks,
@@ -769,6 +840,7 @@ const {
   currentGroupAccounts,
   currentGroupMembers,
   copyItem,
+  deleteEditingItem,
   delItem,
   doPan,
   dragItem,
@@ -778,7 +850,10 @@ const {
   form,
   formShow,
   fmtMd,
+  getGroupOpenTodoCount,
+  getGroupTodos,
   getItemsForCell,
+  groupLeaderName,
   handleDragStart,
   handleDragEnd,
   handleDrop,
@@ -801,9 +876,16 @@ const {
   setScheduleDocLink,
   setWeekPasteTarget,
   formatPersonTaskDate,
+  removeTodo,
   startPan,
+  todoAlarmLevel,
+  todoDraftFor,
+  todoDueLabel,
+  todoReminderLabel,
   toggleDone,
+  toggleTodoDone,
   undo,
+  visibleTodoGroups,
   viewMode,
   weekCardTitle,
   weekDays,
@@ -1203,6 +1285,294 @@ function handleScheduleFormEnter(event) {
   background: var(--primary, #7b2fff);
   border-color: var(--primary, #7b2fff);
   color: #fff;
+}
+
+.department-todo-tab {
+  border-style: dashed;
+}
+
+/* ===== Group Todos ===== */
+.todo-board {
+  flex: 1;
+  min-height: 0;
+  margin-bottom: 0;
+  padding: 12px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface, #1a1a2e) 88%, var(--primary, #7b2fff) 12%);
+  box-shadow: 0 10px 24px rgba(11, 8, 23, 0.14);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.todo-board-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.todo-kicker {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--text-muted, #8f88a8);
+  letter-spacing: 0;
+}
+
+.todo-board h3 {
+  margin: 2px 0 0;
+  font-size: 15px;
+  color: var(--text, #e0d8ff);
+}
+
+.todo-board-hint {
+  font-size: 12px;
+  color: var(--text-muted, #8f88a8);
+  white-space: nowrap;
+}
+
+.todo-group-grid {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(280px, 1fr));
+  gap: 10px;
+  max-height: none;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.todo-group {
+  min-width: 0;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 10px;
+  background: var(--surface, #1a1a2e);
+  padding: 10px;
+}
+
+.todo-group.active {
+  border-color: color-mix(in srgb, var(--primary, #7b2fff) 64%, var(--border, #2a2a4a));
+  box-shadow: inset 0 0 0 1px rgba(123, 47, 255, 0.18);
+}
+
+.todo-group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.todo-group-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text, #e0d8ff);
+  text-align: left;
+  padding: 0;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.todo-group-title span {
+  font-size: 13px;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-group-title small {
+  font-size: 11px;
+  color: var(--text-muted, #8f88a8);
+}
+
+.todo-open-count {
+  min-width: 28px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: var(--accent-soft, rgba(123, 47, 255, 0.12));
+  color: var(--primary-light, #b47fff);
+  border: 1px solid var(--border-bright, rgba(180, 127, 255, 0.35));
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.todo-quick-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) 118px 84px auto auto;
+  gap: 6px;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.todo-input,
+.todo-date,
+.todo-time {
+  min-width: 0;
+  height: 30px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 8px;
+  background: var(--surface2, #1e1e3a);
+  color: var(--text, #e0d8ff);
+  padding: 0 8px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.todo-important {
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 7px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #2a2a4a);
+  background: var(--surface2, #1e1e3a);
+  color: var(--text-muted, #8f88a8);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.todo-important input {
+  width: 13px;
+  height: 13px;
+}
+
+.todo-add-btn {
+  height: 30px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--primary, #7b2fff);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.todo-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.todo-item {
+  min-height: 42px;
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--border, #2a2a4a) 72%, transparent);
+  border-radius: 8px;
+  background: var(--surface2, #1e1e3a);
+}
+
+.todo-item.overdue {
+  border-color: rgba(239, 68, 68, 0.55);
+  background: rgba(239, 68, 68, 0.08);
+}
+
+.todo-item.today,
+.todo-item.soon,
+.todo-item.important {
+  border-color: rgba(245, 158, 11, 0.55);
+  background: rgba(245, 158, 11, 0.08);
+}
+
+.todo-item.done {
+  opacity: 0.62;
+}
+
+.todo-check,
+.todo-delete {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid var(--border, #2a2a4a);
+  background: var(--surface, #1a1a2e);
+  color: var(--text-muted, #8f88a8);
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.todo-check.checked {
+  background: var(--success-text, #22c55e);
+  border-color: var(--success-text, #22c55e);
+  color: #fff;
+}
+
+.todo-delete:hover {
+  border-color: var(--danger-text, #ef4444);
+  color: var(--danger-text, #ef4444);
+}
+
+.todo-main {
+  min-width: 0;
+}
+
+.todo-title-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.todo-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-weight: 750;
+  color: var(--text, #e0d8ff);
+}
+
+.todo-item.done .todo-title {
+  text-decoration: line-through;
+  color: var(--text-muted, #8f88a8);
+}
+
+.todo-badge {
+  flex: 0 0 auto;
+  padding: 1px 5px;
+  border-radius: 999px;
+  background: rgba(245, 158, 11, 0.16);
+  color: #f59e0b;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.todo-meta {
+  display: flex;
+  gap: 8px;
+  overflow: hidden;
+  margin-top: 2px;
+  color: var(--text-muted, #8f88a8);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.todo-empty {
+  padding: 12px 8px;
+  border: 1px dashed var(--border, #2a2a4a);
+  border-radius: 8px;
+  color: var(--text-muted, #8f88a8);
+  font-size: 12px;
+  text-align: center;
 }
 
 /* ===== Person Board ===== */
@@ -2027,9 +2397,12 @@ select.inp { cursor: pointer; }
   font-size: 11px;
 }
 .modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 24px 20px; }
+.modal-delete-btn { margin-right: auto; }
 .btn { padding: 8px 18px; border-radius: 8px; cursor: pointer; font-family: inherit; font-size: 13px; font-weight: 500; transition: all 0.15s; }
 .btn-primary { background: var(--primary, #7b2fff); color: #fff; border: none; }
 .btn-primary:hover { background: var(--primary-dark, #4a1a8a); }
+.btn-danger { background: var(--danger-bg, rgba(239, 68, 68, 0.12)); color: var(--danger-text, #ef4444); border: 1px solid var(--danger-border, rgba(239, 68, 68, 0.28)); }
+.btn-danger:hover { border-color: var(--danger-text, #ef4444); background: rgba(239, 68, 68, 0.18); }
 .btn-ghost { background: transparent; border: 1px solid var(--border, #2a2a4a); color: var(--text, #e0d8ff); }
 .btn-ghost:hover { border-color: var(--primary, #7b2fff); color: var(--primary-light, #b47fff); }
 .btn-sm { padding: 4px 12px; font-size: 11px; }

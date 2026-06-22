@@ -4,6 +4,7 @@ import http.client
 import json
 import mimetypes
 import os
+import shutil
 import ssl
 import subprocess
 import sys
@@ -161,6 +162,17 @@ def build_generation_request(base_url, prompt, size, headers, quality, backgroun
 
 def parse_image_response(raw, base_url, proxy, ssl_verify):
     result = json.loads(raw)
+    provider_error = result.get("error") or result.get("message")
+    if provider_error:
+        if isinstance(provider_error, dict):
+            provider_error = provider_error.get("message") or json.dumps(provider_error, ensure_ascii=False)
+        return {
+            "error": str(provider_error)[:1200],
+            "raw": raw[:800],
+            "provider_base_url": base_url,
+            "provider_proxy": bool(proxy),
+            "ssl_verify": ssl_verify,
+        }
     images_out = [item.get("b64_json", "") for item in result.get("data", []) if item.get("b64_json")]
     if images_out:
         return {
@@ -187,6 +199,47 @@ def parse_image_response(raw, base_url, proxy, ssl_verify):
     return {"error": "no image in response", "raw": raw[:800]}
 
 
+def is_socket_access_error(error):
+    text = " ".join([
+        str(getattr(error, "reason", "") or ""),
+        str(getattr(error, "errno", "") or ""),
+        str(error or ""),
+    ]).lower()
+    return (
+        "winerror 10013" in text
+        or "10013" in text
+        or "访问套接字" in text
+        or "permission denied" in text
+        or "access is denied" in text
+        or "operation not permitted" in text
+    )
+
+
+def should_retry_with_curl(error):
+    text = " ".join([
+        str(getattr(error, "reason", "") or ""),
+        str(getattr(error, "errno", "") or ""),
+        str(error or ""),
+    ]).lower()
+    return is_socket_access_error(error) or any(token in text for token in [
+        "tls/ssl",
+        "ssl",
+        "eof",
+        "connection reset",
+        "remote end closed",
+        "remote disconnected",
+        "disconnected",
+        "could not connect",
+        "failed to connect",
+        "timed out",
+        "timeout",
+    ])
+
+
+def curl_command():
+    return shutil.which("curl.exe") or shutil.which("curl") or "curl.exe"
+
+
 def open_request(req, timeout, proxy="", ssl_verify=True):
     proxy = str(proxy or "").strip()
     context = ctx if ssl_verify else ssl._create_unverified_context()
@@ -205,8 +258,9 @@ def request_with_curl(base_url, key, prompt, images, size, quality, background, 
     temp_files = []
     out_file = None
     try:
+        curl_bin = curl_command()
         args = [
-            "curl.exe",
+            curl_bin,
             "-sS",
             "--connect-timeout",
             "30",
@@ -337,6 +391,29 @@ def generate(prompt, image_base64=None, size="1024x1024", api_key=None, max_retr
             reason = getattr(error, "reason", None)
             last_error = str(reason or error)
             print(f"attempt {attempt + 1}/{max_retries} failed: {last_error}", file=sys.stderr, flush=True)
+            if should_retry_with_curl(error):
+                fallback = request_with_curl(base_url, key, prompt, images, size, quality, background, output_format, REQUEST_TIMEOUT, proxy, ssl_verify)
+                if fallback.get("url"):
+                    emit(fallback)
+                    return
+                last_error = fallback.get("error") or last_error
+                print(f"attempt {attempt + 1}/{max_retries} curl fallback failed: {last_error}", file=sys.stderr, flush=True)
+                continue
+            if attempt < max_retries - 1:
+                time.sleep(min(8, 2**attempt))
+                continue
+            break
+        except OSError as error:
+            last_error = str(error)
+            print(f"attempt {attempt + 1}/{max_retries} failed: {last_error}", file=sys.stderr, flush=True)
+            if should_retry_with_curl(error):
+                fallback = request_with_curl(base_url, key, prompt, images, size, quality, background, output_format, REQUEST_TIMEOUT, proxy, ssl_verify)
+                if fallback.get("url"):
+                    emit(fallback)
+                    return
+                last_error = fallback.get("error") or last_error
+                print(f"attempt {attempt + 1}/{max_retries} curl fallback failed: {last_error}", file=sys.stderr, flush=True)
+                continue
             if attempt < max_retries - 1:
                 time.sleep(min(8, 2**attempt))
                 continue

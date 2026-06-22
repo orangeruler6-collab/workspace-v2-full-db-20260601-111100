@@ -1,4 +1,4 @@
-import { ref, computed, watch } from 'vue'
+﻿import { ref, computed, watch } from 'vue'
 import { canAccessModule, MODULE_DEFINITIONS, flattenModuleDefinitions } from '../permissions'
 
 function filterNavItems(items, user, skipPermissions) {
@@ -84,6 +84,7 @@ export function useModuleMap(imports) {
     vector:     imports.VectorModule,
     adminUsers: imports.AdminUsersModule,
     operationLogs: imports.OperationLogModule,
+    systemHealth: imports.SystemHealthModule,
     posttools:  imports.PostToolsModule,
   }
 
@@ -117,3 +118,6 @@ export function useModuleMap(imports) {
     isValidModule
   }
 }
+
+
+

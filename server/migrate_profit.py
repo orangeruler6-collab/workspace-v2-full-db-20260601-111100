@@ -7,7 +7,7 @@ from profit_db import init_db, add
 
 # 内容四组账号
 G4_ACCOUNTS = {
-    '天机妹', '麦晓花', '花蛮楼', '有事找学姐', '夏天丶cat', '素材'
+    '天机妹', '麦小雯', '花蛮楼', '有事找学姐', '夏天丶cat', '素材'
 }
 
 def calc_margin(revenue, platform, account):

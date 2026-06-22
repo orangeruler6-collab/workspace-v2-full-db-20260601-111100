@@ -1,7 +1,20 @@
 import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
-import { loadSchedule, notifyScheduleHandoff, saveSchedule, uploadScheduleDoc } from '../../api/schedule'
+import {
+  deleteScheduleTodo,
+  loadSchedule,
+  loadScheduleRevision,
+  loadScheduleTodos,
+  notifyScheduleHandoff,
+  saveSchedule,
+  saveScheduleTodo,
+  updateScheduleTodoStatus,
+  uploadScheduleDoc
+} from '../../api/schedule'
 import { ALL_ACCOUNTS, GROUPS, MEMBERS, STATUS_MAP, TYPE_TAG, WORKFLOW_STAGES } from './constants'
 import { getCurrentAuthUser } from '../../api/client'
+
+const DEPARTMENT_TODO_TAB = 'department-todos'
+const SCHEDULE_SYNC_INTERVAL_MS = 5000
 
 const PRODUCTION_WORKFLOW_STAGES = ['文案', '后期', '待发布', '已发布']
 
@@ -27,6 +40,15 @@ function createEmptyForm() {
     doc_url: '',
     doc_kind: '',
     doc_dragging: false
+  }
+}
+
+function createEmptyTodoDraft() {
+  return {
+    title: '',
+    dueDate: '',
+    dueTime: '',
+    important: false
   }
 }
 
@@ -86,6 +108,7 @@ export function useScheduleBoard(showToast, options = {}) {
   const activeGroup = ref(getDefaultGroupId())
   const viewMode = ref('person')
   const weekOffset = ref(0)
+  const scheduleRevision = ref(0)
   const allItems = ref([])
   const itemsByPerson = reactive(Object.fromEntries(MEMBERS.map(member => [member, []])))
   const boardRef = ref(null)
@@ -103,6 +126,9 @@ export function useScheduleBoard(showToast, options = {}) {
   today.setHours(0, 0, 0, 0)
 
   const form = reactive(createEmptyForm())
+  const scheduleTodos = ref([])
+  const todoDrafts = reactive({})
+  let scheduleSyncTimer = 0
 
   watch(currentUser, () => {
     activeGroup.value = getDefaultGroupId()
@@ -169,11 +195,208 @@ export function useScheduleBoard(showToast, options = {}) {
   onUnmounted(() => {
     window.removeEventListener('keydown', handleKeydown)
     window.removeEventListener('usagi:agent-action', handleAgentAction)
+    if (scheduleSyncTimer) {
+      window.clearInterval(scheduleSyncTimer)
+      scheduleSyncTimer = 0
+    }
   })
 
   const currentGroup = computed(() => GROUPS.find(group => group.id === activeGroup.value) || GROUPS[0])
   const currentGroupMembers = computed(() => currentGroup.value?.members || [])
   const currentGroupAccounts = computed(() => currentGroup.value?.accounts || [])
+  const visibleTodoGroups = computed(() => canViewAllGroups.value ? GROUPS : [currentGroup.value].filter(Boolean))
+
+  function todoDraftFor(group) {
+    const key = String(group?.id || group?.label || 'default')
+    if (!todoDrafts[key]) todoDrafts[key] = createEmptyTodoDraft()
+    return todoDrafts[key]
+  }
+
+  function groupLeaderName(group) {
+    return group?.leader || group?.members?.[0] || '未设置'
+  }
+
+  function pad2(value) {
+    return String(value).padStart(2, '0')
+  }
+
+  function toDateValue(date) {
+    return `${date.getFullYear()}-${pad2(date.getMonth() + 1)}-${pad2(date.getDate())}`
+  }
+
+  function nextWeekdayDate(weekday) {
+    const map = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 0, 天: 0 }
+    const target = map[weekday]
+    if (target == null) return ''
+    const date = new Date()
+    const current = date.getDay()
+    let delta = target - current
+    if (delta <= 0) delta += 7
+    date.setDate(date.getDate() + delta)
+    return toDateValue(date)
+  }
+
+  function dateFromMonthDay(monthText, dayText) {
+    const now = new Date()
+    const month = Math.max(1, Math.min(12, Number(monthText || now.getMonth() + 1)))
+    const day = Math.max(1, Math.min(31, Number(dayText || now.getDate())))
+    const date = new Date(now.getFullYear(), month - 1, day)
+    if (date < today) date.setFullYear(date.getFullYear() + 1)
+    return toDateValue(date)
+  }
+
+  function parseQuickTodoText(text) {
+    const raw = String(text || '').trim()
+    const parsed = { title: raw, date: '', time: '', important: /重要|紧急|提醒|高优先|必须/.test(raw) }
+    const timeMatch = raw.match(/(?:^|[^\d])([01]?\d|2[0-3])(?:[:：点时]([0-5]\d)?)?/)
+    if (timeMatch && /[:：点时]/.test(timeMatch[0])) {
+      parsed.time = `${pad2(Number(timeMatch[1]))}:${pad2(Number(timeMatch[2] || 0))}`
+    }
+    if (/后天/.test(raw)) {
+      const date = new Date()
+      date.setDate(date.getDate() + 2)
+      parsed.date = toDateValue(date)
+    } else if (/明天/.test(raw)) {
+      const date = new Date()
+      date.setDate(date.getDate() + 1)
+      parsed.date = toDateValue(date)
+    } else if (/今天/.test(raw)) {
+      parsed.date = toDateValue(new Date())
+    } else {
+      const weekdayMatch = raw.match(/(?:周|星期)([一二三四五六日天])/)
+      if (weekdayMatch) parsed.date = nextWeekdayDate(weekdayMatch[1])
+      const dayMatch = raw.match(/(?:(\d{1,2})[月/-])?(\d{1,2})[号日]/)
+      if (dayMatch) parsed.date = dateFromMonthDay(dayMatch[1], dayMatch[2])
+    }
+
+    parsed.title = raw
+      .replace(/后天|明天|今天/g, '')
+      .replace(/(?:周|星期)[一二三四五六日天]/g, '')
+      .replace(/(?:(?:\d{1,2})[月/-])?\d{1,2}[号日]/g, '')
+      .replace(/(?:^|[^\d])([01]?\d|2[0-3])(?:[:：点时]([0-5]\d)?)?/g, ' ')
+      .replace(/重要|紧急|提醒|高优先|必须/g, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return parsed
+  }
+
+  function combineTodoDueAt(dateValue, timeValue) {
+    if (!dateValue) return ''
+    return `${dateValue}T${timeValue || '10:00'}`
+  }
+
+  function parseTodoDueDate(todo) {
+    const value = String(todo?.due_at || '').trim()
+    if (!value) return null
+    const date = new Date(value)
+    return Number.isNaN(date.getTime()) ? null : date
+  }
+
+  function todoAlarmLevel(todo) {
+    if (todo?.status === 'done') return 'done'
+    const dueDate = parseTodoDueDate(todo)
+    if (!dueDate) return Number(todo?.important) ? 'important' : ''
+    const now = new Date()
+    if (dueDate < now) return 'overdue'
+    const todayValue = toDateValue(now)
+    if (toDateValue(dueDate) === todayValue) return 'today'
+    if (dueDate.getTime() - now.getTime() <= 24 * 60 * 60 * 1000) return 'soon'
+    return Number(todo?.important) ? 'important' : ''
+  }
+
+  function todoReminderLabel(todo) {
+    const level = todoAlarmLevel(todo)
+    if (level === 'done') return '已完成'
+    if (level === 'overdue') return '已逾期'
+    if (level === 'today') return '今日提醒'
+    if (level === 'soon') return '24小时内'
+    if (level === 'important') return '重要'
+    return ''
+  }
+
+  function todoDueLabel(todo) {
+    const date = parseTodoDueDate(todo)
+    if (!date) return '未设日程'
+    const weeks = ['周日', '周一', '周二', '周三', '周四', '周五', '周六']
+    return `${date.getMonth() + 1}/${date.getDate()} ${weeks[date.getDay()]} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+  }
+
+  function compareTodos(a, b) {
+    if ((a.status === 'done') !== (b.status === 'done')) return a.status === 'done' ? 1 : -1
+    if (Number(a.important) !== Number(b.important)) return Number(b.important) - Number(a.important)
+    const dueA = parseTodoDueDate(a)?.getTime() || Number.MAX_SAFE_INTEGER
+    const dueB = parseTodoDueDate(b)?.getTime() || Number.MAX_SAFE_INTEGER
+    if (dueA !== dueB) return dueA - dueB
+    return Number(b.created_at || b.id || 0) - Number(a.created_at || a.id || 0)
+  }
+
+  function getGroupTodos(group) {
+    const label = String(group?.label || '')
+    return scheduleTodos.value
+      .filter(todo => String(todo.group_name || '') === label)
+      .slice()
+      .sort(compareTodos)
+  }
+
+  function getGroupOpenTodoCount(group) {
+    return getGroupTodos(group).filter(todo => todo.status !== 'done').length
+  }
+
+  async function loadScheduleTodosData() {
+    try {
+      const data = await loadScheduleTodos()
+      scheduleTodos.value = Array.isArray(data.todos) ? data.todos : []
+    } catch (err) {
+      showToast('待办加载失败: ' + err.message, 'error')
+    }
+  }
+
+  async function addGroupTodo(group) {
+    const draft = todoDraftFor(group)
+    const parsed = parseQuickTodoText(draft.title)
+    const title = parsed.title || String(draft.title || '').trim()
+    if (!title) {
+      showToast('先输入待办事项', 'error')
+      return
+    }
+    const dueDate = draft.dueDate || parsed.date
+    const dueTime = draft.dueTime || parsed.time || (dueDate ? '10:00' : '')
+    try {
+      await saveScheduleTodo({
+        group_name: group?.label || '',
+        title,
+        due_at: combineTodoDueAt(dueDate, dueTime),
+        important: draft.important || parsed.important ? 1 : 0,
+        status: 'open'
+      })
+      Object.assign(draft, createEmptyTodoDraft())
+      await loadScheduleTodosData()
+      showToast('待办已添加', 'success')
+    } catch (err) {
+      showToast('待办保存失败: ' + err.message, 'error')
+    }
+  }
+
+  async function toggleTodoDone(todo) {
+    const nextStatus = todo?.status === 'done' ? 'open' : 'done'
+    try {
+      await updateScheduleTodoStatus(todo.id, nextStatus)
+      todo.status = nextStatus
+      await loadScheduleTodosData()
+    } catch (err) {
+      showToast('待办状态更新失败: ' + err.message, 'error')
+    }
+  }
+
+  async function removeTodo(todo) {
+    try {
+      await deleteScheduleTodo(todo.id)
+      scheduleTodos.value = scheduleTodos.value.filter(item => item.id !== todo.id)
+      showToast('待办已删除', 'success')
+    } catch (err) {
+      showToast('待办删除失败: ' + err.message, 'error')
+    }
+  }
 
   const weekDays = computed(() => getWeekDays(weekOffset.value))
   const weekRangeLabel = computed(() => {
@@ -447,12 +670,20 @@ export function useScheduleBoard(showToast, options = {}) {
   }
 
   function persistSchedule(refreshAfterSave = false) {
-    return saveSchedule(currentTasks(), MEMBERS)
+    return saveSchedule(currentTasks(), MEMBERS, { revision: scheduleRevision.value })
       .then(result => {
+        const nextRevision = Number(result?.revision || 0)
+        scheduleRevision.value = nextRevision
         if (!refreshAfterSave) return result
         return loadScheduleData().then(() => result)
       })
       .catch(err => {
+        if (err?.data?.code === 'schedule_conflict') {
+          const nextRevision = Number(err.data.revision || 0)
+          scheduleRevision.value = nextRevision
+          showToast('排期已被其他人更新，正在同步最新版本，请重新操作', 'info')
+          return loadScheduleData().then(() => null)
+        }
         showToast('排期保存失败: ' + err.message, 'error')
       })
   }
@@ -1132,6 +1363,18 @@ export function useScheduleBoard(showToast, options = {}) {
     showToast('已删除', 'error')
   }
 
+  function deleteEditingItem() {
+    if (!editing.value || !form.id) return
+    if (!canDeleteTasks.value) {
+      delItem(form.id)
+      return
+    }
+    delItem(form.id)
+    formShow.value = false
+    editing.value = false
+    activeTask.value = null
+  }
+
   function hasScheduleDoc(item) {
     return Boolean(String(item?.doc_url || '').trim())
   }
@@ -1360,17 +1603,36 @@ export function useScheduleBoard(showToast, options = {}) {
     return normalized
   }
 
-  async function loadScheduleData() {
+  async function loadScheduleData(options = {}) {
     try {
       const data = await loadSchedule()
+      const nextRevision = Number(data.revision || 0)
+      scheduleRevision.value = nextRevision
       const sourceTasks = Array.isArray(data.tasks) ? data.tasks : []
       rebuildItemsByPerson(buildTaskOrderForLoad(sourceTasks))
+      if (options.synced) showToast('排期已同步最新变更', 'info')
     } catch (err) {
       showToast('排期加载失败: ' + err.message, 'error')
     }
   }
 
-  onMounted(loadScheduleData)
+  async function syncScheduleIfChanged() {
+    if (formShow.value || dragItem.value) return
+    if (typeof document !== 'undefined' && document.hidden) return
+    try {
+      const data = await loadScheduleRevision()
+      const nextRevision = Number(data.revision || 0)
+      if (nextRevision !== scheduleRevision.value) {
+        await loadScheduleData({ synced: true })
+      }
+    } catch (err) {}
+  }
+
+  onMounted(() => {
+    loadScheduleData()
+    loadScheduleTodosData()
+    scheduleSyncTimer = window.setInterval(syncScheduleIfChanged, SCHEDULE_SYNC_INTERVAL_MS)
+  })
 
   function sendHandoffNotification(fromPerson, toPerson, item) {
     notifyScheduleHandoff({
@@ -1389,12 +1651,14 @@ export function useScheduleBoard(showToast, options = {}) {
 
   return {
     ALL_ACCOUNTS,
+    DEPARTMENT_TODO_TAB,
     GROUPS,
     MEMBERS,
     WORKFLOW_STAGES,
     activeGroup,
     activePasteTarget,
     activeTask,
+    addGroupTodo,
     allItems,
     boardRef,
     canDeleteTasks,
@@ -1408,6 +1672,7 @@ export function useScheduleBoard(showToast, options = {}) {
     currentGroupMembers,
     currentTasks,
     currentUser,
+    deleteEditingItem,
     delItem,
     doPan,
     dragItem,
@@ -1420,7 +1685,10 @@ export function useScheduleBoard(showToast, options = {}) {
     formatPersonTaskDate,
     fmtMd,
     getAutoStatus,
+    getGroupOpenTodoCount,
+    getGroupTodos,
     getItemsForCell,
+    groupLeaderName,
     handleAgentAction,
     handleDragEnd,
     handleDragStart,
@@ -1438,6 +1706,7 @@ export function useScheduleBoard(showToast, options = {}) {
     isToday,
     itemsByPerson,
     loadScheduleData,
+    loadScheduleTodosData,
     moveDraggedItemToAdjacentWeek,
     moveItemByWeeks,
     openAdd,
@@ -1451,11 +1720,19 @@ export function useScheduleBoard(showToast, options = {}) {
     setPasteTarget,
     setScheduleDocLink,
     setWeekPasteTarget,
+    scheduleTodos,
     statusLabel,
     startPan,
+    todoAlarmLevel,
+    todoDraftFor,
+    todoDueLabel,
+    todoReminderLabel,
     summarizePersonWeekTodos,
     toggleDone,
+    toggleTodoDone,
     undo,
+    removeTodo,
+    visibleTodoGroups,
     viewMode,
     weekCardTitle,
     weekDays,

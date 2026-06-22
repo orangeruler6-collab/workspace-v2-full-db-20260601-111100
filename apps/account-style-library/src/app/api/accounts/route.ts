@@ -32,7 +32,8 @@ export async function GET(request: Request) {
     });
     return NextResponse.json(
       await getAccountDetail(input.platform, input.accountId, {
-        includeStyle: parseBooleanFlag(searchParams.get("includeStyle"))
+        includeStyle: parseBooleanFlag(searchParams.get("includeStyle")),
+        styleOnly: parseBooleanFlag(searchParams.get("styleOnly"))
       })
     );
   } catch (error) {

@@ -5,6 +5,73 @@ from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'profit.db')
 
+EXTRA_COLUMNS = {
+    'category': 'TEXT',
+    'business_type': 'TEXT',
+    'entry_source': 'TEXT',
+    'origin_group': 'TEXT',
+    'producer_group': 'TEXT',
+    'origin_share': 'INTEGER DEFAULT 30',
+    'producer_share': 'INTEGER DEFAULT 70',
+    'split_enabled': 'INTEGER DEFAULT 0',
+    'group_revenue': 'INTEGER DEFAULT 0',
+    'tax_revenue': 'INTEGER DEFAULT 0',
+    'group_margin': 'INTEGER DEFAULT 0',
+    'department_margin': 'INTEGER DEFAULT 0',
+    'order_amount': 'INTEGER DEFAULT 0',
+    'rebate_amount': 'INTEGER DEFAULT 0',
+    'final_amount': 'INTEGER DEFAULT 0',
+    'cost_total': 'INTEGER DEFAULT 0',
+    'projected_margin': 'INTEGER DEFAULT 0',
+    'lock_date': 'TEXT',
+    'publish_date': 'TEXT',
+    'execution_status': 'TEXT',
+    'is_published': 'INTEGER DEFAULT 0',
+    'original_id': 'TEXT',
+    'product_line': 'TEXT',
+    'link': 'TEXT',
+    'order_no': 'TEXT',
+    'crm_order_no': 'TEXT',
+    'feishu_record_id': 'TEXT',
+    'feishu_sync_status': 'TEXT',
+    'feishu_synced_at': 'INTEGER DEFAULT 0',
+    'feishu_sync_error': 'TEXT',
+}
+
+TEXT_COLUMNS = {
+    'category', 'business_type', 'entry_source', 'origin_group', 'producer_group',
+    'lock_date', 'publish_date', 'execution_status', 'original_id', 'product_line',
+    'link', 'order_no', 'crm_order_no', 'feishu_record_id', 'feishu_sync_status',
+    'feishu_sync_error'
+}
+
+def text_value(data, name, default=''):
+    value = data.get(name, default)
+    return '' if value is None else str(value)
+
+def int_value(data, name, default=0):
+    try:
+        return int(float(data.get(name, default) or 0))
+    except Exception:
+        return default
+
+def extra_value(data, name):
+    if name in TEXT_COLUMNS:
+        if name == 'business_type':
+            return text_value(data, name, data.get('category') or '')
+        if name == 'category':
+            return text_value(data, name, data.get('business_type') or '')
+        return text_value(data, name)
+    if name == 'origin_share':
+        return int_value(data, name, 30)
+    if name == 'producer_share':
+        return int_value(data, name, 70)
+    if name == 'final_amount':
+        return int_value(data, name, int_value(data, 'revenue'))
+    if name == 'projected_margin':
+        return int_value(data, name, int_value(data, 'margin'))
+    return int_value(data, name)
+
 def get_db():
     import sqlite3
     conn = sqlite3.connect(DB_PATH)
@@ -26,14 +93,20 @@ def init_db():
         remark TEXT,
         created_at INTEGER
     )''')
+    existing = {row[1] for row in c.execute('PRAGMA table_info(profits)').fetchall()}
+    for name, ddl in EXTRA_COLUMNS.items():
+        if name not in existing:
+            c.execute(f'ALTER TABLE profits ADD COLUMN {name} {ddl}')
     # 创建索引加速分组查询
     c.execute('CREATE INDEX IF NOT EXISTS idx_profits_grp ON profits(grp)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_profits_month ON profits(month)')
+    c.execute('CREATE INDEX IF NOT EXISTS idx_profits_grp_month ON profits(grp, month)')
     c.execute('CREATE INDEX IF NOT EXISTS idx_profits_created ON profits(created_at)')
     conn.commit()
     conn.close()
 
 def list_by_group(grp=None):
+    init_db()
     conn = get_db()
     c = conn.cursor()
     if grp and grp != '全部':
@@ -45,10 +118,13 @@ def list_by_group(grp=None):
     return {'data': [dict(r) for r in rows]}
 
 def add(data):
+    init_db()
     conn = get_db()
     c = conn.cursor()
-    c.execute('''INSERT INTO profits (grp,project,platform,account,revenue,margin,month,remark,created_at)
-        VALUES (?,?,?,?,?,?,?,?,?)''', (
+    base_columns = ['grp', 'project', 'platform', 'account', 'revenue', 'margin', 'month', 'remark', 'created_at']
+    extra_columns = list(EXTRA_COLUMNS.keys())
+    columns = base_columns + extra_columns
+    values = [
         data.get('grp',''),
         data.get('project',''),
         data.get('platform',''),
@@ -58,17 +134,20 @@ def add(data):
         data.get('month',''),
         data.get('remark',''),
         int(datetime.now().timestamp())
-    ))
+    ] + [extra_value(data, name) for name in extra_columns]
+    placeholders = ','.join(['?'] * len(columns))
+    c.execute(f'''INSERT INTO profits ({','.join(columns)}) VALUES ({placeholders})''', values)
     new_id = c.lastrowid
     conn.commit()
     conn.close()
     return {'id': new_id}
 
 def update(id, data):
+    init_db()
     conn = get_db()
     c = conn.cursor()
-    c.execute('''UPDATE profits SET grp=?,project=?,platform=?,account=?,revenue=?,margin=?,month=?,remark=?
-        WHERE id=?''', (
+    columns = ['grp', 'project', 'platform', 'account', 'revenue', 'margin', 'month', 'remark'] + list(EXTRA_COLUMNS.keys())
+    values = [
         data.get('grp',''),
         data.get('project',''),
         data.get('platform',''),
@@ -77,13 +156,15 @@ def update(id, data):
         int(data.get('margin',0) or 0),
         data.get('month',''),
         data.get('remark',''),
-        id
-    ))
+    ] + [extra_value(data, name) for name in EXTRA_COLUMNS.keys()] + [id]
+    assignments = ','.join([name + '=?' for name in columns])
+    c.execute(f'''UPDATE profits SET {assignments} WHERE id=?''', values)
     conn.commit()
     conn.close()
     return {'success': True}
 
 def delete(id):
+    init_db()
     conn = get_db()
     c = conn.cursor()
     c.execute('DELETE FROM profits WHERE id=?', (id,))
@@ -92,6 +173,7 @@ def delete(id):
     return {'success': True}
 
 def stats(grp=None):
+    init_db()
     conn = get_db()
     c = conn.cursor()
     if grp and grp != '全部':

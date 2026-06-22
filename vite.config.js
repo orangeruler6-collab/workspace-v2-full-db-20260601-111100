@@ -6,10 +6,38 @@ import { dirname } from 'node:path'
 const rootDir = dirname(fileURLToPath(import.meta.url))
 const apiProxyTimeoutMs = Number(process.env.VITE_API_PROXY_TIMEOUT_MS || 600000)
 
+function normalizeMalformedRequestUrl(value) {
+  const raw = String(value || '')
+  try {
+    decodeURI(raw)
+    return raw
+  } catch (e) {
+    const safePercent = raw.replace(/%(?![0-9A-Fa-f]{2})/g, '%25')
+    try {
+      decodeURI(safePercent)
+      return safePercent
+    } catch (inner) {
+      return safePercent.replace(/%/g, '%25')
+    }
+  }
+}
+
+function sanitizeMalformedRequestUriPlugin() {
+  return {
+    name: 'usagi-sanitize-malformed-request-uri',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        if (req.url) req.url = normalizeMalformedRequestUrl(req.url)
+        next()
+      })
+    }
+  }
+}
+
 export default defineConfig({
   root: rootDir,
   publicDir: false,
-  plugins: [vue()],
+  plugins: [sanitizeMalformedRequestUriPlugin(), vue()],
   server: {
     watch: {
       ignored: [

@@ -4,6 +4,13 @@ const https = require('https');
 const http = require('http');
 const { spawn } = require('child_process');
 
+let accountCatalog = {};
+try {
+  accountCatalog = require('../lib/accountCatalog.cjs');
+} catch (e) {
+  accountCatalog = {};
+}
+
 module.exports = function createAccountMonitorRoutes(deps) {
   const root = deps.root || path.join(__dirname, '..', '..');
   const dataDir = path.join(root, 'data');
@@ -11,6 +18,7 @@ module.exports = function createAccountMonitorRoutes(deps) {
   const scheduleHours = [9, 13, 16];
   let scheduleTimer = null;
   let scheduledCollecting = false;
+  const launchedProfileDirectories = new Set();
   let collectJob = {
     running: false,
     source: '',
@@ -21,6 +29,7 @@ module.exports = function createAccountMonitorRoutes(deps) {
     currentAccountId: '',
     currentAccountName: '',
     error: '',
+    concurrency: 1,
     results: []
   };
 
@@ -205,24 +214,26 @@ module.exports = function createAccountMonitorRoutes(deps) {
     return null;
   }
 
-  function runOpenCli(args, timeoutMs) {
+  function resolveOpenCliBin() {
+    const npmDir = process.env.APPDATA
+      ? path.join(process.env.APPDATA, 'npm')
+      : path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming', 'npm');
+    const candidates = [
+      process.env.OPENCLI_BIN,
+      process.env.USAGI_OPENCLI_PATH,
+      process.platform === 'win32' ? path.join(npmDir, 'opencli.cmd') : '',
+      process.platform === 'win32' ? path.join(npmDir, 'opencli.ps1') : '',
+      process.platform === 'win32' ? 'opencli.cmd' : 'opencli'
+    ].filter(Boolean);
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (path.isAbsolute(candidates[i]) && fs.existsSync(candidates[i])) return candidates[i];
+    }
+    return candidates[0] || (process.platform === 'win32' ? 'opencli.cmd' : 'opencli');
+  }
+
+  function spawnOpenCli(args, timeoutMs) {
     return new Promise(function(resolve) {
-      const opencliBin = (function() {
-        const npmDir = process.env.APPDATA
-          ? path.join(process.env.APPDATA, 'npm')
-          : path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming', 'npm');
-        const candidates = [
-          process.env.OPENCLI_BIN,
-          process.env.USAGI_OPENCLI_PATH,
-          process.platform === 'win32' ? path.join(npmDir, 'opencli.cmd') : '',
-          process.platform === 'win32' ? path.join(npmDir, 'opencli.ps1') : '',
-          process.platform === 'win32' ? 'opencli.cmd' : 'opencli'
-        ].filter(Boolean);
-        for (let i = 0; i < candidates.length; i += 1) {
-          if (path.isAbsolute(candidates[i]) && fs.existsSync(candidates[i])) return candidates[i];
-        }
-        return candidates[0] || (process.platform === 'win32' ? 'opencli.cmd' : 'opencli');
-      })();
+      const opencliBin = resolveOpenCliBin();
       const command = process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : opencliBin;
       const commandArgs = process.platform === 'win32'
         ? ['/d', '/s', '/c', opencliBin].concat(args)
@@ -258,6 +269,376 @@ module.exports = function createAccountMonitorRoutes(deps) {
         const stdout = Buffer.concat(out).toString('utf8');
         const stderr = Buffer.concat(err).toString('utf8');
         resolve({ ok: code === 0, code: code, stdout: stdout, stderr: stderr, error: code === 0 ? '' : (stderr || stdout || ('exit ' + code)).slice(0, 800) });
+      });
+    });
+  }
+
+  function safeReadJson(filePath) {
+    try {
+      if (!fs.existsSync(filePath)) return null;
+      return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function uniqueStrings(values) {
+    const seen = new Set();
+    return (values || []).map(function(value) {
+      return String(value || '').trim();
+    }).filter(function(value) {
+      if (!value || seen.has(value)) return false;
+      seen.add(value);
+      return true;
+    });
+  }
+
+  function splitProfileEnv(value) {
+    return String(value || '')
+      .split(/[,\s;|]+/)
+      .map(function(item) { return item.trim(); })
+      .filter(Boolean);
+  }
+
+  function latestAccountDataProfiles() {
+    const profiles = [];
+    const exportDir = path.join(dataDir, 'data-export-tests');
+    try {
+      if (fs.existsSync(exportDir)) {
+        fs.readdirSync(exportDir)
+          .filter(function(name) { return /^platform-data-summary-.*\.json$/i.test(name); })
+          .map(function(name) {
+            const fullPath = path.join(exportDir, name);
+            let mtime = 0;
+            try { mtime = fs.statSync(fullPath).mtimeMs || 0; } catch (e) {}
+            return { name: name, fullPath: fullPath, mtime: mtime };
+          })
+          .sort(function(a, b) { return b.mtime - a.mtime; })
+          .slice(0, 8)
+          .forEach(function(file) {
+            const summary = safeReadJson(file.fullPath) || {};
+            const state = summary.profileState || {};
+            profiles.push(
+              state.resolvedProfile,
+              summary.profile,
+              summary.requestedProfile,
+              state.requestedProfile
+            );
+          });
+      }
+    } catch (e) {}
+
+    const fansBoard = safeReadJson(path.join(dataDir, 'fans_board.json')) || {};
+    const rows = Array.isArray(fansBoard.snapshots)
+      ? fansBoard.snapshots
+      : (Array.isArray(fansBoard.items) ? fansBoard.items : (Array.isArray(fansBoard) ? fansBoard : []));
+    rows.slice().sort(function(a, b) {
+      return (Number(b.capturedAt) || 0) - (Number(a.capturedAt) || 0);
+    }).slice(0, 80).forEach(function(row) {
+      profiles.push(row && row.profile);
+    });
+
+    return uniqueStrings(profiles);
+  }
+
+  function preferredOpenCliProfiles() {
+    const fromEnv = []
+      .concat(splitProfileEnv(process.env.ACCOUNT_MONITOR_OPENCLI_PROFILE))
+      .concat(splitProfileEnv(process.env.ACCOUNT_DATA_OPENCLI_PROFILE))
+      .concat(splitProfileEnv(process.env.PLATFORM_DATA_OPENCLI_PROFILE))
+      .concat(splitProfileEnv(process.env.OPENCLI_PROFILE));
+    return uniqueStrings(fromEnv.concat(
+      latestAccountDataProfiles(),
+      ['tianji-mei-publish', 'vpu8aysj', 'yuufe9m8']
+    )).filter(function(profile) {
+      return !/^(none|false|off|default)$/i.test(profile);
+    });
+  }
+
+  function parseOpenCliProfileList(text) {
+    let disconnected = false;
+    return String(text || '').split(/\r?\n/).map(function(line) {
+      line = String(line || '').trim();
+      if (!line || /^Update available:/i.test(line) || /^Run:/i.test(line) || /^Download:/i.test(line)) return null;
+      if (/Disconnected saved profiles/i.test(line)) {
+        disconnected = true;
+        return null;
+      }
+      if (/Connected Browser Bridge profiles/i.test(line)) {
+        disconnected = false;
+        return null;
+      }
+      const normalizedParts = line.split(/\s+(?:—|–|-|\u2014|\u2013)\s+/);
+      if (normalizedParts.length >= 2) {
+        const left = normalizedParts[0].trim();
+        const right = normalizedParts.slice(1).join(' - ').trim();
+        const leftMatch = left.match(/^(\S+)(?:\s+(.*))?$/);
+        if (!leftMatch) return null;
+        return {
+          context_id: leftMatch[1],
+          alias: (leftMatch[2] || '').trim(),
+          connected: !disconnected && /^connected\b/i.test(right),
+          label: left,
+          status: right
+        };
+      }
+      const parts = line.split(/\s+—\s+/);
+      if (parts.length < 2) return null;
+      const left = parts[0].trim();
+      const right = parts.slice(1).join(' — ').trim();
+      const leftMatch = left.match(/^(\S+)(?:\s+(.*))?$/);
+      if (!leftMatch) return null;
+      return {
+        context_id: leftMatch[1],
+        alias: (leftMatch[2] || '').trim(),
+        connected: !disconnected && /^connected\b/i.test(right),
+        label: left,
+        status: right
+      };
+    }).filter(Boolean);
+  }
+
+  function listOpenCliProfiles() {
+    return spawnOpenCli(['profile', 'list'], 30000).then(function(result) {
+      const text = [result.stdout || '', result.stderr || ''].join('\n');
+      return parseOpenCliProfileList(text);
+    }).catch(function() {
+      return [];
+    });
+  }
+
+  function profileMatches(profile, wanted) {
+    return profile && wanted && (profile.context_id === wanted || profile.alias === wanted);
+  }
+
+  function chromeBin() {
+    const candidates = [
+      process.env.CHROME_BIN,
+      process.env.GOOGLE_CHROME_BIN,
+      process.platform === 'win32' ? path.join(process.env.PROGRAMFILES || '', 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+      process.platform === 'win32' ? path.join(process.env['PROGRAMFILES(X86)'] || '', 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+      process.platform === 'win32' ? path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'Application', 'chrome.exe') : '',
+      process.platform === 'win32' ? 'chrome.exe' : 'google-chrome'
+    ].filter(Boolean);
+    for (let i = 0; i < candidates.length; i += 1) {
+      if (path.isAbsolute(candidates[i]) && fs.existsSync(candidates[i])) return candidates[i];
+    }
+    return candidates[0] || 'chrome';
+  }
+
+  function chromeUserDataDir() {
+    return process.env.CHROME_USER_DATA_DIR || path.join(process.env.LOCALAPPDATA || '', 'Google', 'Chrome', 'User Data');
+  }
+
+  function platformHomeUrl(platform) {
+    if (platform === 'bilibili') return 'https://www.bilibili.com';
+    return 'https://www.douyin.com';
+  }
+
+  function launchChromeProfile(profile, platform) {
+    const map = typeof accountCatalog.chromeProfileDirectoryMap === 'function'
+      ? accountCatalog.chromeProfileDirectoryMap()
+      : {};
+    const profileDirectory = map[profile];
+    if (!profileDirectory) return Promise.resolve({ ok: false, skipped: true, error: '没有找到 Chrome profile 映射：' + profile });
+    return new Promise(function(resolve) {
+      try {
+        const child = spawn(chromeBin(), [
+          '--new-window',
+          '--no-first-run',
+          '--no-default-browser-check',
+          '--user-data-dir=' + chromeUserDataDir(),
+          '--profile-directory=' + profileDirectory,
+          platformHomeUrl(platform)
+        ], {
+          windowsHide: true,
+          detached: true,
+          stdio: 'ignore'
+        });
+        child.unref();
+        launchedProfileDirectories.add(profileDirectory);
+        resolve({ ok: true, profileDirectory: profileDirectory });
+      } catch (e) {
+        resolve({ ok: false, error: e.message || String(e) });
+      }
+    });
+  }
+
+  function closeChromeProfileDirectory(profileDirectory, reason) {
+    if (!profileDirectory || process.platform !== 'win32') return Promise.resolve({ ok: false, skipped: true });
+    const escaped = String(profileDirectory).replace(/'/g, "''");
+    const script = [
+      "$needle='--profile-directory=" + escaped + "';",
+      "$needleQuoted='--profile-directory=\"" + escaped + "\"';",
+      "Get-CimInstance Win32_Process -Filter \"name = 'chrome.exe'\" |",
+      "Where-Object { $cmd=($_.CommandLine -replace '\"',''); $cmd -like \"*$needle*\" -or $_.CommandLine -like \"*$needleQuoted*\" } |",
+      "ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue; $_.ProcessId }"
+    ].join(' ');
+    return new Promise(function(resolve) {
+      const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], {
+        cwd: root,
+        shell: false,
+        windowsHide: true
+      });
+      const out = [];
+      const err = [];
+      child.stdout.on('data', function(chunk) { out.push(chunk); });
+      child.stderr.on('data', function(chunk) { err.push(chunk); });
+      child.on('error', function(e) {
+        resolve({ ok: false, error: e.message || String(e), profileDirectory: profileDirectory, reason: reason || '' });
+      });
+      child.on('close', function(code) {
+        resolve({
+          ok: code === 0,
+          code: code,
+          profileDirectory: profileDirectory,
+          reason: reason || '',
+          killedPids: Buffer.concat(out).toString('utf8').trim().split(/\s+/).filter(Boolean),
+          stderr: Buffer.concat(err).toString('utf8').trim()
+        });
+      });
+    });
+  }
+
+  function closeLaunchedProfiles(reason) {
+    const profiles = Array.from(launchedProfileDirectories);
+    launchedProfileDirectories.clear();
+    let chain = Promise.resolve([]);
+    profiles.forEach(function(profileDirectory) {
+      chain = chain.then(function(results) {
+        return closeChromeProfileDirectory(profileDirectory, reason).then(function(result) {
+          results.push(result);
+          return results;
+        });
+      });
+    });
+    return chain;
+  }
+
+  function wait(ms) {
+    return new Promise(function(resolve) { setTimeout(resolve, ms); });
+  }
+
+  function ensureProfileConnected(profile, platform, beforeProfiles) {
+    return listOpenCliProfiles().then(function(profiles) {
+      const direct = profiles.find(function(item) { return item.connected && profileMatches(item, profile); });
+      if (direct) return { ok: true, profile: profile, connected: true };
+      const connectedProfiles = profiles.filter(function(item) { return item.connected; });
+      if (connectedProfiles.length) {
+        return { ok: false, skipped: true, connectedProfiles: connectedProfiles };
+      }
+      if (process.env.ACCOUNT_MONITOR_LAUNCH_PROFILE !== '1') {
+        return { ok: false, skipped: true, error: '没有检测到已连接的 OpenCLI profile，已停止自动打开空 Chrome。' };
+      }
+      return launchChromeProfile(profile, platform).then(function(launch) {
+        if (!launch.ok) return Object.assign({ ok: false }, launch);
+        const beforeIds = new Set((beforeProfiles || profiles).map(function(item) { return item.context_id; }));
+        const deadline = Date.now() + Math.max(5000, Math.min(90000, Number(process.env.ACCOUNT_MONITOR_PROFILE_CONNECT_TIMEOUT_MS) || 45000));
+        function poll() {
+          return listOpenCliProfiles().then(function(nextProfiles) {
+            const aliased = nextProfiles.find(function(item) { return item.connected && profileMatches(item, profile); });
+            if (aliased) return { ok: true, profile: profile, connected: true, launched: launch };
+            const anonymous = nextProfiles.find(function(item) {
+              return item.connected && !item.alias && !beforeIds.has(item.context_id);
+            });
+            if (anonymous) return { ok: true, profile: anonymous.context_id, connected: true, launched: launch, anonymousProfile: true };
+            if (Date.now() >= deadline) return { ok: false, launched: launch, error: 'profile not connected after launch: ' + profile };
+            return wait(3000).then(poll);
+          });
+        }
+        return poll();
+      });
+    });
+  }
+
+  function isBrowserProfileError(result) {
+    const text = [result && result.error, result && result.stderr, result && result.stdout].join('\n');
+    return /BROWSER_CONNECT|not connected|opencli profile use|exitCode:\s*69|exit\s+69/i.test(text);
+  }
+
+  function isTransientBrowserError(result) {
+    const text = [result && result.error, result && result.stderr, result && result.stdout].join('\n');
+    return /stale page identity|Page not found:|Pre-navigation .* failed|browser extension is running|Target closed|Execution context was destroyed/i.test(text);
+  }
+
+  function spawnOpenCliWithRetry(cliArgs, timeoutMs) {
+    const maxAttempts = Math.max(1, Math.min(4, Number(process.env.ACCOUNT_MONITOR_OPENCLI_RETRIES) || 2));
+    function attempt(index) {
+      return spawnOpenCli(cliArgs, timeoutMs).then(function(result) {
+        result.attempt = index + 1;
+        if (result.ok || index + 1 >= maxAttempts || !isTransientBrowserError(result)) return result;
+        return wait(2500 + index * 1500).then(function() {
+          return attempt(index + 1);
+        });
+      });
+    }
+    return attempt(0);
+  }
+
+  function openCliProfileCandidates(platform) {
+    return listOpenCliProfiles().then(function(profiles) {
+      const preferred = preferredOpenCliProfiles();
+      const connected = profiles.filter(function(item) { return item.connected; });
+      const connectedNames = [];
+      preferred.forEach(function(profile) {
+        const matched = connected.find(function(item) { return profileMatches(item, profile); });
+        if (matched) connectedNames.push(profile);
+      });
+      connected.forEach(function(item) {
+        connectedNames.push(item.alias || item.context_id);
+        connectedNames.push(item.context_id);
+      });
+      const launchable = connected.length || process.env.ACCOUNT_MONITOR_LAUNCH_PROFILE !== '1' ? [] : preferred.slice(0, 1);
+      return {
+        profiles: uniqueStrings(connectedNames.concat(launchable)),
+        listed: profiles,
+        platform: platform
+      };
+    });
+  }
+
+  function runOpenCli(args, timeoutMs) {
+    const platform = args && args[0] ? normalizePlatform(args[0]) : 'douyin';
+    return openCliProfileCandidates(platform).then(function(plan) {
+      const candidates = plan.profiles;
+      if (!candidates.length) {
+        return {
+          ok: false,
+          error: '没有检测到已连接的 OpenCLI profile。请先打开账号数据采集使用的浏览器 profile，并确认 OpenCLI 扩展在线；热榜不会再自动打开多个空 profile。',
+          stdout: '',
+          stderr: ''
+        };
+      }
+      const tried = [];
+      let lastResult = null;
+      let chain = Promise.resolve(null);
+      candidates.forEach(function(candidate) {
+        chain = chain.then(function(doneResult) {
+          if (doneResult && doneResult.ok) return doneResult;
+          return ensureProfileConnected(candidate, platform, plan.listed).then(function(profileState) {
+            const effectiveProfile = profileState.ok ? profileState.profile : candidate;
+            if (candidate && profileState.connectedProfiles && profileState.connectedProfiles.length) {
+              return { ok: false, skipped: true };
+            }
+            tried.push(effectiveProfile || '(default)');
+            const cliArgs = effectiveProfile ? ['--profile', effectiveProfile].concat(args) : args;
+            return spawnOpenCliWithRetry(cliArgs, timeoutMs).then(function(result) {
+              result.profile = effectiveProfile || '';
+              lastResult = result;
+              if (result.ok) return result;
+              if (isBrowserProfileError(result)) return null;
+              return result;
+            });
+          });
+        });
+      });
+      return chain.then(function(result) {
+        if (result && result.ok) return result;
+        const failed = lastResult || { ok: false, error: 'opencli failed', stdout: '', stderr: '' };
+        if (tried.length) {
+          failed.error = String(failed.error || 'opencli failed') + '\n已尝试 profile：' + uniqueStrings(tried).join('、');
+        }
+        return failed;
       });
     });
   }
@@ -663,6 +1044,7 @@ module.exports = function createAccountMonitorRoutes(deps) {
 
   function publicCollectJob() {
     return Object.assign({}, collectJob, {
+      concurrency: Number(collectJob.concurrency) || 1,
       results: (collectJob.results || []).slice(-50)
     });
   }
@@ -718,14 +1100,18 @@ module.exports = function createAccountMonitorRoutes(deps) {
   }
 
   function collectAndSave(accountId) {
-    const store = readStore();
-    const index = store.accounts.findIndex(function(item) { return item.id === accountId; });
-    if (index < 0) return Promise.resolve({ error: 'account not found' });
-    const account = store.accounts[index];
-    const previous = (store.snapshots || []).filter(function(snapshot) { return snapshot.accountId === account.id; }).sort(function(a, b) {
-      return Number(b.capturedAt) - Number(a.capturedAt);
-    })[0];
-    return collectAccount(account).then(function(result) {
+    const initialStore = readStore();
+    const initialIndex = initialStore.accounts.findIndex(function(item) { return item.id === accountId; });
+    if (initialIndex < 0) return Promise.resolve({ error: 'account not found' });
+    const sourceAccount = Object.assign({}, initialStore.accounts[initialIndex]);
+    return collectAccount(sourceAccount).then(function(result) {
+      const store = readStore();
+      const index = store.accounts.findIndex(function(item) { return item.id === accountId; });
+      if (index < 0) return { error: 'account not found' };
+      const account = Object.assign({}, store.accounts[index]);
+      const previous = (store.snapshots || []).filter(function(snapshot) { return snapshot.accountId === account.id; }).sort(function(a, b) {
+        return Number(b.capturedAt) - Number(a.capturedAt);
+      })[0];
       const now = Date.now();
       if (!result.ok) {
         store.accounts[index] = Object.assign({}, account, {
@@ -801,17 +1187,35 @@ module.exports = function createAccountMonitorRoutes(deps) {
     });
   }
 
+  function accountCollectPriority(account) {
+    const platform = normalizePlatform(account && account.platform);
+    if (platform === 'douyin') return 0;
+    return 1;
+  }
+
+  function collectConcurrency(options) {
+    return Math.max(1, Math.min(6, Number(options && options.concurrency) || Number(process.env.ACCOUNT_MONITOR_COLLECT_CONCURRENCY) || 3));
+  }
+
   function collectAllEnabledAccounts(options) {
     options = options || {};
     const store = readStore();
-    const accounts = (store.accounts || []).filter(function(item) { return item.enabled !== false; });
-    const ids = accounts.map(function(item) { return item.id; });
-    let chain = Promise.resolve();
-    ids.forEach(function(id) {
-      const account = accounts.find(function(item) { return item.id === id; }) || {};
-      chain = chain.then(function() {
+    const accounts = (store.accounts || [])
+      .filter(function(item) { return item.enabled !== false; })
+      .slice()
+      .sort(function(a, b) {
+        const priority = accountCollectPriority(a) - accountCollectPriority(b);
+        if (priority) return priority;
+        return String(a.name || a.account || '').localeCompare(String(b.name || b.account || ''), 'zh-Hans-CN');
+      });
+    const concurrency = Math.min(accounts.length || 1, collectConcurrency(options));
+    let cursor = 0;
+    function worker() {
+      const account = accounts[cursor++];
+      if (!account) return Promise.resolve();
+      return Promise.resolve().then(function() {
         if (typeof options.onAccountStart === 'function') options.onAccountStart(account);
-        return collectAndSave(id).then(function(result) {
+        return collectAndSave(account.id).then(function(result) {
           if (typeof options.onAccountDone === 'function') options.onAccountDone(account, result || {});
           return result;
         }).catch(function(e) {
@@ -819,10 +1223,16 @@ module.exports = function createAccountMonitorRoutes(deps) {
           if (typeof options.onAccountDone === 'function') options.onAccountDone(account, result);
           return result;
         });
+      }).then(function() {
+        return worker();
       });
-    });
-    return chain.then(function() {
+    }
+    const workers = [];
+    for (let i = 0; i < concurrency; i += 1) workers.push(worker());
+    return Promise.all(workers).then(function() {
       return publicStore(readStore(), { windowDays: options.windowDays });
+    }).finally(function() {
+      return closeLaunchedProfiles('account monitor batch finished').catch(function() {});
     });
   }
 
@@ -843,6 +1253,7 @@ module.exports = function createAccountMonitorRoutes(deps) {
       currentAccountId: '',
       currentAccountName: '',
       error: '',
+      concurrency: Math.min(accounts.length || 1, collectConcurrency(options)),
       results: []
     };
     if (!accounts.length) {
@@ -850,6 +1261,7 @@ module.exports = function createAccountMonitorRoutes(deps) {
     }
     collectAllEnabledAccounts({
       windowDays: options.windowDays,
+      concurrency: options.concurrency,
       onAccountStart: function(account) {
         collectJob.currentAccountId = account.id || '';
         collectJob.currentAccountName = account.name || account.account || '';
@@ -964,7 +1376,7 @@ module.exports = function createAccountMonitorRoutes(deps) {
     },
 
     '/api/account-monitor/collect-all': function(body, cb) {
-      cb(startCollectAllJob({ source: 'manual', windowDays: body.windowDays || body.days }));
+      cb(startCollectAllJob({ source: 'manual', windowDays: body.windowDays || body.days, concurrency: body.concurrency }));
     },
 
     '/api/account-monitor/collect-status': function(body, cb) {

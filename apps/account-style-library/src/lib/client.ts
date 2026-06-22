@@ -358,18 +358,20 @@ export function queryGrossMarginDifference(input: GrossMarginDifferenceQueryInpu
   });
 }
 
-export function getAccountDetail(input: { platform: Platform; accountId: string; includeStyle?: boolean }) {
+export function getAccountDetail(input: { platform: Platform; accountId: string; includeStyle?: boolean; styleOnly?: boolean }) {
   const params = new URLSearchParams({
     platform: input.platform,
     accountId: input.accountId
   });
   if (input.includeStyle) params.set("includeStyle", "1");
+  if (input.styleOnly) params.set("styleOnly", "1");
   return requestJson<AccountDetail>(`/api/accounts?${params.toString()}`);
 }
 
-export function getProjectDetail(projectId: string, options: { includeStyle?: boolean } = {}) {
+export function getProjectDetail(projectId: string, options: { includeStyle?: boolean; styleOnly?: boolean } = {}) {
   const params = new URLSearchParams({ projectId });
   if (options.includeStyle) params.set("includeStyle", "1");
+  if (options.styleOnly) params.set("styleOnly", "1");
   return requestJson<ProjectDetail>(`/api/projects?${params.toString()}`);
 }
 
@@ -440,6 +442,36 @@ export function transcribeVideo(input: {
     method: "POST",
     body: JSON.stringify(input)
   });
+}
+
+export async function transcribeAudioUpload(file: File) {
+  const authHeader = readHostAuthHeader();
+  const clientId = readClientId();
+  const form = new FormData();
+  form.append("file", file, file.name);
+
+  const response = await fetch(withWorkbenchBasePath("/api/audio-transcribe"), {
+    method: "POST",
+    headers: {
+      ...(authHeader ? { "x-usagi-auth-user": authHeader } : {}),
+      ...(clientId ? { "x-usagi-client-id": clientId } : {})
+    },
+    body: form,
+    cache: "no-store"
+  }).catch((error) => {
+    throw new Error(describeRequestError(error));
+  });
+
+  const fallbackResponse = response.clone();
+  const data = await response.json().catch(async () => {
+    const text = await fallbackResponse.text().catch(() => "");
+    return { error: summarizeHttpError(response.status, text, response.headers.get("content-type")) };
+  });
+
+  if (!response.ok) {
+    throw new Error(normalizeApiError((data as { error?: unknown }).error) || summarizeHttpError(response.status));
+  }
+  return data as { transcript: string; fileName: string; size: number; model: string };
 }
 
 export function hydrateVideo(input: { platform: Platform; accountId: string; videoId: string }) {

@@ -521,11 +521,13 @@
             <div class="traffic-form-field traffic-platform-mode-field">
               <span>订单类型</span>
               <div class="traffic-platform-mode">
-                <button type="button" :class="{ active: form.orderType === 'xingtu' }" @click="form.orderType = 'xingtu'">
-                  星图单
-                </button>
-                <button type="button" :class="{ active: form.orderType === 'private' }" @click="form.orderType = 'private'">
-                  私单
+                <button
+                  v-for="option in orderTypeOptions"
+                  :key="option.value"
+                  type="button"
+                  :class="{ active: form.orderType === option.value }"
+                  @click="setOrderType(option.value)">
+                  {{ option.label }}
                 </button>
               </div>
             </div>
@@ -621,7 +623,7 @@
                 <tr v-for="service in serviceRows" :key="service.key">
                   <td><strong>{{ service.label }}</strong></td>
                   <td>
-                    <select v-model="form.selectedOptions[service.key]" class="inp">
+                    <select v-model="form.selectedOptions[service.key]" class="inp" @change="handleQuantityOptionChange(service.key)">
                       <option v-for="option in optionsFor(service.key)" :key="option.id" :value="option.id">
                         {{ option.name }}
                       </option>
@@ -633,6 +635,7 @@
                       class="inp"
                       inputmode="decimal"
                       :placeholder="quantityHint(service.key)"
+                      @input="handleQuantityInput(service.key)"
                       @blur="normalizeQuantityInput(service.key)"
                     />
                   </td>
@@ -677,6 +680,7 @@
                 caption="自动带入本期申请链接和评论量"
                 :context="commentContext"
                 :auto-fill="true"
+                :result-preview-limit="8"
                 compact
               />
             </section>
@@ -900,6 +904,17 @@ const SETTINGS_SERVICE_OPTIONS = {
     ['blueLink', '蓝链点击']
   ]
 }
+const BUILTIN_PRICE_OPTIONS = {
+  douyin: [
+    { id: 'douyin-play-qianchuan-new', service: 'play', name: '千川（新）', unitPrice: 28, quantityUnit: '万', minimumQuantity: 1 }
+  ]
+}
+const ACCOUNT_NAME_ALIASES = [
+  { canonical: '木游话说', aliases: ['尼大木'] },
+  { canonical: '策划克星阿强', aliases: ['苏大强'] },
+  { canonical: '最翁Damnnn', aliases: ['最翁说游'] },
+  { canonical: '麦小雯', aliases: ['麦晓花'] }
+]
 const phaseRatioOptions = Array.from({ length: 10 }, (_, index) => String((index + 1) * 10))
 const editProjectForm = reactive({
   projectId: '',
@@ -1286,7 +1301,7 @@ const applyProgressTarget = computed(() => toNumber(selectedExecution.value?.tar
 const applyProgressPlanned = computed(() => toNumber(selectedExecution.value?.appliedMetrics?.play))
 const applyProgressActual = computed(() => toNumber(selectedExecution.value?.currentMetrics?.play))
 const commentContext = computed(() => ({
-  account: '',
+  account: form.accountName || selectedExecution.value?.accountName || '',
   videoUrl: form.videoUrl,
   scenario: '',
   script: '',
@@ -1332,7 +1347,7 @@ const targetCpmChoices = computed(() => {
   }
   const fixedChoices = normalizePlatform(form.platform) === 'bilibili'
     ? [60, 100, 150, 180]
-    : [30, 50, 70, 100]
+    : [28, 30, 50, 70, 100]
   fixedChoices.forEach(value => pushChoice('CPM', value, `fixed-${value}`))
   pushChoice('项目', selectedExecution.value?.targetCpm, 'project')
   pushChoice('预设', currentAccountStandard.value?.targetCpm, 'standard')
@@ -1340,6 +1355,10 @@ const targetCpmChoices = computed(() => {
   if (current && !choices.some(item => Math.abs(toNumber(item.value) - current) < 0.001)) pushChoice('当前', current, 'current')
   return choices.slice(0, 8)
 })
+const orderTypeOptions = computed(() => ['xingtu', 'private'].map(value => ({
+  value,
+  label: orderTypeLabel(value, form.platform)
+})))
 
 const crmLastResult = computed(() => crmStatus.value?.lastResult || null)
 const crmLastSuccessAt = computed(() => crmLastResult.value?.crmRefreshAt || crmLastResult.value?.at || '')
@@ -1406,7 +1425,13 @@ async function refreshCrmData() {
     const csvFresh = data.csvUpdatedRange?.max ? ` · CSV最新 ${displayCrmTime(data.csvUpdatedRange.max)}` : ''
     toast('success', `后台数据已更新：匹配 ${data.matched || 0} 条，未匹配 ${data.unmatched || 0} 条${csvRows}${csvFresh}${fileName}`)
   } catch (error) {
-    toast('error', '后台数据更新失败：' + (error.message || error))
+    const message = error.message || String(error)
+    if (/需要登录|needLogin|登录/.test(message)) {
+      toast('warn', 'CRM 自动化 Profile 未登录，已为你打开登录码。扫码后等页面进入列表页，再点“登录后刷新数据”。')
+      openCrmLoginShot()
+    } else {
+      toast('error', '后台数据更新失败：' + message)
+    }
   } finally {
     crmRefreshing.value = false
   }
@@ -1675,7 +1700,7 @@ function startGapApply(execution) {
   startApply(execution, { phaseName: nextPhaseFor(execution) })
   const gap = executionPlayGap(execution)
   if (gap > 0) {
-    applyPlayAmount(gap, { keepExisting: false })
+    applyPlayAmount(gap, { keepExisting: false, syncRatio: true })
   }
   reviewTouched.value = false
   reviewText.value = generatedReview.value
@@ -1774,6 +1799,15 @@ function pendingPlayFor(execution) {
   return Math.max(0, toNumber(execution.targetMetrics?.play) - toNumber(execution.appliedMetrics?.play))
 }
 
+function defaultApplyPlayForPhase(execution, phaseName = '') {
+  const target = Math.round(toNumber(execution?.targetMetrics?.play))
+  const pending = Math.round(pendingPlayFor(execution || {}))
+  if (!target) return 0
+  const existing = latestPhaseRecord(execution?.executionId, phaseName)
+  if (existing) return Math.round(toNumber(existing.targetPlay || existing.targetMetrics?.play))
+  return pending || (phaseNumber(phaseName) <= 1 ? target : 0)
+}
+
 function executionAppliedPlay(execution) {
   return toNumber(execution?.appliedMetrics?.play)
 }
@@ -1811,33 +1845,20 @@ function resolveAccountIdentity(execution = null, record = null, options = {}) {
   const accountName = record?.accountName || sourceExecution.accountName || form.accountName
   const standard = findAccountStandard(accountName, platform) || {}
   const formFallback = options.includeForm === false ? {} : form
+  const preferStandard = isAliasedAccountName(accountName)
+  const douyinIdValues = preferStandard
+    ? [standard.douyinId, standard.accountId, sourceExecution.douyinId, sourceExecution.accountId, record?.douyinId, record?.accountId, formFallback.douyinId, formFallback.accountId]
+    : [sourceExecution.douyinId, sourceExecution.accountId, record?.douyinId, record?.accountId, standard.douyinId, standard.accountId, formFallback.douyinId, formFallback.accountId]
+  const accountIdValues = preferStandard
+    ? [standard.accountId, standard.douyinId, sourceExecution.accountId, sourceExecution.douyinId, record?.accountId, record?.douyinId, formFallback.accountId, formFallback.douyinId]
+    : [sourceExecution.accountId, sourceExecution.douyinId, record?.accountId, record?.douyinId, standard.accountId, standard.douyinId, formFallback.accountId, formFallback.douyinId]
+  const cooperationCodeValues = preferStandard
+    ? [standard.cooperationCode, sourceExecution.cooperationCode, record?.cooperationCode, formFallback.cooperationCode]
+    : [sourceExecution.cooperationCode, record?.cooperationCode, standard.cooperationCode, formFallback.cooperationCode]
   return {
-    douyinId: reviewIdentityValue(
-      sourceExecution.douyinId,
-      sourceExecution.accountId,
-      record?.douyinId,
-      record?.accountId,
-      standard.douyinId,
-      standard.accountId,
-      formFallback.douyinId,
-      formFallback.accountId
-    ),
-    accountId: reviewIdentityValue(
-      sourceExecution.accountId,
-      sourceExecution.douyinId,
-      record?.accountId,
-      record?.douyinId,
-      standard.accountId,
-      standard.douyinId,
-      formFallback.accountId,
-      formFallback.douyinId
-    ),
-    cooperationCode: reviewIdentityValue(
-      sourceExecution.cooperationCode,
-      record?.cooperationCode,
-      standard.cooperationCode,
-      formFallback.cooperationCode
-    )
+    douyinId: reviewIdentityValue(...douyinIdValues),
+    accountId: reviewIdentityValue(...accountIdValues),
+    cooperationCode: reviewIdentityValue(...cooperationCodeValues)
   }
 }
 
@@ -1848,6 +1869,7 @@ function applyProjectPending(project) {
 function fillForm(execution, options = {}) {
   const phaseName = options.phaseName || latestSavedPhaseName(execution) || '一期'
   const identity = resolveAccountIdentity(execution, null, { includeForm: false })
+  const play = defaultApplyPlayForPhase(execution, phaseName)
   withoutTargetPlayAutoSync(() => {
     Object.assign(form, {
       id: '',
@@ -1865,7 +1887,7 @@ function fillForm(execution, options = {}) {
       phaseRatio: '100',
       videoUrl: latestPhaseVideoUrl(execution.executionId) || execution.videoUrl || '',
       useAccountStandard: false,
-      targetPlayWan: stripZeros((toNumber(execution.targetMetrics?.play) / 10000).toFixed(2)),
+      targetPlayWan: stripZeros((play / 10000).toFixed(2)),
       targetCpm: String(defaultTargetCpm(execution.platform)),
       originalPrice: String(execution.originalPrice || execution.discountedPrice || ''),
       discountRate: String(execution.discountRate || ''),
@@ -1877,6 +1899,7 @@ function fillForm(execution, options = {}) {
     if (existing) {
       applyApplicationRecord(existing, execution)
     } else {
+      applyPlayAmount(play, { keepExisting: false, syncRatio: true })
       if (form.useAccountStandard) applyAccountStandard(execution, { quiet: true })
       reviewTouched.value = false
       reviewText.value = generatedReview.value
@@ -1947,6 +1970,8 @@ function handlePhaseChange() {
     quantityInputs: emptyQuantities(),
     selectedOptions: defaultSelectedOptions(form.platform)
   })
+  const play = defaultApplyPlayForPhase(execution, form.phaseName)
+  applyPlayAmount(play, { keepExisting: false, syncRatio: true })
   if (form.useAccountStandard) applyAccountStandard(execution, { quiet: true })
   reviewTouched.value = false
   reviewText.value = generatedReview.value
@@ -1978,6 +2003,8 @@ function createNextPhase() {
     quantityInputs: emptyQuantities(),
     selectedOptions: defaultSelectedOptions(form.platform)
   })
+  const play = defaultApplyPlayForPhase(execution, phaseName)
+  applyPlayAmount(play, { keepExisting: false, syncRatio: true })
   reviewTouched.value = false
   reviewText.value = generatedReview.value
   toast('success', `已切到${phaseName}，可以填写本期申请量`)
@@ -2007,7 +2034,7 @@ async function exportCurrentPhase() {
   }
   saving.value = true
   normalizeFormUrl()
-  normalizeAllQuantityInputs()
+  normalizeAllQuantityInputs({ syncRatio: false })
   const exportText = generatedReview.value
   const playOption = selectedOption('play')
   const requestedPlay = quantityInputToRaw(form.quantityInputs.play, selectedQuantityUnit('play', playOption), 'play')
@@ -2063,8 +2090,12 @@ async function exportCurrentPhase() {
   }
 }
 
-function normalizeAllQuantityInputs() {
-  serviceRows.value.forEach(service => normalizeQuantityInput(service.key))
+function normalizeAllQuantityInputs(options = {}) {
+  const normalizedOptions = {
+    ...options,
+    syncDependents: options.syncDependents === true
+  }
+  serviceRows.value.forEach(service => normalizeQuantityInput(service.key, normalizedOptions))
 }
 
 async function copyTextToClipboard(text) {
@@ -2093,7 +2124,7 @@ function buildReviewText() {
     option: selectedOption(service),
     quantity: form.quantityInputs[service]
   })
-  const footer = '@姚琳琳(Lin.) @罗雪莲 @翁林湑(空白) 辛苦审核'
+  const footer = '@姚琳琳(Lin.) @翁林湑(空白) 辛苦审核'
   const phase = form.phaseName || '本期'
   const playOption = selectedOption('play')
   const currentPlay = currentApplyPlay()
@@ -2103,7 +2134,7 @@ function buildReviewText() {
   const common = [
     `标的：${form.projectName || '未填项目'}`,
     `账号：${form.accountName || '未填账号'}`,
-    `订单类型：${orderTypeLabel(form.orderType)}`,
+    `订单类型：${orderTypeLabel(form.orderType, platform)}`,
     `视频链接：${form.videoUrl || '待补'}`
   ]
 
@@ -2160,8 +2191,19 @@ function formatReviewLabelSuffix(option) {
   return name ? `（${name}）` : ''
 }
 
-function orderTypeLabel(value) {
-  return value === 'private' ? '私单' : '星图单'
+function normalizeOrderType(value) {
+  return value === 'private' ? 'private' : 'xingtu'
+}
+
+function orderTypeLabel(value, platform = form.platform) {
+  if (normalizeOrderType(value) === 'private') return '私单'
+  return normalizePlatform(platform) === 'bilibili' ? '平台单' : '星图单'
+}
+
+function setOrderType(value) {
+  form.orderType = normalizeOrderType(value)
+  reviewTouched.value = false
+  reviewText.value = generatedReview.value
 }
 
 function reviewRequiredValue(...values) {
@@ -2261,11 +2303,13 @@ function syncTargetPlay() {
   if (price && original) form.discountRate = stripZeros((price / original * 100).toFixed(2))
   if (form.useAccountStandard && currentAccountStandard.value) {
     applyAccountStandard(null, { quiet: true, forcePrices: false, allowGeneric: false })
+    refreshReviewText()
     return
   }
   if (price && cpm) {
     const rawPlay = Math.round(price / cpm * 1000)
     applyPlayAmount(phaseAdjustedPlay(rawPlay), { keepExisting: false })
+    refreshReviewText()
   }
 }
 
@@ -2309,6 +2353,40 @@ function switchApplyPlatform(platform) {
   reviewText.value = generatedReview.value
 }
 
+function phaseBasePlay() {
+  const executionTarget = toNumber(selectedExecution.value?.targetMetrics?.play)
+  if (executionTarget) return Math.round(executionTarget)
+  const price = toNumber(form.discountedPrice)
+  const cpm = toNumber(form.targetCpm)
+  return price && cpm ? Math.round(price / cpm * 1000) : 0
+}
+
+function syncPhaseRatioFromPlay(rawPlay) {
+  const basePlay = phaseBasePlay()
+  const play = Math.round(toNumber(rawPlay))
+  if (!basePlay || !play) return
+  form.phaseRatio = stripZeros((play / basePlay * 100).toFixed(2))
+}
+
+function syncPlayFromQuantityInput(options = {}) {
+  const option = selectedOption('play')
+  const raw = quantityInputToRaw(form.quantityInputs.play, selectedQuantityUnit('play', option), 'play')
+  const play = options.normalize ? normalizeMetricRaw('play', raw) : Math.round(toNumber(raw))
+  if (options.normalize) form.quantityInputs.play = rawMetricToInput('play', play)
+  form.targetPlayWan = play ? stripZeros(String(play / 10000)) : ''
+  if (options.syncRatio !== false) syncPhaseRatioFromPlay(play)
+  if (options.syncDependents) {
+    const standard = form.useAccountStandard ? findAccountStandard(form.accountName, form.platform) : null
+    if (standard) fillAccountStandardByPlay(standard, play, { keepExisting: false })
+    else fillGenericPresetByPlay(play, { keepExisting: false })
+  }
+}
+
+function refreshReviewText() {
+  reviewTouched.value = false
+  reviewText.value = generatedReview.value
+}
+
 function phaseAdjustedPlay(rawPlay) {
   const play = Math.round(toNumber(rawPlay))
   const ratio = toNumber(form.phaseRatio) || 100
@@ -2319,6 +2397,7 @@ function applyPlayAmount(rawPlay, options = {}) {
   const play = normalizeMetricRaw('play', rawPlay)
   form.targetPlayWan = play ? stripZeros(String(play / 10000)) : ''
   form.quantityInputs.play = rawMetricToInput('play', play)
+  if (options.syncRatio) syncPhaseRatioFromPlay(play)
   const standard = options.accountStandard || (form.useAccountStandard ? findAccountStandard(form.accountName, form.platform) : null)
   if (standard && options.useAccountStandard !== false) fillAccountStandardByPlay(standard, play, options)
   else fillGenericPresetByPlay(play, options)
@@ -2327,28 +2406,22 @@ function applyPlayAmount(rawPlay, options = {}) {
 function applyPhaseRatio() {
   if (form.useAccountStandard && currentAccountStandard.value) {
     applyAccountStandard(null, { quiet: true })
-    reviewTouched.value = false
-    reviewText.value = generatedReview.value
+    refreshReviewText()
     return
   }
-  const basePlay = toNumber(selectedExecution.value?.targetMetrics?.play)
-    || Math.round(toNumber(form.discountedPrice) && toNumber(form.targetCpm) ? toNumber(form.discountedPrice) / toNumber(form.targetCpm) * 1000 : 0)
+  const basePlay = phaseBasePlay()
     || Math.round(toNumber(form.targetPlayWan) * 10000)
   const play = phaseAdjustedPlay(basePlay)
   if (!play) return
   applyPlayAmount(play, { keepExisting: false })
+  refreshReviewText()
 }
 
 function handleTargetPlayInput() {
   const play = Math.round(toNumber(form.targetPlayWan) * 10000)
   const standard = findAccountStandard(form.accountName, form.platform)
-  if (form.useAccountStandard && standard) {
-    const standardPlay = phaseAdjustedPlay(toNumber(standard.metrics?.play))
-    if (Math.abs(play - standardPlay) > 1) form.useAccountStandard = false
-  }
-  form.quantityInputs.play = rawMetricToInput('play', play)
-  if (form.useAccountStandard && standard) fillAccountStandardByPlay(standard, play, { keepExisting: false })
-  else fillGenericPresetByPlay(play, { keepExisting: false })
+  applyPlayAmount(play, { keepExisting: false, syncRatio: true, accountStandard: form.useAccountStandard ? standard : null })
+  refreshReviewText()
 }
 
 function handleTargetCpmInput() {
@@ -2365,7 +2438,8 @@ function applyGenericPresetFromRail(cpm) {
 }
 
 function optionsFor(service) {
-  return (priceTable.value.items || []).filter(item => item.service === service)
+  return withBuiltinPriceOptions(priceTable.value.items || [], normalizePlatform(form.platform))
+    .filter(item => item.service === service)
 }
 
 function selectedOption(service) {
@@ -2374,27 +2448,40 @@ function selectedOption(service) {
 
 function defaultSelectedOptions(platform) {
   const table = state.priceTables.find(item => item.platform === normalizePlatform(platform)) || state.priceTables[0] || { items: [] }
+  const items = withBuiltinPriceOptions(table.items || [], normalizePlatform(platform))
   return Object.fromEntries(['play', 'like', 'comment', 'favorite', 'share', 'douPlus', 'danmaku', 'coin', 'blueLink'].map(key => {
-    const option = table.items.find(item => item.service === key)
+    const option = items.find(item => item.service === key)
     return [key, option?.id || '']
   }))
 }
 
+function withBuiltinPriceOptions(items, platform) {
+  const rows = Array.isArray(items) ? items.slice() : []
+  ;(BUILTIN_PRICE_OPTIONS[normalizePlatform(platform)] || []).forEach(option => {
+    const exists = rows.some(item => item.id === option.id || (item.service === option.service && normalize(item.name) === normalize(option.name)))
+    if (!exists) rows.push(option)
+  })
+  return rows
+}
+
 function findAccountStandard(accountName, platform) {
-  const accountKey = normalize(accountName)
+  const accountKey = normalizeAccountKey(accountName)
   if (!accountKey) return null
   const platformKey = normalizePlatform(platform)
   const rows = state.accountStandards.filter(standard => normalizePlatform(standard.platform) === platformKey)
-  return rows.find(standard => normalize(standard.accountName) === accountKey)
-    || rows.find(standard => accountKey.includes(normalize(standard.accountName)) || normalize(standard.accountName).includes(accountKey))
+  const exactRows = rows.filter(standard => normalizeAccountKey(standard.accountName) === accountKey)
+  return exactRows.find(hasMaintenanceStandard)
+    || exactRows[0]
+    || rows.find(standard => accountKey.includes(normalizeAccountKey(standard.accountName)) || normalizeAccountKey(standard.accountName).includes(accountKey))
     || null
 }
 
 function findExactAccountStandard(accountName, platform) {
-  const accountKey = normalize(accountName)
+  const accountKey = normalizeAccountKey(accountName)
   if (!accountKey) return null
   const platformKey = normalizePlatform(platform)
-  return state.accountStandards.find(standard => normalizePlatform(standard.platform) === platformKey && normalize(standard.accountName) === accountKey) || null
+  const rows = state.accountStandards.filter(standard => normalizePlatform(standard.platform) === platformKey && normalizeAccountKey(standard.accountName) === accountKey)
+  return rows.find(hasMaintenanceStandard) || rows[0] || null
 }
 
 function applyExactAccountStandardForManual() {
@@ -2517,13 +2604,12 @@ function genericPresetMetrics(play) {
     }
   }
   const like = douyinAutoLike(rawPlay)
-  const highEngagementPack = rawPlay >= 180000
   return {
     play: rawPlay,
     like,
-    comment: highEngagementPack ? 200 : 100,
-    favorite: highEngagementPack ? 300 : 200,
-    share: highEngagementPack ? 200 : 100,
+    comment: normalizeMetricRaw('comment', rawPlay * 0.001),
+    favorite: normalizeMetricRaw('favorite', rawPlay * 0.002),
+    share: normalizeMetricRaw('share', rawPlay * 0.001),
     douPlus: 0
   }
 }
@@ -2542,7 +2628,7 @@ function roundUpStep(value, step) {
 }
 
 function metricStep(service) {
-  if (service === 'play') return 10000
+  if (service === 'play') return 1
   if (service === 'like') return 1000
   if (service === 'douPlus') return 1
   return 50
@@ -2769,13 +2855,31 @@ function effectiveUnitPrice(option, billableQuantity) {
   return toNumber(option?.unitPrice)
 }
 
-function normalizeQuantityInput(service) {
+function handleQuantityInput(service) {
+  if (service === 'play') syncPlayFromQuantityInput({ syncDependents: true })
+  refreshReviewText()
+}
+
+function handleQuantityOptionChange(service) {
+  if (service === 'play') syncPlayFromQuantityInput({ normalize: true, syncDependents: true })
+  refreshReviewText()
+}
+
+function normalizeQuantityInput(service, options = {}) {
   const option = selectedOption(service)
   const raw = quantityInputToRaw(form.quantityInputs[service], selectedQuantityUnit(service, option), service)
   form.quantityInputs[service] = rawMetricToInput(service, raw)
-  if (service === 'play') form.targetPlayWan = raw ? stripZeros(String(raw / 10000)) : ''
-  reviewTouched.value = false
-  reviewText.value = generatedReview.value
+  if (service === 'play') {
+    const play = normalizeMetricRaw('play', raw)
+    form.targetPlayWan = play ? stripZeros(String(play / 10000)) : ''
+    if (options.syncRatio !== false) syncPhaseRatioFromPlay(play)
+    if (options.syncDependents !== false) {
+      const standard = form.useAccountStandard ? findAccountStandard(form.accountName, form.platform) : null
+      if (standard) fillAccountStandardByPlay(standard, play, { keepExisting: false })
+      else fillGenericPresetByPlay(play, { keepExisting: false })
+    }
+  }
+  refreshReviewText()
 }
 
 function canonicalQuantityUnit(quantityUnit, service = '') {
@@ -3212,6 +3316,37 @@ function platformLabel(platform) {
 
 function normalize(value) {
   return String(value || '').replace(/\s+/g, '').toLowerCase()
+}
+
+function accountAliasNames(rule) {
+  return [rule.canonical, ...(rule.aliases || [])]
+}
+
+function findAccountAliasRule(value) {
+  const key = normalize(value)
+  if (!key) return null
+  return ACCOUNT_NAME_ALIASES.find(rule => accountAliasNames(rule).some(name => {
+    const aliasKey = normalize(name)
+    return aliasKey && (key === aliasKey || key.includes(aliasKey))
+  })) || null
+}
+
+function isAliasedAccountName(value) {
+  return Boolean(findAccountAliasRule(value))
+}
+
+function canonicalAccountName(value) {
+  const raw = String(value || '').trim()
+  const alias = findAccountAliasRule(raw)
+  return alias ? alias.canonical : raw
+}
+
+function normalizeAccountKey(value) {
+  return normalize(canonicalAccountName(value))
+}
+
+function hasMaintenanceStandard(standard) {
+  return toNumber(standard?.targetCpm) > 0 && toNumber(standard?.metrics?.play) > 0
 }
 
 function toNumber(value) {

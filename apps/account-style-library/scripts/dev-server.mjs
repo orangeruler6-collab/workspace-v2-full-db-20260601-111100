@@ -1,4 +1,5 @@
 import fs from "fs";
+import http from "http";
 import net from "net";
 import path from "path";
 import process from "process";
@@ -8,7 +9,10 @@ const root = process.cwd();
 const stateDir = path.join(root, ".dev-server");
 const pidFile = path.join(stateDir, "next-dev.pid");
 const logFile = path.join(stateDir, "next-dev.log");
-const port = Number(process.env.PORT || 3000);
+const port = Number(process.env.PORT || process.env.NEXT_PORT || 3100);
+const nextBin = path.join(root, "node_modules", "next", "dist", "bin", "next");
+const healthPath = "/style-workbench/api/health";
+const healthTimeoutMs = 10000;
 
 const command = process.argv[2] || "start";
 
@@ -23,64 +27,75 @@ async function main() {
   }
   if (command === "status") return status();
 
-  console.error("用法：node scripts/dev-server.mjs <start|stop|restart|status>");
+  console.error("Usage: node scripts/dev-server.mjs <start|stop|restart|status>");
   process.exit(1);
 }
 
 async function start() {
   const current = readPid();
-  if (current && isRunning(current)) {
-    console.log(`Next dev 已在运行：pid=${current}, http://localhost:${port}`);
+  const currentHealth = current && isRunning(current) ? await checkHealth(port) : null;
+  if (currentHealth?.ok) {
+    console.log(`Next dev is already running: pid=${current}, http://localhost:${port}/style-workbench`);
     return;
   }
 
   const listener = await findPortListener(port);
   if (listener) {
-    console.error(`端口 ${port} 已被占用：pid=${listener.pid || "unknown"} ${listener.command || ""}`.trim());
+    console.error(`Port ${port} is already in use: pid=${listener.pid || "unknown"} ${listener.command || ""}`.trim());
     process.exit(1);
   }
 
   const logFd = fs.openSync(logFile, "a");
-  const child = spawn("npm", ["run", "dev"], {
+  const child = spawn(process.execPath, [nextBin, "dev", "-p", String(port), "-H", "0.0.0.0"], {
     cwd: root,
     detached: true,
     stdio: ["ignore", logFd, logFd],
-    env: { ...process.env, PORT: String(port) }
+    env: {
+      ...process.env,
+      PORT: String(port),
+      NEXT_PORT: String(port),
+      NODE_OPTIONS: ensureNodeMemory(process.env.NODE_OPTIONS)
+    },
+    windowsHide: true
   });
 
   child.unref();
   fs.writeFileSync(pidFile, `${child.pid}\n`, "utf8");
   fs.closeSync(logFd);
 
-  console.log(`已后台启动 Next dev：pid=${child.pid}`);
-  console.log(`地址：http://localhost:${port}`);
-  console.log(`日志：${logFile}`);
+  console.log(`Started Next dev in background: pid=${child.pid}`);
+  console.log(`URL: http://localhost:${port}/style-workbench`);
+  console.log(`Log: ${logFile}`);
 }
 
 async function stop(options = {}) {
   const pid = readPid();
   if (!pid) {
-    if (!options.quiet) console.log("没有找到后台 dev server pid。");
+    if (!options.quiet) console.log("No background dev server pid was found.");
     return;
   }
 
   if (!isRunning(pid)) {
     fs.rmSync(pidFile, { force: true });
-    if (!options.quiet) console.log(`后台 dev server 已不在运行，已清理 pid：${pid}`);
+    if (!options.quiet) console.log(`Background dev server was already stopped, cleared pid=${pid}.`);
     return;
   }
 
   signalDevServer(pid, "SIGTERM");
   const stopped = await waitForStop(pid, 5000);
   if (!stopped) signalDevServer(pid, "SIGKILL");
+  const listener = await findPortListener(port);
+  if (listener?.pid && listener.pid !== pid) {
+    await killProcessTree(listener.pid).catch(() => {});
+  }
   fs.rmSync(pidFile, { force: true });
-  if (!options.quiet) console.log(`已停止后台 dev server：pid=${pid}`);
+  if (!options.quiet) console.log(`Stopped background dev server: pid=${pid}`);
 }
 
 async function status() {
   const pid = readPid();
   const listener = await findPortListener(port);
-  const healthy = await canConnect(port);
+  const health = await checkHealth(port);
 
   console.log(
     JSON.stringify(
@@ -90,8 +105,9 @@ async function status() {
         port,
         portListening: Boolean(listener),
         listener,
-        healthy,
-        url: `http://localhost:${port}`,
+        healthy: health.ok,
+        health,
+        url: `http://localhost:${port}/style-workbench`,
         logFile
       },
       null,
@@ -118,19 +134,31 @@ function isRunning(pid) {
   }
 }
 
+function ensureNodeMemory(value) {
+  if (value?.includes("--max-old-space-size")) return value;
+  return [value, "--max-old-space-size=4096"].filter(Boolean).join(" ");
+}
+
 function signalDevServer(pid, signal) {
-  const target = process.platform === "win32" ? pid : -pid;
+  if (process.platform === "win32" && signal === "SIGKILL") {
+    killProcessTree(pid).catch(() => {});
+    return true;
+  }
+
   try {
-    process.kill(target, signal);
+    process.kill(pid, signal);
     return true;
   } catch {
-    try {
-      process.kill(pid, signal);
-      return true;
-    } catch {
-      return false;
-    }
+    return false;
   }
+}
+
+function killProcessTree(pid) {
+  if (process.platform !== "win32") {
+    process.kill(pid, "SIGKILL");
+    return Promise.resolve();
+  }
+  return run("taskkill", ["/PID", String(pid), "/T", "/F"]).then(() => undefined);
 }
 
 async function waitForStop(pid, timeoutMs) {
@@ -159,8 +187,59 @@ function canConnect(targetPort) {
   });
 }
 
+function checkHealth(targetPort) {
+  return new Promise((resolve) => {
+    const request = http.get(
+      {
+        host: "127.0.0.1",
+        port: targetPort,
+        path: healthPath,
+        timeout: healthTimeoutMs
+      },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => {
+          body += chunk;
+        });
+        response.on("end", () => {
+          resolve({
+            ok: response.statusCode && response.statusCode >= 200 && response.statusCode < 300,
+            statusCode: response.statusCode,
+            path: healthPath,
+            body: body.slice(0, 500)
+          });
+        });
+      }
+    );
+
+    request.on("timeout", () => {
+      request.destroy();
+      resolve({ ok: false, path: healthPath, error: "timeout" });
+    });
+    request.on("error", (error) => resolve({ ok: false, path: healthPath, error: error.message }));
+  });
+}
+
 async function findPortListener(targetPort) {
   if (!(await canConnect(targetPort))) return null;
+
+  if (process.platform === "win32") {
+    const script = [
+      `$conn = Get-NetTCPConnection -LocalPort ${targetPort} -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1`,
+      "if ($conn) {",
+      "  $proc = Get-CimInstance Win32_Process -Filter \"ProcessId=$($conn.OwningProcess)\"",
+      "  [pscustomobject]@{ pid = $conn.OwningProcess; command = $proc.CommandLine } | ConvertTo-Json -Compress",
+      "}"
+    ].join("; ");
+    const result = await run("powershell", ["-NoProfile", "-Command", script]).catch(() => "");
+    if (!result.trim()) return { port: targetPort };
+    try {
+      return JSON.parse(result);
+    } catch {
+      return { port: targetPort, command: result.trim() };
+    }
+  }
 
   const result = await run("lsof", ["-nP", `-iTCP:${targetPort}`, "-sTCP:LISTEN", "-FpPc"]).catch(() => "");
   const lines = result.split("\n").filter(Boolean);
@@ -176,7 +255,7 @@ async function findPortListener(targetPort) {
 
 function run(bin, args) {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+    const child = spawn(bin, args, { cwd: root, stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => {

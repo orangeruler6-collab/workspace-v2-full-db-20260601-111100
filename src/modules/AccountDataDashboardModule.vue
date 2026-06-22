@@ -23,9 +23,13 @@
             :key="platform.id"
             type="button"
             class="platform-tab"
-            :class="{ active: activePlatform === platform.id, muted: platform.placeholder }"
+            :class="[platformToneClass(platform.id), { active: activePlatform === platform.id, muted: platform.placeholder }]"
             @click="activePlatform = platform.id">
-            {{ platform.label }}
+            <i>
+              <img v-if="platformIcon(platform.id)" :src="platformIcon(platform.id)" alt="" />
+              <span v-else>{{ platformShortLabel(platform.id) }}</span>
+            </i>
+            <span>{{ platform.label }}</span>
           </button>
         </div>
       </div>
@@ -38,7 +42,7 @@
       </select>
       <input v-model.trim="keyword" class="inp compact-search" placeholder="搜索账号" />
       <div class="dimension-switch">
-        <span>展示维度</span>
+        <span>排行维度</span>
         <div class="dimension-tabs" role="tablist" aria-label="展示维度">
           <button
             v-for="item in dimensionOptions"
@@ -65,7 +69,10 @@
           </button>
         </div>
       </div>
-      <span class="snapshot-note">占位数据 · 当前 {{ filteredAccounts.length }} 个账号 · 后续接 10:00 / 18:00 采集快照</span>
+      <button type="button" class="dashboard-refresh-btn" :disabled="dashboardLoading" @click="loadRealDashboard">
+        {{ dashboardLoading ? '读取中' : '刷新数据' }}
+      </button>
+      <span class="snapshot-note">{{ dashboardStatusText }} · 当前 {{ filteredAccounts.length }} 个账号</span>
     </section>
 
     <section v-if="activeView === 'overview'" class="overview-layout">
@@ -89,9 +96,21 @@
           <div class="wide-chart-head">
             <div>
               <strong>播放排行榜</strong>
-              <span>按{{ activeDimensionMeta.label }}维度展示当前筛选范围的播放量排行</span>
+              <span>按{{ activeDimensionMeta.label }}维度展示播放排行，支持总览和单平台切换</span>
             </div>
-            <em>{{ activeRangeMeta.label }}口径 · {{ dashboardRows.length }} {{ activeDimensionMeta.unit }}</em>
+            <div class="wide-head-actions">
+              <em>{{ activeRangeMeta.label }}口径 · {{ playRankRows.length }} {{ activeDimensionMeta.unit }}</em>
+              <div class="rank-platform-tabs" role="tablist" aria-label="播放排行平台">
+                <button
+                  v-for="platform in playRankPlatformOptions"
+                  :key="platform.id"
+                  type="button"
+                  :class="{ active: playRankPlatform === platform.id }"
+                  @click="playRankPlatform = platform.id">
+                  {{ platform.label }}
+                </button>
+              </div>
+            </div>
           </div>
           <div class="play-rank-showcase" v-if="overviewPlayRankRows.length">
             <article class="play-rank-hero">
@@ -107,7 +126,7 @@
               <article v-for="item in overviewPlayRankRows.slice(1, 5)" :key="item.id" class="play-rank-tile">
                 <span>#{{ item.rank }}</span>
                 <strong>{{ item.account }}</strong>
-                <em>{{ item.groupName }}</em>
+                <em>{{ item.groupName }} · {{ item.platformLabel }}</em>
                 <b>{{ formatCompactNumber(item.value) }}</b>
               </article>
             </div>
@@ -129,7 +148,7 @@
                 <span>默认按日统计，右侧可切换为按周维度</span>
               </div>
               <div class="wide-head-actions">
-                <em>总发文 {{ formatCompactNumber(sumBy(filteredAccounts, rangePosts)) }} 条</em>
+                <em>{{ postScopeLabel }} {{ formatCompactNumber(displayPostTotal) }} 条<span v-if="postRecordTotal !== displayPostTotal"> · 平台记录 {{ formatCompactNumber(postRecordTotal) }} 条</span></em>
                 <div class="wide-granularity-tabs" role="tablist" aria-label="发文量维度">
                   <button
                     v-for="option in postGranularityOptions"
@@ -147,7 +166,9 @@
                 v-for="bar in overviewPostBars"
                 :key="bar.label"
                 class="wide-bar-item"
-                :style="{ '--bar-height': `${bar.height}%` }">
+                :class="{ empty: !bar.value }"
+                :style="{ '--bar-height': `${bar.height}%` }"
+                :title="bar.tooltip">
                 <strong>{{ bar.value }}</strong>
                 <i></i>
                 <span>{{ bar.label }}</span>
@@ -180,6 +201,50 @@
           </article>
         </div>
       </section>
+
+      <article class="recent-post-card">
+        <div class="recent-post-head">
+          <div>
+            <strong>近期发布内容</strong>
+            <span>按发布时间倒序展示当前筛选下最近发出的内容</span>
+          </div>
+          <div class="recent-post-head-actions">
+            <em>{{ displayPostWorks.length }} 条</em>
+            <button type="button" class="chart-more-btn recent-post-more" @click="openRecentPostsMore">MORE›</button>
+          </div>
+        </div>
+        <div v-if="recentPostRows.length" class="recent-post-list">
+          <div
+            v-for="item in recentPostRows"
+            :key="item.id"
+            class="recent-post-row"
+            :class="contentToneClass(item)"
+            :style="{ '--post-platform-color': platformAccentColor(item.platform), '--post-kind-color': contentToneColor(item) }">
+            <i :class="['platform-badge', platformToneClass(item.platform)]">
+              <img v-if="platformIcon(item.platform)" :src="platformIcon(item.platform)" alt="" />
+              <span v-else>{{ platformShortLabel(item.platform) }}</span>
+            </i>
+            <div class="recent-post-title">
+              <strong :title="item.title">{{ item.title }}</strong>
+              <small>
+                <span>{{ item.account }} · {{ item.groupName }} · {{ item.platformLabel || item.platform }}</span>
+                <b class="content-kind-pill" :class="contentToneClass(item)" :title="item.businessReason || item.contentType || '视频'">{{ contentToneLabel(item) }}</b>
+              </small>
+            </div>
+            <strong class="recent-post-hot">{{ item.level || '热度' }}</strong>
+            <div class="recent-post-meta">
+              <span>时 {{ formatDashboardTime(item.publishAt || item.publishDate) }}</span>
+              <b class="metric-text views">播 {{ formatCompactNumber(item.views) }}</b>
+              <b class="metric-text likes">赞 {{ formatCompactNumber(item.likes) }}</b>
+              <b>评 {{ formatCompactNumber(item.comments) }}</b>
+              <em>热 {{ formatCompactNumber(item.hotIndex) }}</em>
+            </div>
+          </div>
+        </div>
+        <div v-else class="recent-post-empty">
+          当前筛选下还没有可展示的近期发布内容
+        </div>
+      </article>
 
       <section class="analysis-grid">
         <article class="account-cosmos-card">
@@ -220,7 +285,19 @@
             :style="{ '--metric-color': panel.color }">
             <div class="chart-head">
               <strong>{{ panel.title }}</strong>
-              <button type="button" @click="openChartMore(panel)">MORE›</button>
+              <div class="chart-head-actions">
+                <div class="metric-mode-tabs" role="tablist" :aria-label="`${panel.title}维度`">
+                  <button
+                    v-for="option in metricModeOptions"
+                    :key="option.id"
+                    type="button"
+                    :class="{ active: metricDisplayModes[panel.key] === option.id }"
+                    @click="metricDisplayModes[panel.key] = option.id">
+                    {{ option.label }}
+                  </button>
+                </div>
+                <button type="button" class="chart-more-btn" @click="openChartMore(panel)">MORE›</button>
+              </div>
             </div>
             <div class="chart-legend">
               <i></i>
@@ -235,8 +312,8 @@
             <div class="chart-detail-list">
               <div v-for="item in panel.rows" :key="`${panel.key}-${item.id}-detail`" class="chart-detail-row">
                 <span>#{{ item.rank }}</span>
-                <strong>{{ item.account }}</strong>
-                <em>{{ item.groupName }}</em>
+                <strong :title="item.title || item.account">{{ item.displayName || item.account }}</strong>
+                <em :title="item.subtitle || item.groupName">{{ item.subtitle || item.groupName }}</em>
                 <i><u :style="{ width: item.height + '%' }"></u></i>
                 <b>{{ panel.format(item.rawValue) }}</b>
                 <small>{{ item.share }}%</small>
@@ -266,7 +343,13 @@
           <div v-for="item in detailRows" :key="item.id" class="account-table-row">
             <strong>{{ item.account }}</strong>
             <span>{{ item.groupName }}</span>
-            <span>{{ item.platformLabel }}</span>
+            <span class="platform-cell">
+              <i :class="['platform-badge', platformToneClass(item.platform)]">
+                <img v-if="platformIcon(item.platform)" :src="platformIcon(item.platform)" alt="" />
+                <span v-else>{{ platformShortLabel(item.platform) }}</span>
+              </i>
+              <b>{{ item.platformLabel }}</b>
+            </span>
             <span>{{ formatCompactNumber(item.totalViews) }}</span>
             <span class="metric-text views">{{ formatCompactNumber(item.yesterdayViews) }}</span>
             <span class="metric-text likes">{{ formatCompactNumber(item.yesterdayLikes) }}</span>
@@ -313,10 +396,19 @@
           <span>平台：{{ singlePlatformLabel }}</span>
           <span>小组：{{ singleGroupLabel }}</span>
           <span>{{ singleFilteredAccounts.length }} 个账号</span>
+          <span v-if="selectedAccount">采集：{{ formatDashboardTime(selectedAccount.lastCollectedAt) }}</span>
+          <span v-if="selectedAccount">最近发文：{{ selectedAccount.latestWorkDate || '暂无' }}</span>
         </div>
         <div v-if="selectedAccount" class="single-profile">
           <strong>{{ selectedAccount.account }}</strong>
-          <span>{{ selectedAccount.groupName }} / {{ selectedAccount.platformLabel }} / {{ selectedAccount.owner }}</span>
+          <span>
+            {{ selectedAccount.groupName }} /
+            <i :class="['platform-badge', platformToneClass(selectedAccount.platform)]">
+              <img v-if="platformIcon(selectedAccount.platform)" :src="platformIcon(selectedAccount.platform)" alt="" />
+              <span v-else>{{ platformShortLabel(selectedAccount.platform) }}</span>
+            </i>
+            {{ selectedAccount.platformLabel }} / {{ selectedAccount.owner || '未填负责人' }}
+          </span>
           <em>{{ selectedAccount.profile || '暂未绑定 profile' }}</em>
         </div>
         <div v-if="selectedAccount" class="single-kpis">
@@ -353,22 +445,40 @@
 
         <article class="single-history-card">
           <div class="panel-head">
-            <strong>近 8 次快照</strong>
-            <span>后续接真实采集记录</span>
+            <strong>视频明细</strong>
+            <span>展示当前选中账号的全部作品</span>
           </div>
-          <div class="snapshot-table">
-            <div class="snapshot-head">
-              <span>快照</span>
+          <div v-if="selectedAccountWorks.length" class="single-work-table">
+            <div class="single-work-head">
+              <span>作品</span>
+              <span>发布时间</span>
               <span>播放</span>
               <span>点赞</span>
-              <span>粉丝</span>
+              <span>评论</span>
+              <span>完播</span>
+              <span>指数</span>
             </div>
-            <div v-for="row in singleSnapshots" :key="row.label" class="snapshot-row">
-              <span>{{ row.label }}</span>
-              <strong>{{ formatCompactNumber(row.views) }}</strong>
-              <strong class="metric-text likes">{{ formatCompactNumber(row.likes) }}</strong>
-              <em>{{ formatCompactNumber(row.fans) }}</em>
+            <div
+              v-for="item in selectedAccountWorks"
+              :key="item.id"
+              class="single-work-row"
+              :class="contentToneClass(item)">
+              <div class="single-work-title">
+                <strong>{{ item.title }}</strong>
+                <small>
+                  <b class="content-kind-pill" :class="contentToneClass(item)" :title="item.businessReason || item.contentType || '视频'">{{ contentToneLabel(item) }}</b>
+                </small>
+              </div>
+              <span>{{ item.publishAt || item.publishDate || '-' }}</span>
+              <strong class="metric-text views">{{ formatCompactNumber(item.views) }}</strong>
+              <strong class="metric-text likes">{{ formatCompactNumber(item.likes) }}</strong>
+              <span>{{ formatCompactNumber(item.comments) }}</span>
+              <span>{{ Number(item.completionRate) || 0 }}%</span>
+              <em>{{ formatCompactNumber(item.hotIndex) }}</em>
             </div>
+          </div>
+          <div v-else class="single-empty-state">
+            当前账号还没有可展示的真实作品数据
           </div>
         </article>
       </main>
@@ -411,7 +521,7 @@
                 <div class="tree-group-node">
                   <span>#{{ index + 1 }} · {{ group.meme }}</span>
                   <strong>{{ group.groupName }}</strong>
-                  <em>{{ group.accountCount }}号 · 完播 {{ group.completionRate }}% · {{ group.score }} 战力</em>
+                  <em>{{ group.accountCount }} 个平台账号 · 完播 {{ group.completionRate }}% · {{ group.score }} 战力</em>
                 </div>
                 <div class="tree-leaves">
                   <span
@@ -420,7 +530,7 @@
                     class="tree-leaf"
                     :class="leaf.typeClass"
                     :style="{ '--leaf-width': leaf.width + '%' }">
-                    <b>{{ leaf.account }}</b>
+                    <b>{{ leaf.account }} · {{ leaf.platformLabel }}</b>
                     <em>{{ leaf.tag }}</em>
                     <i>{{ leaf.score }}</i>
                     <u></u>
@@ -481,7 +591,7 @@
           </div>
           <div class="completion-list large">
             <div v-for="item in completionRows" :key="item.id" class="completion-row">
-              <b>{{ item.account }}</b>
+              <b>{{ item.account }} · {{ item.platformLabel || item.platform }}</b>
               <em>{{ item.groupName }}</em>
               <strong>{{ item.completionRate }}%</strong>
               <i><u :style="{ width: item.completionRate + '%' }"></u></i>
@@ -630,7 +740,14 @@
         <article class="hot-hero-card" v-if="topHotVideo">
           <div class="panel-head">
             <strong>本期首位爆款</strong>
-            <span>{{ topHotVideo.account }} · {{ topHotVideo.groupName }} · {{ topHotVideo.platformLabel }}</span>
+            <span>
+              {{ topHotVideo.account }} · {{ topHotVideo.groupName }} ·
+              <i :class="['platform-badge', platformToneClass(topHotVideo.platform)]">
+                <img v-if="platformIcon(topHotVideo.platform)" :src="platformIcon(topHotVideo.platform)" alt="" />
+                <span v-else>{{ platformShortLabel(topHotVideo.platform) }}</span>
+              </i>
+              {{ topHotVideo.platformLabel }}
+            </span>
           </div>
           <div class="hot-hero">
             <i>{{ topHotVideo.level }}</i>
@@ -677,7 +794,13 @@
               <span>{{ index + 1 }}</span>
               <div>
                 <strong>{{ item.title }}</strong>
-                <em>{{ item.account }} · {{ item.contentType }} · 完播 {{ item.completionRate }}%</em>
+                <em>
+                  <i :class="['platform-badge', platformToneClass(item.platform)]">
+                    <img v-if="platformIcon(item.platform)" :src="platformIcon(item.platform)" alt="" />
+                    <span v-else>{{ platformShortLabel(item.platform) }}</span>
+                  </i>
+                  {{ item.account }} · {{ contentToneLabel(item) }} · 完播 {{ item.completionRate }}%
+                </em>
               </div>
               <b>{{ item.hotIndex }}</b>
             </div>
@@ -687,12 +810,13 @@
         <article class="hot-table-card">
           <div class="panel-head">
             <strong>爆款作品明细</strong>
-            <span>{{ hotVideoRows.length }} 条占位作品 · 后续接投稿导出表</span>
+            <span>{{ hotVideoRows.length }} 条{{ dashboardWorks.length ? '真实作品' : '占位作品' }}</span>
           </div>
           <div class="hot-video-table">
             <div class="hot-video-head">
               <span>作品</span>
               <span>账号</span>
+              <span>平台</span>
               <span>类型</span>
               <span>发布时间</span>
               <span>播放</span>
@@ -701,10 +825,23 @@
               <span>互动率</span>
               <span>指数</span>
             </div>
-            <div v-for="item in hotVideoRows.slice(0, 18)" :key="item.id" class="hot-video-row">
+            <div
+              v-for="item in hotVideoRows.slice(0, 18)"
+              :key="item.id"
+              class="hot-video-row"
+              :class="contentToneClass(item)">
               <strong>{{ item.title }}</strong>
               <span>{{ item.account }}</span>
-              <span>{{ item.contentType }}</span>
+              <span class="platform-cell">
+                <i :class="['platform-badge', platformToneClass(item.platform)]">
+                  <img v-if="platformIcon(item.platform)" :src="platformIcon(item.platform)" alt="" />
+                  <span v-else>{{ platformShortLabel(item.platform) }}</span>
+                </i>
+                <b>{{ item.platformLabel }}</b>
+              </span>
+              <span>
+                <b class="content-kind-pill" :class="contentToneClass(item)" :title="item.businessReason || item.contentType || '视频'">{{ contentToneLabel(item) }}</b>
+              </span>
               <span>{{ item.publishAt }}</span>
               <span class="metric-text views">{{ formatCompactNumber(item.views) }}</span>
               <span class="metric-text likes">{{ formatCompactNumber(item.likes) }}</span>
@@ -716,13 +853,98 @@
         </article>
       </section>
     </section>
+
+    <div v-if="metricModalOpen" class="metric-modal-mask" @click.self="closeMetricModal">
+      <section class="metric-modal" role="dialog" aria-modal="true" :aria-label="metricModalTitle">
+        <header class="metric-modal-head">
+          <div>
+            <strong>{{ metricModalTitle }}</strong>
+            <span>{{ metricModalSubtitle }}</span>
+          </div>
+          <button type="button" class="metric-modal-close" title="关闭" @click="closeMetricModal">×</button>
+        </header>
+        <div class="metric-modal-summary">
+          <span>
+            <em>当前口径</em>
+            <strong>{{ activeRangeMeta.label }}</strong>
+          </span>
+          <span>
+            <em>展示维度</em>
+            <strong>{{ metricModalModeLabel }}</strong>
+          </span>
+          <span>
+            <em>数据量</em>
+            <strong>{{ metricModalRows.length }} 条</strong>
+          </span>
+          <span>
+            <em>合计</em>
+            <strong>{{ formatCompactNumber(metricModalTotal) }}</strong>
+          </span>
+        </div>
+        <div v-if="metricModalRows.length" class="metric-modal-table">
+          <template v-if="metricModalMode === 'work'">
+            <div class="metric-modal-row metric-modal-row-head work">
+              <span>排名</span>
+              <span>作品</span>
+              <span>账号</span>
+              <span>平台</span>
+              <span>发布时间</span>
+              <span>{{ metricModalValueLabel }}</span>
+              <span>点赞</span>
+              <span>评论</span>
+              <span>互动率</span>
+            </div>
+            <div v-for="row in metricModalRows" :key="row.id" class="metric-modal-row work">
+              <b>#{{ row.rank }}</b>
+              <strong :title="row.title">{{ row.title }}</strong>
+              <span>{{ row.account }}</span>
+              <span>{{ row.platformLabel }}</span>
+              <span>{{ row.publishAt || row.publishDate || '-' }}</span>
+              <em>{{ formatCompactNumber(row.rawValue) }}</em>
+              <span>{{ formatCompactNumber(row.likes) }}</span>
+              <span>{{ formatCompactNumber(row.comments) }}</span>
+              <span>{{ row.interactionRate }}%</span>
+            </div>
+          </template>
+          <template v-else>
+            <div class="metric-modal-row metric-modal-row-head account">
+              <span>排名</span>
+              <span>账号</span>
+              <span>小组</span>
+              <span>平台</span>
+              <span>{{ metricModalValueLabel }}</span>
+              <span>播放</span>
+              <span>点赞</span>
+              <span>粉丝变化</span>
+              <span>完播率</span>
+            </div>
+            <div v-for="row in metricModalRows" :key="row.id" class="metric-modal-row account">
+              <b>#{{ row.rank }}</b>
+              <strong>{{ row.account }}</strong>
+              <span>{{ row.groupName }}</span>
+              <span>{{ row.platformLabel }}</span>
+              <em>{{ formatCompactNumber(row.rawValue) }}</em>
+              <span>{{ formatCompactNumber(row.viewsValue) }}</span>
+              <span>{{ formatCompactNumber(row.likesValue) }}</span>
+              <span>+{{ formatCompactNumber(row.fansValue) }}</span>
+              <span>{{ row.completionValue }}%</span>
+            </div>
+          </template>
+        </div>
+        <div v-else class="metric-modal-empty">当前筛选范围暂无数据。</div>
+      </section>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { accountDataMock, formatCompactNumber, platformOptions } from './account-data/mockData'
 import { updatePlanRows } from './account-data/updatePlan'
+import { loadAccountDataCollectStatus, loadAccountDataDashboard } from '../api/accountData'
+import douyinIcon from '../assets/platform-icons/douyin.ico'
+import bilibiliIcon from '../assets/platform-icons/bilibili.ico'
+import kuaishouIcon from '../assets/platform-icons/kuaishou.ico'
 
 const metricColors = {
   people: '#ff6b00',
@@ -735,6 +957,62 @@ const metricColors = {
   daily: '#8b6be8',
   plan: '#00a67e',
   warn: '#ef4444'
+}
+
+const platformVisuals = {
+  all: { short: '全', className: 'platform-all' },
+  douyin: { short: '抖', className: 'platform-douyin', icon: douyinIcon },
+  bilibili: { short: 'B', className: 'platform-bilibili', icon: bilibiliIcon },
+  kuaishou: { short: '快', className: 'platform-kuaishou', icon: kuaishouIcon }
+}
+
+function platformShortLabel(platform) {
+  return platformVisuals[platform]?.short || String(platform || '?').slice(0, 1).toUpperCase()
+}
+
+function platformToneClass(platform) {
+  return platformVisuals[platform]?.className || 'platform-default'
+}
+
+function platformIcon(platform) {
+  return platformVisuals[platform]?.icon || ''
+}
+
+function platformAccentColor(platform) {
+  const map = {
+    all: '#5f6878',
+    douyin: '#111827',
+    bilibili: '#00a1d6',
+    kuaishou: '#ff7a00',
+    xiaohongshu: '#ff2442',
+    wechatVideo: '#18a058'
+  }
+  return map[platform] || '#7f8794'
+}
+
+function contentToneClass(item) {
+  const content = String(item?.contentType || '').trim()
+  const kind = String(item?.businessKind || '').trim()
+  if (content === '商单' || kind === '平台单') return 'is-business'
+  if (kind.includes('疑似')) return 'is-suspect'
+  if (kind.includes('分发')) return 'is-distribution'
+  return 'is-daily'
+}
+
+function contentToneColor(item) {
+  const cls = contentToneClass(item)
+  if (cls === 'is-business') return '#ff6b00'
+  if (cls === 'is-suspect') return '#8b6be8'
+  if (cls === 'is-distribution') return '#00a67e'
+  return '#64748b'
+}
+
+function contentToneLabel(item) {
+  const content = String(item?.contentType || '').trim()
+  const kind = String(item?.businessKind || '').trim()
+  if (content === '商单') return kind || '平台单'
+  if (kind) return kind
+  return content || '视频'
 }
 
 const viewOptions = [
@@ -755,8 +1033,7 @@ const rangeOptions = [
 
 const dimensionOptions = [
   { id: 'account', label: '账号', unit: '个账号' },
-  { id: 'group', label: '组别', unit: '个小组' },
-  { id: 'department', label: '部门', unit: '个部门' }
+  { id: 'department', label: '部门视角', unit: '个小组' }
 ]
 
 const rangeMeta = {
@@ -785,6 +1062,18 @@ const postGranularityOptions = [
   { id: 'week', label: '按周' }
 ]
 
+const metricModeOptions = [
+  { id: 'account', label: '账号' },
+  { id: 'work', label: '作品' }
+]
+
+const playRankPlatformOptions = [
+  { id: 'all', label: '总览' },
+  { id: 'bilibili', label: 'B站' },
+  { id: 'douyin', label: '抖音' },
+  { id: 'kuaishou', label: '快手' }
+]
+
 const battleMemePool = [
   '今天上大分',
   '稳住别浪',
@@ -797,9 +1086,13 @@ const battleMemePool = [
 ]
 
 const updatePlanAccountAliases = {
-  '最翁damnnn': '最翁说游',
-  麦小雯: '麦晓花',
-  上官北: '上官北丶'
+  葵仔不想肝: '魁仔不想肝',
+  畅玩百晓生: '畅玩白晓生',
+  最翁damnnn: '最翁damn',
+  上官北: '上官北丶',
+  雷鸭fist: '雷鸭Fist',
+  lee小强: 'Lee小强',
+  夏天丶cat: '夏天丶Cat'
 }
 
 const updatePlanStatusMap = {
@@ -815,21 +1108,49 @@ const activePlatform = ref('all')
 const activeRange = ref('all')
 const activeGroup = ref('all')
 const activeDimension = ref('account')
+const playRankPlatform = ref('all')
+const metricDisplayModes = ref({
+  views: 'account',
+  likes: 'account'
+})
 const keyword = ref('')
 const postGranularity = ref('day')
 const singleGroup = ref('all')
 const singlePlatform = ref('all')
 const selectedAccountId = ref('')
 const detailMetric = ref('views')
+const metricModalKey = ref('')
+const realDashboard = ref(null)
+const dashboardLoading = ref(false)
+const dashboardError = ref('')
+let dashboardPollTimer = null
+let lastCollectionRunning = false
+let lastIndexDigest = ''
 const chartTicks = [32, 58, 84]
 const lineTicks = [36, 78, 120, 162]
 const overviewPostDayLabels = ['1日', '3日', '5日', '7日', '9日', '11日', '13日', '15日', '17日', '19日', '21日', '23日', '25日', '27日']
 const overviewPostWeekLabels = ['第1周', '第2周', '第3周', '第4周', '第5周', '第6周', '第7周', '第8周']
 const activeRangeMeta = computed(() => rangeMeta[activeRange.value] || rangeMeta.all)
+const dashboardAccounts = computed(() => {
+  const rows = Array.isArray(realDashboard.value?.accounts) ? realDashboard.value.accounts : []
+  return rows.length ? rows : accountDataMock
+})
+const dashboardWorks = computed(() => Array.isArray(realDashboard.value?.works) ? realDashboard.value.works : [])
+const dashboardUsingReal = computed(() => Array.isArray(realDashboard.value?.accounts) && realDashboard.value.accounts.length > 0)
+const dashboardSourceCount = computed(() => Array.isArray(realDashboard.value?.sources) ? realDashboard.value.sources.length : 0)
+const dashboardStatusText = computed(() => {
+  if (dashboardLoading.value) return '正在读取真实采集数据'
+  if (dashboardError.value) return `真实数据读取失败，已使用占位数据：${dashboardError.value}`
+  if (dashboardUsingReal.value) {
+    const generatedAt = realDashboard.value?.generatedAt ? new Date(realDashboard.value.generatedAt).toLocaleString('zh-CN', { hour12: false }) : ''
+    return `真实采集数据 · 按平台口径 · ${dashboardSourceCount.value} 个采集源${generatedAt ? ' · ' + generatedAt : ''}`
+  }
+  return '占位数据 · 等待采集结果'
+})
 
 const platformFiltered = computed(() => {
-  if (activePlatform.value === 'all') return accountDataMock
-  return accountDataMock.filter(item => item.platform === activePlatform.value)
+  if (activePlatform.value === 'all') return dashboardAccounts.value
+  return dashboardAccounts.value.filter(item => item.platform === activePlatform.value)
 })
 
 const groupOptions = computed(() => Array.from(new Set(platformFiltered.value.map(item => item.groupName))))
@@ -841,15 +1162,226 @@ const singleGroupLabel = computed(() => singleGroup.value === 'all' ? '全部小
 const activeDimensionMeta = computed(() => dimensionOptions.find(item => item.id === activeDimension.value) || dimensionOptions[0])
 
 const filteredAccounts = computed(() => {
-  const word = keyword.value.toLowerCase()
-  return platformFiltered.value
-    .filter(item => activeGroup.value === 'all' || item.groupName === activeGroup.value)
-    .filter(item => !word || item.account.toLowerCase().includes(word))
+  return filterAccountsByPlatform(activePlatform.value)
 })
 
+const filteredAccountIds = computed(() => new Set(filteredAccounts.value.map(item => item.id)))
+
+function accountMatchesCommonFilters(item) {
+  const word = keyword.value.toLowerCase()
+  return (activeGroup.value === 'all' || item.groupName === activeGroup.value) &&
+    (!word || item.account.toLowerCase().includes(word))
+}
+
+function filterAccountsByPlatform(platform = activePlatform.value) {
+  return dashboardAccounts.value
+    .filter(item => platform === 'all' || item.platform === platform)
+    .filter(accountMatchesCommonFilters)
+}
+
+function parseDashboardDate(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return null
+  const direct = new Date(raw)
+  if (!Number.isNaN(direct.getTime())) return direct
+  const date = new Date(raw.replace(/[年月]/g, '/').replace(/[日号]/g, '').replace(/-/g, '/'))
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
+function dashboardDateKey(value) {
+  const date = parseDashboardDate(value)
+  if (!date) return ''
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, '0'),
+    String(date.getDate()).padStart(2, '0')
+  ].join('-')
+}
+
+function formatDashboardTime(value) {
+  const date = parseDashboardDate(value)
+  if (!date) return '暂无'
+  return date.toLocaleString('zh-CN', {
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  })
+}
+
+function startOfDashboardDay(date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate())
+}
+
+function startOfDashboardWeek(date) {
+  const day = date.getDay() || 7
+  return addDashboardDays(startOfDashboardDay(date), 1 - day)
+}
+
+function addDashboardDays(date, days) {
+  const next = new Date(date)
+  next.setDate(next.getDate() + days)
+  return next
+}
+
+function dashboardRangeWindow(range, now = new Date()) {
+  const today = startOfDashboardDay(now)
+  if (range === 'yesterday') {
+    const start = addDashboardDays(today, -1)
+    return { start, end: today }
+  }
+  if (range === 'week') {
+    const day = today.getDay() || 7
+    return { start: addDashboardDays(today, 1 - day), end: addDashboardDays(today, 1) }
+  }
+  if (range === 'month') {
+    return { start: new Date(today.getFullYear(), today.getMonth(), 1), end: addDashboardDays(today, 1) }
+  }
+  if (range === 'year') {
+    return { start: new Date(today.getFullYear(), 0, 1), end: addDashboardDays(today, 1) }
+  }
+  return null
+}
+
+function workInDashboardRange(work, range = activeRange.value) {
+  if (range === 'all') return true
+  const date = parseDashboardDate(work?.publishDate || work?.publishAt)
+  const window = dashboardRangeWindow(range)
+  return Boolean(date && window && date >= window.start && date < window.end)
+}
+
+function postChartDaySlots(limit) {
+  const today = startOfDashboardDay(new Date())
+  const window = dashboardRangeWindow(activeRange.value)
+  let start = addDashboardDays(today, 1 - limit)
+  let end = today
+  if (window) {
+    start = window.start
+    end = addDashboardDays(window.end, -1)
+    const minStart = addDashboardDays(end, 1 - limit)
+    if (start < minStart) start = minStart
+  }
+  const slots = []
+  for (let cursor = start; cursor <= end; cursor = addDashboardDays(cursor, 1)) {
+    slots.push({
+      key: dashboardDateKey(cursor),
+      label: `${cursor.getMonth() + 1}/${cursor.getDate()}`
+    })
+  }
+  return slots
+}
+
+function postChartWeekSlots(limit) {
+  const today = startOfDashboardDay(new Date())
+  const window = dashboardRangeWindow(activeRange.value)
+  let start = addDashboardDays(startOfDashboardWeek(today), -7 * (limit - 1))
+  let end = startOfDashboardWeek(today)
+  if (window) {
+    start = startOfDashboardWeek(window.start)
+    end = startOfDashboardWeek(addDashboardDays(window.end, -1))
+    const minStart = addDashboardDays(end, -7 * (limit - 1))
+    if (start < minStart) start = minStart
+  }
+  const slots = []
+  for (let cursor = start; cursor <= end; cursor = addDashboardDays(cursor, 7)) {
+    slots.push({
+      key: dashboardDateKey(cursor),
+      label: `${cursor.getMonth() + 1}/${cursor.getDate()}周`
+    })
+  }
+  return slots
+}
+
+function normalizeWorkTitle(title) {
+  return String(title || '')
+    .trim()
+    .toLowerCase()
+    .replace(/#[^\s#]+/g, '')
+    .replace(/[\s\u00a0·丶、，,。.!！?？:：;；_\-—"'“”`]+/g, '')
+    .slice(0, 64)
+}
+
+function uniqueContentKey(work) {
+  const accountKey = normalizeAccountKey(work?.account || work?.profile || work?.accountId)
+  const titleKey = normalizeWorkTitle(work?.title)
+  const dayKey = work?.publishDate || dashboardDateKey(work?.publishAt)
+  return [accountKey, titleKey || work?.id || '', dayKey || 'unknown-date'].join('|')
+}
+
+
+function cleanTooltipText(value) {
+  return String(value || '')
+    .replace(/\uFFFD/g, '')
+    .replace(/[??]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+function dedupeContentWorks(rows) {
+  const map = new Map()
+  rows.forEach((work) => {
+    const key = uniqueContentKey(work)
+    const current = map.get(key)
+    if (!current || (Number(work?.views) || 0) > (Number(current?.views) || 0)) {
+      map.set(key, work)
+    }
+  })
+  return Array.from(map.values())
+}
+
+const filteredRangeWorks = computed(() => {
+  return filterWorksByPlatform(activePlatform.value)
+})
+
+function filterWorksByPlatform(platform = activePlatform.value) {
+  if (!dashboardWorks.value.length) return []
+  const accountIds = new Set(filterAccountsByPlatform(platform).map(item => item.id))
+  return dashboardWorks.value
+    .filter(item => !accountIds.size || accountIds.has(item.accountId))
+    .filter(item => platform === 'all' || item.platform === platform)
+    .filter(item => !item.publishVolumeExcluded)
+    .filter(item => workInDashboardRange(item))
+}
+
+const displayPostWorks = computed(() => {
+  return activePlatform.value === 'all'
+    ? dedupeContentWorks(filteredRangeWorks.value)
+    : filteredRangeWorks.value
+})
+
+const recentPostRows = computed(() => {
+  return [...displayPostWorks.value]
+    .map((work) => {
+      const date = parseDashboardDate(work.publishAt || work.publishDate)
+      return {
+        ...work,
+        title: work.title || '未命名作品',
+        sortTime: date ? date.getTime() : 0,
+        hotIndex: Number(work.hotIndex) || 0,
+        views: Number(work.views) || 0,
+        likes: Number(work.likes) || 0,
+        comments: Number(work.comments) || 0
+      }
+    })
+    .sort((a, b) => b.sortTime - a.sortTime || b.hotIndex - a.hotIndex || b.views - a.views)
+    .slice(0, 12)
+})
+
+const postRecordTotal = computed(() => {
+  if (dashboardWorks.value.length) return filteredRangeWorks.value.length
+  return sumBy(filteredAccounts.value, rangePosts)
+})
+
+const displayPostTotal = computed(() => {
+  if (dashboardWorks.value.length) return displayPostWorks.value.length
+  return sumBy(filteredAccounts.value, rangePosts)
+})
+
+const postScopeLabel = computed(() => activePlatform.value === 'all' ? '去重发文' : `${activePlatformLabel.value}发布`)
+
 const singlePlatformFiltered = computed(() => {
-  if (singlePlatform.value === 'all') return accountDataMock
-  return accountDataMock.filter(item => item.platform === singlePlatform.value)
+  if (singlePlatform.value === 'all') return dashboardAccounts.value
+  return dashboardAccounts.value.filter(item => item.platform === singlePlatform.value)
 })
 
 const singleGroupOptions = computed(() => Array.from(new Set(singlePlatformFiltered.value.map(item => item.groupName))))
@@ -870,7 +1402,18 @@ watch(singleFilteredAccounts, (rows) => {
   selectedAccountId.value = rows[0]?.id || ''
 }, { immediate: true })
 
+watch(activePlatform, (platform) => {
+  playRankPlatform.value = platform
+})
+
+watch(activeDimension, (dimension) => {
+  if (!dimensionOptions.some(item => item.id === dimension)) {
+    activeDimension.value = 'account'
+  }
+})
+
 function postCount(item) {
+  if (item?.publishVolumeExcluded) return 0
   if (Number.isFinite(item.postTotal)) return item.postTotal
   return Math.max(6, Math.round(item.totalViews / 4200 + item.hitWorks * 2))
 }
@@ -879,18 +1422,22 @@ function departmentName(item) {
   return Number(item.groupId) <= 3 ? '内容一部' : '内容二部'
 }
 
+function aggregateDepartmentGroupRows(rows) {
+  return aggregateDimensionRows(rows, item => item.groupName, item => item.groupName, 'departmentGroup')
+}
+
 function aggregateDimensionRows(rows, keyGetter, labelGetter, type) {
   const map = new Map()
   rows.forEach((item) => {
     const key = keyGetter(item)
-    const current = map.get(key) || {
-      id: `${type}-${key}`,
-      account: labelGetter(item),
-      groupName: type === 'group' ? '组别聚合' : '部门聚合',
-      groupId: item.groupId,
-      platform: activePlatform.value,
-      platformLabel: activePlatformLabel.value,
-      owner: '',
+      const current = map.get(key) || {
+        id: `${type}-${key}`,
+        account: labelGetter(item),
+        groupName: type === 'departmentGroup' ? departmentName(item) : type === 'group' ? '组别聚合' : type === 'department' ? '部门聚合' : item.groupName,
+        groupId: item.groupId,
+        platform: activePlatform.value,
+        platformLabel: activePlatformLabel.value,
+        owner: item.owner || '',
       totalViews: 0,
       yesterdayViews: 0,
       totalLikes: 0,
@@ -918,13 +1465,18 @@ function aggregateDimensionRows(rows, keyGetter, labelGetter, type) {
     current.postTotal += postCount(item)
     current.accountCount += 1
     current.completionTotal += completionRate(item)
+    current.metricsByRange = mergeMetricsByRange(current.metricsByRange, item.metricsByRange)
     map.set(key, current)
   })
   return Array.from(map.values()).map((item) => ({
     ...item,
     completionValue: item.accountCount ? Math.round(item.completionTotal / item.accountCount) : 0,
-    groupName: `${item.accountCount} 个账号`,
-    owner: type === 'department' ? '部门聚合' : '小组聚合'
+    groupName: type === 'accountRollup'
+      ? item.groupName
+      : type === 'departmentGroup'
+        ? `${item.groupName} · ${item.accountCount} 个账号`
+        : `${item.accountCount} 个账号`,
+    owner: type === 'accountRollup' ? item.owner : type === 'departmentGroup' ? item.groupName : type === 'department' ? '部门聚合' : '小组聚合'
   }))
 }
 
@@ -956,25 +1508,55 @@ function completionRate(item) {
   return Math.min(92, Math.max(28, Math.round(42 + (seed % 38) + item.hitWorks * 1.8)))
 }
 
+function rangeMetric(item, range, key) {
+  const value = item?.metricsByRange?.[range]?.[key]
+  return Number.isFinite(Number(value)) ? Number(value) : null
+}
+
+function mergeMetricsByRange(base = {}, next = {}) {
+  const merged = { ...base }
+  Object.entries(next || {}).forEach(([range, metrics]) => {
+    const current = merged[range] || {}
+    merged[range] = {
+      views: (Number(current.views) || 0) + (Number(metrics.views) || 0),
+      likes: (Number(current.likes) || 0) + (Number(metrics.likes) || 0),
+      comments: (Number(current.comments) || 0) + (Number(metrics.comments) || 0),
+      favorites: (Number(current.favorites) || 0) + (Number(metrics.favorites) || 0),
+      shares: (Number(current.shares) || 0) + (Number(metrics.shares) || 0),
+      posts: (Number(current.posts) || 0) + (Number(metrics.posts) || 0),
+      fans: (Number(current.fans) || 0) + (Number(metrics.fans) || 0)
+    }
+  })
+  return merged
+}
+
 function rangeViews(item) {
+  const metric = rangeMetric(item, activeRange.value, 'views')
+  if (metric !== null) return metric
   return activeRangeMeta.value.total
     ? item.totalViews
     : Math.round(item.yesterdayViews * activeRangeMeta.value.scale)
 }
 
 function rangeLikes(item) {
+  const metric = rangeMetric(item, activeRange.value, 'likes')
+  if (metric !== null) return metric
   return activeRangeMeta.value.total
     ? item.totalLikes
     : Math.round(item.yesterdayLikes * activeRangeMeta.value.scale)
 }
 
 function rangeFans(item) {
+  const metric = rangeMetric(item, activeRange.value, 'fans')
+  if (metric !== null) return metric
   return activeRangeMeta.value.total
     ? item.followers
     : Math.round(item.followerDelta * activeRangeMeta.value.scale)
 }
 
 function rangePosts(item) {
+  const metric = rangeMetric(item, activeRange.value, 'posts')
+  if (metric !== null) return metric
   return activeRangeMeta.value.total
     ? postCount(item)
     : Math.max(1, Math.round(postCount(item) * activeRangeMeta.value.scale / 18))
@@ -982,6 +1564,7 @@ function rangePosts(item) {
 
 function monthlyPostCount(item) {
   if (!item) return 0
+  if (item.publishVolumeExcluded) return 0
   return Math.max(0, Math.round(postCount(item) * rangeMeta.month.scale / 18))
 }
 
@@ -999,7 +1582,7 @@ function updateMonthProgressRatio() {
 }
 
 function findUpdatePlanAccount(plan) {
-  const candidates = accountDataMock.filter(item => item.platform === plan.platform)
+  const candidates = dashboardAccounts.value.filter(item => item.platform === plan.platform)
   const planKey = normalizeAccountKey(plan.account)
   const targetName = updatePlanAccountAliases[planKey] || plan.account
   const targetKey = normalizeAccountKey(targetName)
@@ -1009,6 +1592,11 @@ function findUpdatePlanAccount(plan) {
       return accountKey && targetKey && (accountKey.includes(targetKey) || targetKey.includes(accountKey))
     }) ||
     null
+}
+
+function updatePlanEligibleCompleted(item) {
+  if (!item || item.publishVolumeExcluded) return 0
+  return monthlyPostCount(item)
 }
 
 function updatePlanStatus(plan, matchedAccount, completed, expected) {
@@ -1047,6 +1635,83 @@ function chartStats(sortedRows, getter, topRows, format) {
   ]
 }
 
+function chartStatsFromRawRows(sortedRows, topRows, format) {
+  const total = sumBy(sortedRows, item => Number(item.rawValue) || 0)
+  const topValue = topRows[0]?.rawValue || 0
+  const avgValue = sortedRows.length ? Math.round(total / sortedRows.length) : 0
+  const topTotal = sumBy(topRows, item => Number(item.rawValue) || 0)
+  return [
+    { label: '最高', value: format(topValue) },
+    { label: '均值', value: format(avgValue) },
+    { label: 'Top5占比', value: `${total ? Math.round(topTotal / total * 100) : 0}%` }
+  ]
+}
+
+function metricMode(metric) {
+  return metricDisplayModes.value?.[metric] || 'account'
+}
+
+function workMetricRows(metric) {
+  if (!dashboardWorks.value.length) return []
+  const metricKey = metric === 'likes' ? 'likes' : 'views'
+  const rows = filterWorksByPlatform(activePlatform.value)
+    .map((work) => ({
+      ...work,
+      displayName: work.title || '未命名作品',
+      subtitle: `${work.account} · ${work.platformLabel || work.platform}${work.publishAt ? ' · ' + work.publishAt : ''}`,
+      rawValue: Number(work[metricKey]) || 0
+    }))
+    .sort((a, b) => b.rawValue - a.rawValue)
+  const topRows = rows.slice(0, 5)
+  const total = Math.max(1, sumBy(rows, item => item.rawValue))
+  const max = Math.max(1, ...topRows.map(item => item.rawValue))
+  return topRows.map((item, index) => ({
+    ...item,
+    rank: index + 1,
+    height: Math.max(4, Math.round(item.rawValue / max * 100)),
+    share: Math.max(1, Math.round(item.rawValue / total * 100))
+  }))
+}
+
+function accountMetricRows(sortedRows, getter, totalBase) {
+  return withBarHeight(sortedRows.slice(0, 5), getter, totalBase)
+    .map(item => ({
+      ...item,
+      displayName: item.account,
+      subtitle: item.groupName
+    }))
+}
+
+function fullWorkMetricRows(metric) {
+  if (!dashboardWorks.value.length) return []
+  const metricKey = metric === 'likes' ? 'likes' : 'views'
+  return filterWorksByPlatform(activePlatform.value)
+    .map((work) => ({
+      ...work,
+      title: work.title || '未命名作品',
+      rawValue: Number(work[metricKey]) || 0,
+      likes: Number(work.likes) || 0,
+      comments: Number(work.comments) || 0,
+      interactionRate: Number(work.interactionRate) || 0
+    }))
+    .sort((a, b) => b.rawValue - a.rawValue || (Number(b.views) || 0) - (Number(a.views) || 0))
+    .map((item, index) => ({ ...item, rank: index + 1 }))
+}
+
+function fullAccountMetricRows(metric) {
+  return [...dashboardRows.value]
+    .map((item) => ({
+      ...item,
+      rawValue: metricValue(item, metric),
+      viewsValue: rangeViews(item),
+      likesValue: rangeLikes(item),
+      fansValue: Math.max(0, rangeFans(item)),
+      completionValue: completionRate(item)
+    }))
+    .sort((a, b) => b.rawValue - a.rawValue || b.viewsValue - a.viewsValue)
+    .map((item, index) => ({ ...item, rank: index + 1 }))
+}
+
 function trendPoints(values, width = 520, height = 112, padding = 12) {
   if (!Array.isArray(values) || values.length === 0) return ''
   const min = Math.min(...values)
@@ -1078,13 +1743,15 @@ function linePoints(values, width = 520, height = 172, padding = 14) {
 
 function openChartMore(panel) {
   detailMetric.value = panel?.key || 'views'
-  scrollToDetail()
+  metricModalKey.value = panel?.key || 'views'
 }
 
-function scrollToDetail() {
-  nextTick(() => {
-    document.querySelector('.detail-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  })
+function openRecentPostsMore() {
+  activeView.value = 'hotVideo'
+}
+
+function closeMetricModal() {
+  metricModalKey.value = ''
 }
 
 const kpiCards = computed(() => {
@@ -1092,13 +1759,18 @@ const kpiCards = computed(() => {
   const range = activeRangeMeta.value
   const accountCount = rows.length
   const followers = sumBy(rows, rangeFans)
-  const posts = sumBy(rows, rangePosts)
+  const posts = displayPostTotal.value
   const views = sumBy(rows, rangeViews)
   const likes = sumBy(rows, rangeLikes)
+  const postNote = dashboardWorks.value.length
+    ? (activePlatform.value === 'all'
+        ? `跨平台分发已去重${postRecordTotal.value !== posts ? ` · 平台记录 ${formatCompactNumber(postRecordTotal.value)} 条` : ''}`
+        : `${activePlatformLabel.value}作品表`)
+    : '由账号汇总估算'
   return [
     { key: 'people', label: '总账号数', value: accountCount, note: '当前筛选范围', icon: '人', color: metricColors.people },
     { key: 'fans', label: range.total ? '总粉丝数' : '粉丝增量', value: formatCompactNumber(followers), note: `${range.label}口径`, icon: '粉', color: metricColors.fans },
-    { key: 'posts', label: range.total ? '总发布数' : '发布增量', value: formatCompactNumber(posts), note: '由作品表接入', icon: '发', color: metricColors.posts },
+    { key: 'posts', label: activePlatform.value === 'all' ? (range.total ? '内容发文数' : '内容发文增量') : (range.total ? '平台发布数' : '平台发布增量'), value: formatCompactNumber(posts), note: postNote, icon: '发', color: metricColors.posts },
     { key: 'views', label: range.total ? '总曝光量' : '曝光增量', value: formatCompactNumber(views), note: `${range.label}口径`, icon: '播', color: metricColors.views },
     { key: 'likes', label: range.total ? '总点赞数' : '点赞增量', value: formatCompactNumber(likes), note: `${range.label}口径`, icon: '赞', color: metricColors.likes }
   ]
@@ -1109,9 +1781,20 @@ const dashboardRows = computed(() => {
     return aggregateDimensionRows(filteredAccounts.value, item => item.groupName, item => item.groupName, 'group')
   }
   if (activeDimension.value === 'department') {
-    return aggregateDimensionRows(filteredAccounts.value, departmentName, departmentName, 'department')
+    return aggregateDepartmentGroupRows(filteredAccounts.value)
   }
   return filteredAccounts.value
+})
+
+const playRankRows = computed(() => {
+  const rows = filterAccountsByPlatform(playRankPlatform.value)
+  if (activeDimension.value === 'department') {
+    return aggregateDepartmentGroupRows(rows)
+  }
+  if (playRankPlatform.value === 'all') {
+    return aggregateDimensionRows(rows, item => item.account, item => item.account, 'accountRollup')
+  }
+  return rows
 })
 
 const updatePlanDisplayRows = computed(() => {
@@ -1126,7 +1809,7 @@ const updatePlanDisplayRows = computed(() => {
     })
     .map((plan) => {
       const matchedAccount = findUpdatePlanAccount(plan)
-      const completed = matchedAccount ? monthlyPostCount(matchedAccount) : 0
+      const completed = matchedAccount ? updatePlanEligibleCompleted(matchedAccount) : 0
       const target = Number(plan.monthlyTarget) || 0
       const expected = Math.ceil(target * monthProgress)
       const gap = Math.max(0, target - completed)
@@ -1265,31 +1948,73 @@ const chartPanels = computed(() => {
   const likesSorted = [...rows].sort((a, b) => rangeLikes(b) - rangeLikes(a))
   const viewsTotal = sumBy(viewsSorted, rangeViews)
   const likesTotal = sumBy(likesSorted, rangeLikes)
-  const topViews = withBarHeight(viewsSorted.slice(0, 5), rangeViews, viewsTotal)
-  const topLikes = withBarHeight(likesSorted.slice(0, 5), rangeLikes, likesTotal)
+  const topViews = metricMode('views') === 'work'
+    ? workMetricRows('views')
+    : accountMetricRows(viewsSorted, rangeViews, viewsTotal)
+  const topLikes = metricMode('likes') === 'work'
+    ? workMetricRows('likes')
+    : accountMetricRows(likesSorted, rangeLikes, likesTotal)
+  const workViewsAll = metricMode('views') === 'work'
+    ? filterWorksByPlatform(activePlatform.value).map(work => ({ rawValue: Number(work.views) || 0 }))
+    : []
+  const workLikesAll = metricMode('likes') === 'work'
+    ? filterWorksByPlatform(activePlatform.value).map(work => ({ rawValue: Number(work.likes) || 0 }))
+    : []
   return [
     {
       key: 'views',
       title: range.total ? '总曝光量' : '曝光增量',
-      legend: range.total ? '曝光量' : '曝光增量',
+      legend: metricMode('views') === 'work' ? '作品曝光榜' : (range.total ? '账号曝光量' : '账号曝光增量'),
       unit: '万',
       color: metricColors.views,
       rows: topViews,
-      stats: chartStats(viewsSorted, rangeViews, topViews, formatCompactNumber),
+      stats: metricMode('views') === 'work'
+        ? chartStatsFromRawRows(workViewsAll.sort((a, b) => b.rawValue - a.rawValue), topViews, formatCompactNumber)
+        : chartStats(viewsSorted, rangeViews, topViews, formatCompactNumber),
       format: formatCompactNumber
     },
     {
       key: 'likes',
       title: range.total ? '总点赞数' : '点赞增量',
-      legend: range.total ? '点赞数' : '点赞增量',
+      legend: metricMode('likes') === 'work' ? '作品点赞榜' : (range.total ? '账号点赞数' : '账号点赞增量'),
       unit: '万',
       color: metricColors.likes,
       rows: topLikes,
-      stats: chartStats(likesSorted, rangeLikes, topLikes, formatCompactNumber),
+      stats: metricMode('likes') === 'work'
+        ? chartStatsFromRawRows(workLikesAll.sort((a, b) => b.rawValue - a.rawValue), topLikes, formatCompactNumber)
+        : chartStats(likesSorted, rangeLikes, topLikes, formatCompactNumber),
       format: formatCompactNumber
     }
   ]
 })
+
+const metricModalOpen = computed(() => Boolean(metricModalKey.value))
+const metricModalMetric = computed(() => metricModalKey.value || 'views')
+const metricModalMode = computed(() => metricMode(metricModalMetric.value))
+const metricModalModeLabel = computed(() => metricModalMode.value === 'work' ? '作品' : activeDimensionMeta.value.label)
+const metricModalValueLabel = computed(() => metricModalMetric.value === 'likes' ? '点赞' : '播放')
+const metricModalTitle = computed(() => {
+  const metricText = metricModalMetric.value === 'likes'
+    ? (activeRangeMeta.value.total ? '总点赞数' : '点赞增量')
+    : (activeRangeMeta.value.total ? '总曝光量' : '曝光增量')
+  return `${metricText}全量榜`
+})
+const metricModalSubtitle = computed(() => {
+  const filters = [
+    activeRangeMeta.value.label,
+    activePlatformLabel.value,
+    activeGroupLabel.value,
+    keyword.value ? `搜索：${keyword.value}` : ''
+  ].filter(Boolean)
+  return `${filters.join(' · ')} · ${metricModalModeLabel.value}维度`
+})
+const metricModalRows = computed(() => {
+  if (!metricModalOpen.value) return []
+  return metricModalMode.value === 'work'
+    ? fullWorkMetricRows(metricModalMetric.value)
+    : fullAccountMetricRows(metricModalMetric.value)
+})
+const metricModalTotal = computed(() => sumBy(metricModalRows.value, item => Number(item.rawValue) || 0))
 
 const constellationRows = computed(() => {
   const palette = ['#ff6b00', '#2f9bf0', '#8b6be8', '#f94d6a', '#18a058', '#ffa000']
@@ -1322,10 +2047,10 @@ const constellationRows = computed(() => {
 })
 
 const overviewPlayRankRows = computed(() => {
-  const rows = [...dashboardRows.value]
+  const rows = [...playRankRows.value]
     .sort((a, b) => rangeViews(b) - rangeViews(a))
     .slice(0, 12)
-  const total = Math.max(1, sumBy(dashboardRows.value, rangeViews))
+  const total = Math.max(1, sumBy(playRankRows.value, rangeViews))
   const max = Math.max(1, ...rows.map(rangeViews))
   return rows.map((item, index) => ({
       ...item,
@@ -1337,6 +2062,43 @@ const overviewPlayRankRows = computed(() => {
 })
 
 const overviewPostBars = computed(() => {
+  if (dashboardWorks.value.length) {
+    const limit = postGranularity.value === 'week' ? 8 : 14
+    const slots = postGranularity.value === 'week'
+      ? postChartWeekSlots(limit)
+      : postChartDaySlots(limit)
+    const buckets = new Map(slots.map(slot => [slot.key, { ...slot, value: 0, works: [] }]))
+    displayPostWorks.value.forEach((work) => {
+      const date = parseDashboardDate(work.publishDate || work.publishAt)
+      if (!date) return
+      let key = dashboardDateKey(date)
+      if (postGranularity.value === 'week') {
+        const start = startOfDashboardWeek(date)
+        key = dashboardDateKey(start)
+      }
+      const current = buckets.get(key)
+      if (!current) return
+      current.value += 1
+      current.works.push(work)
+      buckets.set(key, current)
+    })
+    const bars = slots.map(slot => buckets.get(slot.key) || { ...slot, value: 0, works: [] })
+    const max = Math.max(1, ...bars.map(item => item.value))
+    return bars.map(item => ({
+      label: item.label,
+      value: item.value,
+      height: item.value ? Math.max(8, Math.round(item.value / max * 100)) : 0,
+      tooltip: item.value
+        ? [
+            `${item.label} · ${item.value}篇`,
+            ...item.works
+              .slice(0, 12)
+              .map(work => `${cleanTooltipText(work.account)} / ${cleanTooltipText(work.platformLabel || work.platform)} / ${cleanTooltipText(work.title) || '?????'}`),
+            item.works.length > 12 ? `还有 ${item.works.length - 12} 条未展示` : ''
+          ].filter(Boolean).join('\n')
+        : `${item.label} · 0篇`
+    }))
+  }
   const rows = dashboardRows.value
   const labels = postGranularity.value === 'week' ? overviewPostWeekLabels : overviewPostDayLabels
   const divisor = postGranularity.value === 'week' ? 2.8 : 6
@@ -1347,7 +2109,7 @@ const overviewPostBars = computed(() => {
       const wave = 0.55 + ((seed + index * 13) % 76) / 100
       return sum + Math.max(1, Math.round(base * wave))
     }, 0)
-    return { label, value }
+    return { label, value, tooltip: `${label} · ${value}篇` }
   })
   const max = Math.max(1, ...bars.map(item => item.value))
   return bars.map(item => ({
@@ -1357,7 +2119,7 @@ const overviewPostBars = computed(() => {
 })
 
 const postPeakRows = computed(() => {
-  const rows = [...overviewPostBars.value].sort((a, b) => b.value - a.value).slice(0, 4)
+  const rows = [...overviewPostBars.value].filter(item => item.value > 0).sort((a, b) => b.value - a.value).slice(0, 4)
   const max = Math.max(1, ...rows.map(item => item.value))
   return rows.map(item => ({
     ...item,
@@ -1370,7 +2132,7 @@ const postRhythmCards = computed(() => {
   const total = sumBy(rows, item => item.value)
   const avg = rows.length ? Math.round(total / rows.length) : 0
   const peak = postPeakRows.value[0]
-  const activeSlots = rows.filter(item => item.value >= avg).length
+  const activeSlots = total ? rows.filter(item => item.value >= Math.max(1, avg)).length : 0
   return [
     { key: 'peak', label: '峰值档期', value: peak ? peak.label : '-', note: peak ? `${peak.value} 篇集中发力` : '等待数据' },
     { key: 'avg', label: '平均火力', value: `${avg}篇`, note: postGranularity.value === 'week' ? '每周均值' : '每个采样日均值' },
@@ -1428,6 +2190,7 @@ const battleTreeRows = computed(() => {
         return {
           id: `${group.groupName}-${account.id}`,
           account: account.account,
+          platformLabel: account.platformLabel || account.platform,
           score: account.battleScore,
           tag: leafIndex === 0 ? '组内主C' : `${type} · ${completion}`,
           typeClass: type === '商单' ? 'is-business' : 'is-daily',
@@ -1441,8 +2204,14 @@ const battleTreeRows = computed(() => {
 const battleSummaryCards = computed(() => {
   const rows = filteredAccounts.value
   const champion = battleChampion.value
-  const businessPosts = sumBy(rows.filter(item => contentType(item) === '商单'), rangePosts)
-  const dailyPosts = sumBy(rows.filter(item => contentType(item) === '日常'), rangePosts)
+  const usingRealWorks = dashboardWorks.value.length > 0
+  const workRows = dashboardWorks.value.length ? displayPostWorks.value : []
+  const businessPosts = usingRealWorks
+    ? workRows.filter(item => item.contentType === '商单').length
+    : sumBy(rows.filter(item => contentType(item) === '商单'), rangePosts)
+  const dailyPosts = usingRealWorks
+    ? workRows.filter(item => item.contentType !== '商单').length
+    : sumBy(rows.filter(item => contentType(item) === '日常'), rangePosts)
   const avgCompletion = rows.length ? Math.round(sumBy(rows, completionRate) / rows.length) : 0
   const fanDelta = sumBy(rows, item => Math.max(0, rangeFans(item)))
   return [
@@ -1480,16 +2249,23 @@ const battleSummaryCards = computed(() => {
 const postStructureRows = computed(() => {
   return groupBattleRows.value.map((group) => {
     const rows = filteredAccounts.value.filter(item => item.groupName === group.groupName)
-    const business = sumBy(rows.filter(item => contentType(item) === '商单'), rangePosts)
-    const daily = sumBy(rows.filter(item => contentType(item) === '日常'), rangePosts)
-    const total = Math.max(1, business + daily)
+    const usingRealWorks = dashboardWorks.value.length > 0
+    const workRows = usingRealWorks ? displayPostWorks.value.filter(item => item.groupName === group.groupName) : []
+    const business = usingRealWorks
+      ? workRows.filter(item => item.contentType === '商单').length
+      : sumBy(rows.filter(item => contentType(item) === '商单'), rangePosts)
+    const daily = usingRealWorks
+      ? workRows.filter(item => item.contentType !== '商单').length
+      : sumBy(rows.filter(item => contentType(item) === '日常'), rangePosts)
+    const total = business + daily
+    const totalBase = Math.max(1, total)
     return {
       groupName: group.groupName,
       business,
       daily,
       total,
-      businessWidth: Math.max(4, Math.round(business / total * 100)),
-      dailyWidth: Math.max(4, Math.round(daily / total * 100))
+      businessWidth: business ? Math.max(4, Math.round(business / totalBase * 100)) : 0,
+      dailyWidth: daily ? Math.max(4, Math.round(daily / totalBase * 100)) : 0
     }
   }).slice(0, 6)
 })
@@ -1518,6 +2294,22 @@ const groupFanTrendLines = computed(() => {
 })
 
 const hotVideoRows = computed(() => {
+  if (dashboardWorks.value.length) {
+    const accountIds = new Set(filteredAccounts.value.map(item => item.id))
+    const rows = dashboardWorks.value
+      .filter(item => !accountIds.size || accountIds.has(item.accountId))
+      .map(item => ({
+        ...item,
+        contentType: item.contentType || '日常',
+        completionRate: Number(item.completionRate) || 0,
+        interactionRate: Number(item.interactionRate) || 0,
+        hotIndex: Number(item.hotIndex) || 0,
+        level: item.level || '潜力'
+      }))
+      .sort((a, b) => b.hotIndex - a.hotIndex || b.views - a.views)
+    const max = Math.max(1, ...rows.map(item => item.hotIndex || item.views || 0))
+    return rows.map(item => ({ ...item, width: Math.max(8, Math.round((item.hotIndex || item.views || 0) / max * 100)) }))
+  }
   const rows = filteredAccounts.value.flatMap((account, accountIndex) => {
     return Array.from({ length: 3 }, (_, index) => {
       const seed = stableNumber(`${account.id}-${account.account}-${index}`)
@@ -1536,6 +2328,7 @@ const hotVideoRows = computed(() => {
         title: hotTitlePool[(seed + index + accountIndex) % hotTitlePool.length],
         account: account.account,
         groupName: account.groupName,
+        platform: account.platform,
         platformLabel: account.platformLabel,
         contentType: content,
         publishAt: `2026-06-${String(9 - index).padStart(2, '0')} ${index === 0 ? '18:00' : '10:00'}`,
@@ -1639,6 +2432,7 @@ const selectedAccount = computed(() => {
 const selectedLikeTrend = computed(() => {
   const account = selectedAccount.value
   if (!account) return []
+  if (Array.isArray(account.likeTrend) && account.likeTrend.length) return account.likeTrend
   const baseRate = Math.max(0.018, account.yesterdayLikes / Math.max(1, account.yesterdayViews))
   return account.trend.map(value => Math.round(value * baseRate))
 })
@@ -1674,24 +2468,106 @@ const singleTrendMetrics = computed(() => {
   ]
 })
 
-const singleSnapshots = computed(() => {
+const selectedAccountWorks = computed(() => {
   const account = selectedAccount.value
-  if (!account) return []
-  return account.trend.map((views, index) => ({
-    label: index % 2 === 0 ? `D-${7 - index} 10:00` : `D-${7 - index} 18:00`,
-    views,
-    likes: selectedLikeTrend.value[index] || 0,
-    fans: account.fanTrend[index] || 0
-  })).reverse()
+  if (!account || !dashboardWorks.value.length) return []
+  const accountId = String(account.id || '').trim()
+  const accountName = String(account.account || '').trim()
+  return dashboardWorks.value
+    .filter((work) => {
+      if (accountId && String(work.accountId || '').trim() === accountId) return true
+      if (accountName && String(work.account || '').trim() === accountName) return true
+      return false
+    })
+    .map((work) => ({
+      ...work,
+      title: work.title || '未命名作品',
+      contentType: work.contentType || '视频',
+      views: Number(work.views) || 0,
+      likes: Number(work.likes) || 0,
+      comments: Number(work.comments) || 0,
+      completionRate: Number(work.completionRate) || 0,
+      hotIndex: Number(work.hotIndex) || 0
+    }))
+    .sort((a, b) => {
+      const at = parseDashboardDate(a.publishDate || a.publishAt)?.getTime() || 0
+      const bt = parseDashboardDate(b.publishDate || b.publishAt)?.getTime() || 0
+      return bt - at || b.views - a.views || b.hotIndex - a.hotIndex
+    })
+})
+
+async function loadRealDashboard() {
+  dashboardLoading.value = true
+  dashboardError.value = ''
+  try {
+    const data = await loadAccountDataDashboard()
+    realDashboard.value = data || null
+    const digest = data?.collectionIndex?.sourceStats?.digest || data?.collectionIndex?.generatedAt || ''
+    if (digest) lastIndexDigest = digest
+  } catch (e) {
+    dashboardError.value = e?.message || String(e || '读取失败')
+    realDashboard.value = null
+  } finally {
+    dashboardLoading.value = false
+  }
+}
+
+async function syncDashboardAfterCollect() {
+  try {
+    const data = await loadAccountDataCollectStatus()
+    const running = Boolean(data?.state?.running)
+    const digest = data?.index?.sourceStats?.digest || data?.index?.generatedAt || ''
+    const changed = Boolean(digest && lastIndexDigest && digest !== lastIndexDigest)
+    const justFinished = lastCollectionRunning && !running
+    lastCollectionRunning = running
+    if (digest) lastIndexDigest = digest
+    if ((changed || justFinished) && !dashboardLoading.value) {
+      await loadRealDashboard()
+    }
+  } catch (e) {}
+}
+
+onMounted(() => {
+  loadRealDashboard()
+  syncDashboardAfterCollect()
+  dashboardPollTimer = window.setInterval(syncDashboardAfterCollect, 30000)
+})
+
+onUnmounted(() => {
+  if (dashboardPollTimer) window.clearInterval(dashboardPollTimer)
+  dashboardPollTimer = null
 })
 </script>
 
 <style scoped>
 .account-data-module {
-  --board-bg: #f5f6f8;
-  --card-bg: #fff;
-  --card-border: #edf0f4;
-  --orange: #ff6b00;
+  --ad-page: var(--page-bg, var(--bg, #f5f6f8));
+  --ad-card: var(--panel-bg, var(--bg-card, #fff));
+  --ad-card-strong: var(--card-bg-hover, var(--ad-card));
+  --ad-soft: var(--panel-bg-soft, #f8f9fb);
+  --ad-row: var(--row-bg, #f8f9fb);
+  --ad-row-hover: var(--row-bg-hover, #fff7f0);
+  --ad-control: var(--control-bg, #fff);
+  --ad-control-hover: var(--control-bg-hover, #fff7f0);
+  --ad-border: var(--border, #edf0f4);
+  --ad-border-strong: var(--border-mid, var(--ad-border));
+  --ad-text: var(--text, #202330);
+  --ad-text-strong: var(--text-primary, var(--text, #202330));
+  --ad-muted: var(--text-muted, #8b92a0);
+  --ad-subtle: var(--text-dim, #596172);
+  --ad-shadow: var(--shadow, 0 8px 24px rgba(31, 41, 55, .06));
+  --ad-shadow-soft: var(--shadow-sm, 0 8px 18px rgba(31, 41, 55, .035));
+  --ad-accent-soft: color-mix(in srgb, var(--orange) 12%, transparent);
+  --ad-chart-bg: linear-gradient(180deg, var(--ad-soft), var(--ad-card));
+  --ad-on-accent: #fff;
+  --board-bg: var(--ad-page);
+  --card-bg: var(--ad-card);
+  --card-border: var(--ad-border);
+  --orange: var(--accent, #ff6b00);
+  --business: #ff6b00;
+  --suspect: #8b6be8;
+  --distribution: #00a67e;
+  --daily: #64748b;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -1700,7 +2576,59 @@ const singleSnapshots = computed(() => {
   padding: 20px 20px 24px;
   border-radius: 10px;
   background: var(--board-bg);
-  color: #202330;
+  color: var(--ad-text);
+}
+
+:global(:root[data-ui-style="violet"] .account-data-module) {
+  --ad-page:
+    radial-gradient(circle at 12% 0%, rgba(167, 139, 250, .14), transparent 32%),
+    radial-gradient(circle at 92% 12%, rgba(0, 245, 212, .1), transparent 30%),
+    var(--page-bg);
+  --ad-card: rgba(18, 18, 42, .82);
+  --ad-card-strong: rgba(32, 29, 56, .92);
+  --ad-soft: rgba(32, 29, 56, .56);
+  --ad-row: rgba(255, 255, 255, .045);
+  --ad-row-hover: rgba(167, 139, 250, .12);
+  --ad-control: rgba(32, 29, 56, .82);
+  --ad-control-hover: rgba(42, 37, 70, .94);
+  --ad-border: rgba(196, 181, 253, .2);
+  --ad-border-strong: rgba(196, 181, 253, .32);
+  --ad-chart-bg: linear-gradient(180deg, rgba(32, 29, 56, .5), rgba(18, 18, 42, .78));
+  --ad-shadow-soft: 0 14px 28px rgba(0, 0, 0, .18);
+  --orange: var(--accent);
+}
+
+:global(:root[data-ui-style="apple"] .account-data-module) {
+  --ad-page: linear-gradient(180deg, #f5f7fb 0%, #eef2f7 100%);
+  --ad-card: rgba(255, 255, 255, .78);
+  --ad-card-strong: rgba(255, 255, 255, .94);
+  --ad-soft: rgba(246, 246, 248, .78);
+  --ad-row: rgba(247, 249, 252, .9);
+  --ad-row-hover: rgba(235, 244, 255, .92);
+  --ad-control: rgba(255, 255, 255, .82);
+  --ad-control-hover: rgba(245, 249, 255, .96);
+  --ad-chart-bg: linear-gradient(180deg, rgba(251, 252, 255, .9), rgba(255, 255, 255, .86));
+  --orange: var(--accent);
+}
+
+:global(:root[data-ui-style="usagi"] .account-data-module) {
+  --ad-page:
+    radial-gradient(circle at 8% 8%, rgba(255, 216, 79, .28), transparent 26%),
+    radial-gradient(circle at 88% 14%, rgba(255, 159, 181, .16), transparent 28%),
+    var(--page-bg);
+  --ad-card: rgba(255, 251, 241, .82);
+  --ad-card-strong: rgba(255, 253, 247, .96);
+  --ad-soft: rgba(239, 222, 190, .58);
+  --ad-row: rgba(255, 255, 250, .55);
+  --ad-row-hover: rgba(232, 203, 118, .18);
+  --ad-control: rgba(250, 239, 214, .88);
+  --ad-control-hover: rgba(244, 225, 190, .96);
+  --ad-border: rgba(110, 72, 47, .14);
+  --ad-border-strong: rgba(177, 119, 28, .24);
+  --ad-chart-bg: linear-gradient(180deg, rgba(255, 249, 235, .9), rgba(255, 251, 241, .78));
+  --ad-shadow-soft: var(--usagi-sticker-shadow);
+  --orange: var(--usagi-orange);
+  --ad-on-accent: var(--usagi-ink);
 }
 
 .board-top {
@@ -1770,6 +2698,64 @@ const singleSnapshots = computed(() => {
   cursor: pointer;
 }
 
+.platform-tab {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.platform-tab i,
+.platform-badge {
+  width: 20px;
+  height: 20px;
+  display: inline-grid;
+  place-items: center;
+  flex: 0 0 20px;
+  border-radius: 6px;
+  color: #fff;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.platform-badge {
+  width: 22px;
+  height: 22px;
+  margin-right: 5px;
+}
+
+.platform-tab i img,
+.platform-badge img {
+  width: 86%;
+  height: 86%;
+  display: block;
+  border-radius: 4px;
+  object-fit: contain;
+  background: rgba(255, 255, 255, .12);
+}
+
+.platform-all {
+  background: #5f6878;
+}
+
+.platform-douyin {
+  background: linear-gradient(135deg, #111827, #ff2f6d);
+}
+
+.platform-bilibili {
+  background: linear-gradient(135deg, #00a1d6, #fb7299);
+}
+
+.platform-kuaishou {
+  background: linear-gradient(135deg, #ff7a00, #facc15);
+}
+
+.platform-default {
+  background: #7f8794;
+}
+
 .view-tab:last-child,
 .platform-tab:last-child,
 .range-tab:last-child {
@@ -1782,6 +2768,24 @@ const singleSnapshots = computed(() => {
   color: var(--orange);
   background: #fff7f0;
   box-shadow: inset 0 0 0 1px var(--orange);
+}
+
+.platform-tab.platform-douyin.active {
+  color: #111827;
+  background: linear-gradient(180deg, rgba(17, 24, 39, .08), rgba(255, 47, 109, .07));
+  box-shadow: inset 0 0 0 1px rgba(17, 24, 39, .28);
+}
+
+.platform-tab.platform-bilibili.active {
+  color: #0077a8;
+  background: linear-gradient(180deg, rgba(0, 161, 214, .11), rgba(251, 114, 153, .06));
+  box-shadow: inset 0 0 0 1px rgba(0, 161, 214, .32);
+}
+
+.platform-tab.platform-kuaishou.active {
+  color: #c75a00;
+  background: linear-gradient(180deg, rgba(255, 122, 0, .12), rgba(250, 204, 21, .08));
+  box-shadow: inset 0 0 0 1px rgba(255, 122, 0, .34);
 }
 
 .platform-tab.muted:not(.active) {
@@ -1797,6 +2801,28 @@ const singleSnapshots = computed(() => {
   border: 1px solid var(--card-border);
   border-radius: 8px;
   background: var(--card-bg);
+}
+
+.dashboard-collect-alert {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 12px;
+  border: 1px solid #ffd4bf;
+  border-radius: 8px;
+  background: #fff7f2;
+  color: #9a3412;
+  font-size: 12px;
+}
+
+.dashboard-collect-alert strong {
+  color: #c2410c;
+}
+
+.dashboard-collect-alert span {
+  padding-left: 10px;
+  border-left: 1px solid #f3b89f;
 }
 
 .filter-range {
@@ -1861,6 +2887,30 @@ const singleSnapshots = computed(() => {
 .compact-search {
   width: 180px;
   height: 32px;
+}
+
+.dashboard-refresh-btn {
+  height: 32px;
+  padding: 0 12px;
+  border: 1px solid #d9dee8;
+  border-radius: 4px;
+  background: #fff;
+  color: #586070;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.dashboard-refresh-btn:hover:not(:disabled) {
+  color: var(--orange);
+  border-color: var(--orange);
+  background: #fff7f0;
+}
+
+.dashboard-refresh-btn:disabled {
+  cursor: not-allowed;
+  opacity: .58;
 }
 
 .snapshot-note,
@@ -2115,17 +3165,17 @@ const singleSnapshots = computed(() => {
 }
 
 .battle-tree-card {
-  min-height: 520px;
+  min-height: 440px;
   overflow: hidden;
 }
 
 .battle-tree {
   position: relative;
-  min-height: 446px;
+  min-height: 360px;
   display: grid;
-  grid-template-columns: 178px minmax(0, 1fr);
-  gap: 22px;
-  padding: 18px;
+  grid-template-columns: 150px minmax(0, 1fr);
+  gap: 16px;
+  padding: 12px;
   border: 1px solid #edf0f4;
   border-radius: 8px;
   background:
@@ -2136,10 +3186,10 @@ const singleSnapshots = computed(() => {
 .battle-tree::before {
   content: "";
   position: absolute;
-  left: 194px;
-  top: 52px;
-  bottom: 44px;
-  width: 4px;
+  left: 164px;
+  top: 40px;
+  bottom: 34px;
+  width: 3px;
   border-radius: 999px;
   background: linear-gradient(180deg, #ff6b00, #2f9bf0, #8b6be8);
   opacity: .22;
@@ -2151,9 +3201,9 @@ const singleSnapshots = computed(() => {
   z-index: 1;
   align-self: start;
   display: grid;
-  gap: 9px;
-  padding: 18px;
-  border-radius: 16px;
+  gap: 6px;
+  padding: 14px;
+  border-radius: 8px;
   background: linear-gradient(145deg, #ff6b00, #ffa000);
   color: #fff;
   box-shadow: 0 18px 34px rgba(255, 107, 0, .22);
@@ -2169,7 +3219,7 @@ const singleSnapshots = computed(() => {
 
 .tree-root strong {
   overflow: hidden;
-  font-size: 24px;
+  font-size: 20px;
   line-height: 1.1;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -2177,8 +3227,8 @@ const singleSnapshots = computed(() => {
 
 .tree-root b {
   width: fit-content;
-  padding: 5px 9px;
-  border-radius: 999px;
+  padding: 4px 8px;
+  border-radius: 6px;
   background: rgba(255, 255, 255, .16);
   color: #fff;
   font-weight: 900;
@@ -2188,16 +3238,16 @@ const singleSnapshots = computed(() => {
   position: relative;
   z-index: 1;
   display: grid;
-  gap: 13px;
+  gap: 8px;
 }
 
 .tree-branch {
   position: relative;
   display: grid;
-  grid-template-columns: 150px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 132px minmax(0, 1fr);
+  gap: 8px;
   align-items: stretch;
-  padding: 12px;
+  padding: 8px;
   border: 1px solid color-mix(in srgb, var(--branch-color) 18%, #edf0f4);
   border-radius: 12px;
   background: rgba(255, 255, 255, .78);
@@ -2211,9 +3261,9 @@ const singleSnapshots = computed(() => {
 
 .tree-branch-line {
   position: absolute;
-  left: -22px;
+  left: -18px;
   top: 50%;
-  width: 22px;
+  width: 18px;
   height: 2px;
   border-radius: 999px;
   background: var(--branch-color);
@@ -2224,9 +3274,9 @@ const singleSnapshots = computed(() => {
   min-width: 0;
   display: grid;
   align-content: center;
-  gap: 6px;
-  padding: 12px;
-  border-radius: 10px;
+  gap: 4px;
+  padding: 9px;
+  border-radius: 8px;
   background: color-mix(in srgb, var(--branch-color) 9%, #fff);
 }
 
@@ -2239,7 +3289,7 @@ const singleSnapshots = computed(() => {
 .tree-group-node strong {
   overflow: hidden;
   color: #202330;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 1.1;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -2247,25 +3297,26 @@ const singleSnapshots = computed(() => {
 
 .tree-group-node em {
   color: #7f8794;
-  font-size: 12px;
+  font-size: 11px;
   font-style: normal;
-  line-height: 1.35;
+  line-height: 1.25;
 }
 
 .tree-leaves {
   min-width: 0;
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 8px;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  gap: 6px;
 }
 
 .tree-leaf {
   min-width: 0;
   display: grid;
-  grid-template-rows: auto auto auto 6px;
-  gap: 5px;
-  padding: 10px;
-  border-radius: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto 4px;
+  gap: 3px 6px;
+  padding: 7px 8px;
+  border-radius: 7px;
   background: #fff;
   box-shadow: inset 0 0 0 1px #edf0f4;
 }
@@ -2280,6 +3331,7 @@ const singleSnapshots = computed(() => {
 
 .tree-leaf b,
 .tree-leaf em {
+  grid-column: 1;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -2287,26 +3339,32 @@ const singleSnapshots = computed(() => {
 }
 
 .tree-leaf b {
+  grid-row: 1;
   color: #202330;
   font-size: 12px;
 }
 
 .tree-leaf em {
+  grid-row: 2;
   color: #8b92a0;
   font-size: 11px;
   font-style: normal;
 }
 
 .tree-leaf i {
+  grid-column: 2;
+  grid-row: 1 / 3;
+  align-self: center;
   color: var(--branch-color);
-  font-size: 14px;
+  font-size: 13px;
   font-style: normal;
   font-weight: 900;
 }
 
 .tree-leaf u {
+  grid-column: 1 / 3;
   width: var(--leaf-width);
-  height: 6px;
+  height: 4px;
   border-radius: 999px;
   background: var(--branch-color);
 }
@@ -2968,10 +4026,24 @@ const singleSnapshots = computed(() => {
   margin-bottom: 16px;
 }
 
+.chart-head {
+  align-items: flex-start;
+}
+
 .panel-head strong,
 .chart-head strong {
   color: #202330;
   font-size: 14px;
+}
+
+.chart-head-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 
 .chart-board {
@@ -3150,7 +4222,7 @@ const singleSnapshots = computed(() => {
   padding: 20px 20px 16px;
 }
 
-.chart-head button {
+.chart-more-btn {
   border: 0;
   background: transparent;
   color: var(--orange);
@@ -3160,7 +4232,7 @@ const singleSnapshots = computed(() => {
   font-weight: 900;
 }
 
-.chart-head button:hover {
+.chart-more-btn:hover {
   text-decoration: underline;
 }
 
@@ -3290,6 +4362,179 @@ const singleSnapshots = computed(() => {
   text-align: right;
 }
 
+.metric-modal-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  background: rgba(20, 24, 34, .42);
+  backdrop-filter: blur(4px);
+}
+
+.metric-modal {
+  width: min(1120px, 96vw);
+  max-height: min(760px, 88vh);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #e4e8ef;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 24px 70px rgba(20, 24, 34, .22);
+}
+
+.metric-modal-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px 14px;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.metric-modal-head div {
+  min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.metric-modal-head strong {
+  color: #202330;
+  font-size: 17px;
+}
+
+.metric-modal-head span {
+  color: #7b8494;
+  font-size: 12px;
+}
+
+.metric-modal-close {
+  width: 30px;
+  height: 30px;
+  border: 1px solid #d9dee8;
+  border-radius: 6px;
+  background: #fff;
+  color: #596172;
+  font: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.metric-modal-close:hover {
+  color: var(--orange);
+  border-color: var(--orange);
+  background: #fff7f0;
+}
+
+.metric-modal-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 20px;
+  border-bottom: 1px solid #edf0f4;
+  background: #fafbfc;
+}
+
+.metric-modal-summary span {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.metric-modal-summary em {
+  color: #8b92a0;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.metric-modal-summary strong {
+  overflow: hidden;
+  color: #202330;
+  font-size: 14px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.metric-modal-table {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px 20px 18px;
+}
+
+.metric-modal-row {
+  display: grid;
+  gap: 10px;
+  align-items: center;
+  min-height: 38px;
+  min-width: 920px;
+  padding: 0 10px;
+  border-bottom: 1px solid #f0f2f5;
+  color: #596172;
+  font-size: 12px;
+}
+
+.metric-modal-row.work {
+  grid-template-columns: 48px minmax(240px, 1.6fr) minmax(90px, .7fr) 70px 128px 84px 74px 66px 64px;
+}
+
+.metric-modal-row.account {
+  grid-template-columns: 48px minmax(120px, 1fr) minmax(100px, .8fr) 84px 94px 94px 82px 82px 70px;
+}
+
+.metric-modal-row-head {
+  position: sticky;
+  top: -12px;
+  z-index: 1;
+  min-height: 34px;
+  border-bottom: 1px solid #dfe4ec;
+  background: #fff;
+  color: #8b92a0;
+  font-weight: 800;
+}
+
+.metric-modal-row b {
+  color: var(--orange);
+  font-size: 12px;
+}
+
+.metric-modal-row strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #202330;
+  font-size: 12px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.metric-modal-row span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.metric-modal-row em {
+  color: #202330;
+  font-size: 13px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.metric-modal-empty {
+  padding: 44px 20px 52px;
+  color: #8b92a0;
+  text-align: center;
+  font-size: 13px;
+}
+
 .wide-chart-stack {
   min-width: 0;
   display: grid;
@@ -3315,7 +4560,7 @@ const singleSnapshots = computed(() => {
   margin-bottom: 14px;
 }
 
-.wide-chart-head div {
+.wide-chart-head > div:first-child {
   display: grid;
   gap: 6px;
 }
@@ -3333,11 +4578,56 @@ const singleSnapshots = computed(() => {
 }
 
 .wide-head-actions {
-  display: flex;
+  display: flex !important;
   align-items: center;
   justify-content: flex-end;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 8px;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+
+.rank-platform-tabs,
+.metric-mode-tabs {
+  display: inline-flex !important;
+  align-items: center;
+  flex-direction: row;
+  flex: 0 0 auto;
+  border: 1px solid #d9dee8;
+  border-radius: 4px;
+  overflow: hidden;
+  background: #fff;
+}
+
+.rank-platform-tabs button,
+.metric-mode-tabs button {
+  height: 24px;
+  min-width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border: 0;
+  border-right: 1px solid #d9dee8;
+  background: #fff;
+  color: #586070;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.rank-platform-tabs button:last-child,
+.metric-mode-tabs button:last-child {
+  border-right: 0;
+}
+
+.rank-platform-tabs button.active,
+.metric-mode-tabs button.active {
+  color: var(--orange);
+  background: #fff7f0;
+  box-shadow: inset 0 0 0 1px var(--orange);
 }
 
 .wide-granularity-tabs {
@@ -3524,6 +4814,246 @@ const singleSnapshots = computed(() => {
   gap: 12px;
 }
 
+.recent-post-card {
+  min-width: 0;
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid color-mix(in srgb, var(--orange) 12%, var(--card-border));
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, .96), rgba(255, 255, 255, .99)),
+    radial-gradient(circle at 0 0, rgba(255, 107, 0, .08), transparent 34%);
+}
+
+.recent-post-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.recent-post-head-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.recent-post-more {
+  padding-inline: 8px;
+}
+
+.recent-post-head div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.recent-post-head strong {
+  color: #202330;
+  font-size: 14px;
+}
+
+.recent-post-head span,
+.recent-post-head em {
+  color: #8b92a0;
+  font-size: 12px;
+  font-style: normal;
+}
+
+.recent-post-list {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.recent-post-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto;
+  align-content: start;
+  gap: 8px 10px;
+  min-width: 0;
+  padding: 10px 11px;
+  border: 1px solid color-mix(in srgb, var(--post-kind-color) 18%, #edf0f4);
+  border-radius: 8px;
+  background:
+    linear-gradient(90deg, color-mix(in srgb, var(--post-platform-color) 10%, transparent), transparent 38%),
+    linear-gradient(180deg, color-mix(in srgb, var(--post-kind-color) 5%, #fff), #fbfcfe),
+    #fbfcfe;
+  color: #596172;
+  font-size: 12px;
+  box-shadow: 0 8px 18px rgba(31, 41, 55, .035);
+}
+
+.recent-post-row::before {
+  content: '';
+  position: absolute;
+  inset: 10px auto 10px 0;
+  width: 3px;
+  border-radius: 999px;
+  background: var(--post-kind-color);
+  opacity: .82;
+}
+
+.recent-post-row.is-business {
+  border-color: color-mix(in srgb, var(--business) 28%, #edf0f4);
+  box-shadow: 0 10px 22px rgba(255, 107, 0, .08);
+}
+
+.recent-post-row.is-suspect {
+  border-color: color-mix(in srgb, var(--suspect) 26%, #edf0f4);
+}
+
+.recent-post-row.is-distribution {
+  border-color: color-mix(in srgb, var(--distribution) 24%, #edf0f4);
+}
+
+.recent-post-row > .platform-badge {
+  margin: 0;
+  align-self: start;
+}
+
+.recent-post-title {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.recent-post-title strong {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent-post-title strong {
+  color: #202330;
+  font-size: 13px;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.recent-post-title small {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: #8b92a0;
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent-post-title small > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent-post-hot {
+  align-self: start;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--post-kind-color) 12%, #fff);
+  color: var(--post-kind-color);
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.recent-post-meta {
+  grid-column: 2 / 4;
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 8px;
+  color: #8b92a0;
+  font-size: 11px;
+}
+
+.recent-post-meta span {
+  min-width: 0;
+  flex: 1 1 128px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent-post-meta b,
+.recent-post-meta em {
+  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #edf0f4;
+  font-style: normal;
+  font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.recent-post-row em {
+  color: #202330;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.content-kind-pill {
+  display: inline-flex;
+  align-items: center;
+  max-width: 96px;
+  min-width: 0;
+  padding: 3px 7px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 900;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+
+.content-kind-pill.is-business {
+  color: #c44f00;
+  border-color: rgba(255, 107, 0, .22);
+  background: rgba(255, 107, 0, .1);
+}
+
+.content-kind-pill.is-suspect {
+  color: #6550c5;
+  border-color: rgba(139, 107, 232, .24);
+  background: rgba(139, 107, 232, .1);
+}
+
+.content-kind-pill.is-distribution {
+  color: #007f63;
+  border-color: rgba(0, 166, 126, .22);
+  background: rgba(0, 166, 126, .1);
+}
+
+.content-kind-pill.is-daily {
+  color: #596172;
+  border-color: rgba(100, 116, 139, .18);
+  background: rgba(100, 116, 139, .08);
+}
+
+.recent-post-empty {
+  padding: 18px 12px;
+  border: 1px dashed #dce2eb;
+  border-radius: 8px;
+  color: #8b92a0;
+  font-size: 12px;
+  text-align: center;
+}
+
 .post-rhythm-card {
   min-width: 0;
   display: grid;
@@ -3678,6 +5208,14 @@ const singleSnapshots = computed(() => {
   box-shadow: 0 10px 18px rgba(139, 107, 232, .18);
 }
 
+.wide-bar-item.empty i {
+  height: 2px;
+  min-height: 2px;
+  border-radius: 999px;
+  background: #dfe4ec;
+  box-shadow: none;
+}
+
 .wide-bar-item span {
   max-width: 100%;
   overflow: hidden;
@@ -3695,7 +5233,8 @@ const singleSnapshots = computed(() => {
 }
 
 .account-table,
-.snapshot-table {
+.snapshot-table,
+.single-work-table {
   display: grid;
   gap: 3px;
   overflow-x: auto;
@@ -3716,7 +5255,7 @@ const singleSnapshots = computed(() => {
 .hot-video-head,
 .hot-video-row {
   display: grid;
-  grid-template-columns: minmax(170px, 1.45fr) .75fr .44fr .74fr .62fr .62fr .46fr .46fr .52fr;
+  grid-template-columns: minmax(170px, 1.45fr) .7fr .58fr .42fr .72fr .6fr .6fr .46fr .46fr .52fr;
   gap: 10px;
   align-items: center;
   min-height: 38px;
@@ -3739,6 +5278,24 @@ const singleSnapshots = computed(() => {
   border-radius: 7px;
   background: #f8f9fb;
   font-size: 12px;
+}
+
+.hot-video-row.is-business,
+.single-work-row.is-business {
+  background: linear-gradient(90deg, rgba(255, 107, 0, .1), #fff 46%);
+  box-shadow: inset 3px 0 0 var(--business);
+}
+
+.hot-video-row.is-suspect,
+.single-work-row.is-suspect {
+  background: linear-gradient(90deg, rgba(139, 107, 232, .09), #fff 46%);
+  box-shadow: inset 3px 0 0 var(--suspect);
+}
+
+.hot-video-row.is-distribution,
+.single-work-row.is-distribution {
+  background: linear-gradient(90deg, rgba(0, 166, 126, .08), #fff 46%);
+  box-shadow: inset 3px 0 0 var(--distribution);
 }
 
 .hot-video-row strong,
@@ -3842,8 +5399,26 @@ const singleSnapshots = computed(() => {
   padding: 0 10px;
 }
 
+.platform-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.platform-cell b {
+  min-width: 0;
+  overflow: hidden;
+  color: #586070;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .account-table-head,
-.snapshot-head {
+.snapshot-head,
+.single-work-head {
   position: sticky;
   top: 0;
   z-index: 3;
@@ -3855,17 +5430,56 @@ const singleSnapshots = computed(() => {
 }
 
 .account-table-row,
-.snapshot-row {
+.snapshot-row,
+.single-work-row {
   border-radius: 7px;
   background: #f8f9fb;
   font-size: 12px;
 }
 
 .account-table-row em,
-.snapshot-row em {
+.snapshot-row em,
+.single-work-row em {
   color: #00a67e;
   font-style: normal;
   font-weight: 900;
+}
+
+.single-work-head,
+.single-work-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.45fr) minmax(140px, .92fr) .56fr .56fr .54fr .46fr .52fr;
+  gap: 10px;
+  align-items: center;
+  min-width: 960px;
+  min-height: 36px;
+  padding: 0 10px;
+}
+
+.single-work-title {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.single-work-title strong,
+.single-work-title small {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.single-work-title small {
+  color: #8b92a0;
+  font-size: 11px;
+}
+
+.single-empty-state {
+  padding: 18px 14px;
+  color: #8b92a0;
+  font-size: 13px;
 }
 
 .metric-text.views {
@@ -4031,6 +5645,312 @@ const singleSnapshots = computed(() => {
   padding: 0 10px;
 }
 
+.account-data-module :is(
+  .board-top,
+  .filter-row,
+  .kpi-card,
+  .chart-card,
+  .detail-card,
+  .battle-summary-card,
+  .battle-tree-card,
+  .battle-chart-card,
+  .update-summary-card,
+  .update-plan-progress-card,
+  .update-risk-card,
+  .update-group-card,
+  .update-owner-card,
+  .update-plan-table-card,
+  .hot-summary-card,
+  .hot-hero-card,
+  .hot-factor-card,
+  .hot-rank-card,
+  .hot-table-card,
+  .single-profile-card,
+  .single-chart-card,
+  .single-history-card,
+  .account-cosmos-card,
+  .recent-post-card,
+  .post-rhythm-card,
+  .metric-modal
+) {
+  border-color: var(--ad-border);
+  background: var(--ad-card);
+  color: var(--ad-text);
+  box-shadow: var(--ad-shadow-soft);
+}
+
+.account-data-module :is(
+  .view-tabs,
+  .platform-tabs,
+  .range-tabs,
+  .dimension-tabs,
+  .rank-platform-tabs,
+  .metric-mode-tabs
+) {
+  border-color: var(--ad-border-strong);
+  background: var(--ad-control);
+}
+
+.account-data-module :is(
+  .view-tab,
+  .platform-tab,
+  .range-tab,
+  .dimension-tab,
+  .rank-platform-tabs button,
+  .metric-mode-tabs button,
+  .dashboard-refresh-btn,
+  .inp
+) {
+  border-color: var(--ad-border-strong);
+  background: var(--ad-control);
+  color: var(--ad-subtle);
+}
+
+.account-data-module :is(
+  .view-tab:hover,
+  .platform-tab:hover,
+  .range-tab:hover,
+  .dimension-tab:hover,
+  .rank-platform-tabs button:hover,
+  .metric-mode-tabs button:hover,
+  .dashboard-refresh-btn:hover:not(:disabled)
+) {
+  border-color: var(--orange);
+  background: var(--ad-control-hover);
+  color: var(--orange);
+}
+
+.account-data-module :is(
+  .view-tab.active,
+  .platform-tab.active,
+  .range-tab.active,
+  .dimension-tab.active,
+  .rank-platform-tabs button.active,
+  .metric-mode-tabs button.active
+) {
+  background: var(--ad-accent-soft);
+  color: var(--orange);
+  box-shadow: inset 0 0 0 1px var(--orange);
+}
+
+.account-data-module :is(
+  .board-title strong,
+  .kpi-card strong,
+  .battle-summary-card strong,
+  .hot-summary-card strong,
+  .update-summary-card strong,
+  .hot-hero strong,
+  .plan-progress-copy strong,
+  .update-risk-row strong,
+  .update-group-row strong,
+  .hot-factor-row strong,
+  .hot-rank-row strong,
+  .battle-row b,
+  .post-stack-row b,
+  .panel-head strong,
+  .chart-head strong,
+  .tree-group-node strong,
+  .tree-leaf b,
+  .cosmos-node,
+  .chart-stat-strip b,
+  .chart-detail-row strong,
+  .chart-detail-row b,
+  .metric-modal-head strong,
+  .metric-modal-summary strong,
+  .metric-modal-row strong,
+  .recent-post-head strong,
+  .recent-post-title strong,
+  .recent-post-row em,
+  .post-rhythm-head strong,
+  .post-rhythm-grid strong,
+  .post-hot-days em,
+  .update-plan-row > b,
+  .single-kpis b,
+  .single-profile strong,
+  .single-work-title strong,
+  .wide-bar-item strong
+) {
+  color: var(--ad-text-strong);
+}
+
+.account-data-module :is(
+  .snapshot-note,
+  .panel-head span,
+  .account-table-row span,
+  .single-profile span,
+  .single-profile em,
+  .kpi-card span,
+  .kpi-card em,
+  .battle-summary-card span,
+  .battle-summary-card em,
+  .hot-summary-card span,
+  .hot-summary-card em,
+  .update-summary-card span,
+  .update-summary-card em,
+  .filter-range > span,
+  .dimension-switch > span,
+  .hot-hero span,
+  .hot-hero-metrics span,
+  .plan-progress-copy span,
+  .plan-progress-copy em,
+  .update-risk-row em,
+  .update-group-row em,
+  .update-owner-grid span,
+  .update-owner-grid em,
+  .update-owner-grid small,
+  .hot-factor-row span,
+  .hot-rank-row em,
+  .battle-row em,
+  .battle-row i,
+  .post-stack-row span,
+  .post-stack-row i,
+  .chart-legend,
+  .chart-stat-strip em,
+  .chart-detail-row em,
+  .chart-detail-row small,
+  .metric-modal-head span,
+  .metric-modal-summary span,
+  .metric-modal-row span,
+  .metric-modal-row em,
+  .cosmos-node em,
+  .cosmos-node small,
+  .cosmos-legend span,
+  .recent-post-head span,
+  .recent-post-head em,
+  .recent-post-title small,
+  .recent-post-meta,
+  .content-kind-pill.is-daily,
+  .recent-post-empty,
+  .post-rhythm-head span,
+  .post-rhythm-head em,
+  .post-rhythm-grid em,
+  .post-rhythm-grid small,
+  .post-hot-days b,
+  .wide-bar-item span,
+  .hot-video-head,
+  .update-plan-head,
+  .account-table-head,
+  .snapshot-head,
+  .single-work-head,
+  .platform-cell b,
+  .single-work-title small,
+  .single-empty-state,
+  .single-filter-grid label,
+  .single-filter-meta span,
+  .lane-copy span,
+  .lane-copy em
+) {
+  color: var(--ad-muted);
+}
+
+.account-data-module :is(
+  .update-summary-card,
+  .battle-tree,
+  .hot-hero,
+  .cosmos-stage,
+  .chart-board,
+  .post-rhythm-card,
+  .wide-bar-chart
+) {
+  border-color: var(--ad-border);
+  background: var(--ad-chart-bg);
+}
+
+.account-data-module :is(
+  .tree-branch,
+  .tree-leaf,
+  .chart-detail-row,
+  .hot-rank-row,
+  .update-risk-row,
+  .update-group-row,
+  .hot-video-row,
+  .update-plan-row,
+  .account-table-row,
+  .snapshot-row,
+  .single-work-row,
+  .single-filter-meta span,
+  .single-profile,
+  .single-kpis span,
+  .post-rhythm-grid span,
+  .metric-modal-summary,
+  .metric-modal-row,
+  .recent-post-meta b,
+  .recent-post-meta em
+) {
+  border-color: var(--ad-border);
+  background: var(--ad-row);
+  color: var(--ad-text);
+}
+
+.account-data-module :is(
+  .tree-branch.champion,
+  .tree-group-node,
+  .chart-stat-strip span,
+  .chart-detail-row:hover,
+  .hot-rank-row:hover,
+  .single-chart-lane,
+  .recent-post-row,
+  .recent-post-hot
+) {
+  border-color: var(--ad-border);
+  background: var(--ad-row-hover);
+}
+
+.account-data-module :is(
+  .hot-video-head,
+  .update-plan-head,
+  .account-table-head,
+  .snapshot-head,
+  .single-work-head,
+  .metric-modal-head
+) {
+  border-bottom-color: var(--ad-border);
+  background: var(--ad-card-strong);
+}
+
+.account-data-module :is(
+  .hot-video-row.is-business,
+  .single-work-row.is-business
+) {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--business) 14%, transparent), var(--ad-row) 48%);
+}
+
+.account-data-module :is(
+  .hot-video-row.is-suspect,
+  .single-work-row.is-suspect
+) {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--suspect) 13%, transparent), var(--ad-row) 48%);
+}
+
+.account-data-module :is(
+  .hot-video-row.is-distribution,
+  .single-work-row.is-distribution
+) {
+  background: linear-gradient(90deg, color-mix(in srgb, var(--distribution) 12%, transparent), var(--ad-row) 48%);
+}
+
+.account-data-module :is(.chart-grid-line) {
+  stroke: var(--ad-border);
+}
+
+.account-data-module :is(.wide-bar-item.empty i) {
+  background: var(--ad-border-strong);
+}
+
+.account-data-module :is(.metric-modal-close) {
+  background: var(--ad-control);
+  color: var(--ad-muted);
+}
+
+.account-data-module :is(.metric-modal-close:hover) {
+  background: var(--ad-control-hover);
+  color: var(--orange);
+}
+
+.account-data-module :is(.tree-root, .hot-hero > i, .kpi-card i) {
+  color: var(--ad-on-accent);
+}
+
 @media (max-width: 1280px) {
   .kpi-grid {
     grid-template-columns: repeat(5, minmax(0, 1fr));
@@ -4092,6 +6012,10 @@ const singleSnapshots = computed(() => {
 
 @media (max-width: 820px) {
   .wide-chart-stack {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .recent-post-list {
     grid-template-columns: minmax(0, 1fr);
   }
 }

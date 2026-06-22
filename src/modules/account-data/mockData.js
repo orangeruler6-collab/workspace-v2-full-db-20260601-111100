@@ -11,7 +11,7 @@ const boundProfiles = {
   雷鸭Fist: 'h4g7ab4y',
   游点慌: 'b3uk5kjf',
   天机妹: 'tianji-mei-publish',
-  麦晓花: 'maixiaohua-publish'
+  麦小雯: 'maixiaohua-publish'
 }
 
 function hashText(text) {

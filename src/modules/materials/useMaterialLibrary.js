@@ -24,6 +24,7 @@ import {
 import { useConfirm } from '../../composables/useConfirm'
 
 const ALL_FOLDER = '__all__'
+const ROOT_FOLDER = '/'
 const FOLDER_OPEN_KEY = 'material-library-open-folders'
 const CLIP_BASKET_KEY = 'material-library-clip-basket'
 const ALL_CATEGORY = '__all__'
@@ -48,7 +49,7 @@ export function useMaterialLibrary(props = {}) {
 
   const folders = ref([])
   const rootFolderStats = ref({ count: 0, size: 0 })
-  const currentFolder = ref(ALL_FOLDER)
+  const currentFolder = ref(ROOT_FOLDER)
   const newFolderName = ref('')
   const folderLoading = ref(false)
   const creatingFolder = ref(false)
@@ -123,16 +124,16 @@ export function useMaterialLibrary(props = {}) {
     '品牌/商单物料'
   ]
 
-  const folderForQuery = computed(() => currentFolder.value === ALL_FOLDER ? undefined : currentFolder.value)
-  const uploadFolder = computed(() => currentFolder.value === ALL_FOLDER ? '/' : currentFolder.value)
-  const currentFolderLabel = computed(() => currentFolder.value === ALL_FOLDER ? '全部素材' : currentFolder.value)
+  const folderForQuery = computed(() => currentFolder.value === ALL_FOLDER ? ROOT_FOLDER : (currentFolder.value || ROOT_FOLDER))
+  const uploadFolder = computed(() => currentFolder.value === ALL_FOLDER ? ROOT_FOLDER : (currentFolder.value || ROOT_FOLDER))
+  const currentFolderLabel = computed(() => currentFolder.value === ALL_FOLDER ? ROOT_FOLDER : currentFolder.value)
   const parentFolder = computed(() => {
-    if (currentFolder.value === ALL_FOLDER || currentFolder.value === '/') return ALL_FOLDER
+    if (currentFolder.value === ALL_FOLDER || currentFolder.value === ROOT_FOLDER) return ROOT_FOLDER
     const idx = currentFolder.value.lastIndexOf('/')
     return idx <= 0 ? '/' : currentFolder.value.slice(0, idx)
   })
   const visibleFolders = computed(() => {
-    const parent = currentFolder.value === ALL_FOLDER ? '/' : currentFolder.value
+    const parent = currentFolder.value === ALL_FOLDER ? ROOT_FOLDER : currentFolder.value
     return folders.value.filter(folder => folder.parent === parent)
   })
   const folderTree = computed(() => buildFolderTree('/', 0))
@@ -161,7 +162,7 @@ export function useMaterialLibrary(props = {}) {
   const clipBasketCount = computed(() => clipBasket.value.length)
   const uploadQueueText = computed(() => uploadBatchTotal.value > 1 ? `${uploadBatchDone.value + 1}/${uploadBatchTotal.value}` : '')
   const breadcrumbItems = computed(() => {
-    if (currentFolder.value === ALL_FOLDER) return [{ label: '全部素材', path: ALL_FOLDER }]
+    if (currentFolder.value === ALL_FOLDER) return [{ label: '根目录', path: ROOT_FOLDER }]
     if (currentFolder.value === '/') return [{ label: '根目录', path: '/' }]
     const parts = currentFolder.value.split('/').filter(Boolean)
     const items = [{ label: '根目录', path: '/' }]
@@ -300,8 +301,8 @@ export function useMaterialLibrary(props = {}) {
     }
   }
 
-  function selectFolder(folderPath = ALL_FOLDER) {
-    currentFolder.value = folderPath || ALL_FOLDER
+  function selectFolder(folderPath = ROOT_FOLDER) {
+    currentFolder.value = folderPath || ROOT_FOLDER
     openFolderAncestors(currentFolder.value)
     page.value = 1
     clearSelection()
@@ -374,7 +375,7 @@ export function useMaterialLibrary(props = {}) {
     try {
       const result = await deleteFolder(folder.id, { deleteMaterials: true })
       if (currentFolder.value === folder.path || currentFolder.value.startsWith(folder.path + '/')) {
-        currentFolder.value = ALL_FOLDER
+        currentFolder.value = ROOT_FOLDER
       }
       await loadFolders()
       await loadStorage()
@@ -1098,7 +1099,7 @@ export function useMaterialLibrary(props = {}) {
   function switchType(type) {
     materialType.value = type
     selectedCat.value = ALL_CATEGORY
-    currentFolder.value = ALL_FOLDER
+    currentFolder.value = ROOT_FOLDER
     page.value = 1
     loadFolders()
     loadList()

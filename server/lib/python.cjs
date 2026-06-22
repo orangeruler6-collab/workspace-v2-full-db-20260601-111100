@@ -1,7 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { spawn } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
 
 const DEFAULT_WINDOWS_PYTHON = 'C:\\Users\\Administrator\\AppData\\Local\\Python\\pythoncore-3.14-64\\python.exe';
 
@@ -10,6 +10,43 @@ module.exports = function createPythonRuntime(options) {
   var rootDir = path.join(serverDir, '..');
   var defaultWindowsPython = options.defaultWindowsPython || DEFAULT_WINDOWS_PYTHON;
   var isWindows = process.platform === 'win32';
+  var cachedWindowsProxy;
+
+  function normalizeProxyUrl(value) {
+    var raw = String(value || '').trim();
+    if (!raw) return '';
+    if (raw.indexOf('=') >= 0) {
+      var parts = raw.split(';');
+      for (var i = 0; i < parts.length; i++) {
+        var pair = parts[i].split('=');
+        var key = String(pair[0] || '').trim().toLowerCase();
+        var val = String(pair.slice(1).join('=') || '').trim();
+        if ((key === 'https' || key === 'http') && val) {
+          raw = val;
+          break;
+        }
+      }
+    }
+    if (!/^https?:\/\//i.test(raw)) raw = 'http://' + raw;
+    return raw;
+  }
+
+  function windowsSystemProxyUrl() {
+    if (!isWindows) return '';
+    if (cachedWindowsProxy !== undefined) return cachedWindowsProxy;
+    cachedWindowsProxy = '';
+    try {
+      var key = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings';
+      var enabledOut = execFileSync('reg', ['query', key, '/v', 'ProxyEnable'], { encoding: 'utf8' });
+      if (!/ProxyEnable\s+REG_DWORD\s+0x1/i.test(enabledOut)) return cachedWindowsProxy;
+      var proxyOut = execFileSync('reg', ['query', key, '/v', 'ProxyServer'], { encoding: 'utf8' });
+      var match = proxyOut.match(/ProxyServer\s+REG_SZ\s+(.+)$/im);
+      cachedWindowsProxy = normalizeProxyUrl(match && match[1]);
+    } catch(e) {
+      cachedWindowsProxy = '';
+    }
+    return cachedWindowsProxy;
+  }
 
   function existingRuntimePathDirs() {
     return [
@@ -31,6 +68,17 @@ module.exports = function createPythonRuntime(options) {
       DOUYIN_DOWNLOADER_ROOT: process.env.DOUYIN_DOWNLOADER_ROOT || path.join(rootDir, 'tools', 'douyin-downloader'),
       BILIBILI_CLI_ROOT: process.env.BILIBILI_CLI_ROOT || path.join(rootDir, 'tools', 'bilibili-cli')
     });
+    if (!env.HTTP_PROXY && !env.HTTPS_PROXY && !env.ALL_PROXY) {
+      var systemProxy = windowsSystemProxyUrl();
+      if (systemProxy) {
+        env.HTTP_PROXY = systemProxy;
+        env.HTTPS_PROXY = systemProxy;
+        env.http_proxy = systemProxy;
+        env.https_proxy = systemProxy;
+      }
+    }
+    env.NO_PROXY = env.NO_PROXY || env.no_proxy || '127.0.0.1,localhost,::1';
+    env.no_proxy = env.no_proxy || env.NO_PROXY;
     var douyinPython = path.join(rootDir, 'tools', 'douyin-downloader', '.venv', isWindows ? 'Scripts\\python.exe' : 'bin/python');
     var bilibiliPython = path.join(rootDir, 'tools', 'bilibili-cli', '.venv', isWindows ? 'Scripts\\python.exe' : 'bin/python');
     var bilibiliBin = path.join(rootDir, 'tools', 'bilibili-cli', '.venv', isWindows ? 'Scripts\\bili.exe' : 'bin/bili');

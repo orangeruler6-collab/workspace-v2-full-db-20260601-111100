@@ -7,10 +7,45 @@ export function loadSchedule() {
   })
 }
 
-export function saveSchedule(tasks, members) {
+export function loadScheduleRevision() {
+  return request('/api/schedule/revision', {
+    method: 'POST',
+    body: {}
+  })
+}
+
+export function saveSchedule(tasks, members, options = {}) {
   return request('/api/schedule/save', {
     method: 'POST',
-    body: { tasks, members }
+    body: { tasks, members, revision: options.revision }
+  })
+}
+
+export function loadScheduleTodos() {
+  return request('/api/schedule/todos/load', {
+    method: 'POST',
+    body: {}
+  })
+}
+
+export function saveScheduleTodo(todo) {
+  return request('/api/schedule/todos/save', {
+    method: 'POST',
+    body: { todo }
+  })
+}
+
+export function updateScheduleTodoStatus(id, status) {
+  return request('/api/schedule/todos/status', {
+    method: 'POST',
+    body: { id, status }
+  })
+}
+
+export function deleteScheduleTodo(id) {
+  return request('/api/schedule/todos/delete', {
+    method: 'POST',
+    body: { id }
   })
 }
 

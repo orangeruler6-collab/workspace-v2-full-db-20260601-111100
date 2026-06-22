@@ -17,8 +17,7 @@
       <div class="ig-left">
         <!-- 模式切换 -->
         <div class="mode-tabs">
-          <button :class="{ active: mode === 't2i' }" @click="mode = 't2i'">🌄 文生图</button>
-          <button :class="{ active: mode === 'i2i' }" @click="mode = 'i2i'">🖼️ 图生图</button>
+          <button :class="{ active: mode !== 'history' }" @click="mode = 't2i'">🌄 生图</button>
           <button :class="{ active: mode === 'history' }" @click="switchToHistory">📜 历史</button>
         </div>
 
@@ -39,7 +38,7 @@
                   loading="lazy"
                   decoding="async"
                   draggable="true"
-                  title="拖到图生图参考图"
+                  title="拖到参考图"
                   @dragstart="handleImageDragStart($event, normalizeImageUrl(item.result_url))"
                   @error="(e) => e.target.style.display='none'" />
               </div>
@@ -58,9 +57,9 @@
           </div>
         </div>
 
-        <!-- 参考图上传区(仅图生图) -->
+        <!-- 参考图上传区 -->
         <div
-          v-if="mode === 'i2i'"
+          v-if="mode !== 'history'"
           class="upload-zone"
           :class="{ 'drag-active': i2iDragActive }"
           @dragenter.prevent="i2iDragActive = true"
@@ -112,7 +111,7 @@
           v-model="prompt"
           class="inp"
           rows="5"
-          :placeholder="mode === 't2i' ? '描述你想要的画面，如：一只赛博朋克风格的机械兔子在未来城市中奔跑，超写实，8K' : '描述你想要的画面变化，如：在原图基础上加入霓虹灯光效果'"
+          :placeholder="hasI2IReferences ? '描述你想要的画面变化，如：在参考图基础上加入霓虹灯光效果' : '描述你想要的画面，如：一只赛博朋克风格的机械兔子在未来城市中奔跑，超写实，8K'"
           @keydown.enter.exact="handleGenerate"
         />
 
@@ -190,14 +189,17 @@
           <div class="param-label">分辨率</div>
           <div class="param-row">
             <button
-              v-for="r in RES_OPTIONS"
-              :key="r"
+              v-for="r in resolutionOptions"
+              :key="r.value"
               class="btn-option"
-              :class="{ active: resVal === r }"
-              @click="resVal = r">
-              {{ r }}
+              :class="{ active: resVal === r.value }"
+              :disabled="r.disabled"
+              :title="r.hint || ''"
+              @click="!r.disabled && (resVal = r.value)">
+              {{ r.value }}
             </button>
           </div>
+          <div v-if="resolutionHint" class="model-hint">{{ resolutionHint }}</div>
         </div>
 
         <!-- 张数 -->
@@ -233,7 +235,7 @@
               loading="lazy"
               decoding="async"
               draggable="true"
-              title="拖到图生图参考图"
+              title="拖到参考图"
               @dragstart="handleImageDragStart($event, normalizeImageUrl(selectedHistory.result_url))" />
           </div>
           <div class="history-viewer-info">
@@ -248,7 +250,7 @@
               <button class="btn btn-primary btn-sm" @click="handleSaveImg(normalizeImageUrl(selectedHistory.result_url))">下载图片</button>
               <button class="btn btn-ghost btn-sm" @click="handleCopy(normalizeImageUrl(selectedHistory.result_url))">复制链接</button>
               <button class="btn btn-ghost btn-sm" @click="reuseHistoryItem(selectedHistory)">复用参数</button>
-              <button class="btn btn-ghost btn-sm" @click="useUrlAsI2IReference(normalizeImageUrl(selectedHistory.result_url), '历史图片')">用作图生图</button>
+              <button class="btn btn-ghost btn-sm" @click="useUrlAsI2IReference(normalizeImageUrl(selectedHistory.result_url), '历史图片')">用作参考图</button>
             </div>
           </div>
         </div>
@@ -293,7 +295,7 @@
             <div
               class="prompt-result-frame"
               :draggable="!!job.url"
-              :title="job.url ? '拖到图生图参考区' : ''"
+              :title="job.url ? '拖到参考图区域' : ''"
               @dragstart.stop="job.url && handleImageDragStart($event, job.url)"
               @dragend.stop="handleImageDragEnd">
               <div v-if="job.status === 'running'" class="prompt-result-loading">
@@ -309,7 +311,7 @@
                 :class="{ revealed: job.revealed }"
                 alt="生成结果"
                 draggable="true"
-                title="拖到图生图参考区"
+                title="拖到参考图区域"
                 @dragstart.stop="handleImageDragStart($event, job.url)"
                 @dragend.stop="handleImageDragEnd" />
               <div v-if="!job.url && job.status !== 'running'" class="prompt-result-state">
@@ -335,7 +337,7 @@
               :class="{ revealed: !loading }"
               alt="生成结果"
               draggable="true"
-              title="拖到图生图参考图"
+              title="拖到参考图"
               @dragstart.stop="handleImageDragStart($event, url)" />
           </div>
         </div>
@@ -397,7 +399,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import {
   createGptImageTask,
   editDreaminaImage,
@@ -418,7 +420,7 @@ import { compressImageFile, readFileAsDataUrl, stripDataUrl } from './imagegen/f
 const { showToast } = useToast()
 
 // ============ 合并后的状态 ============
-const mode = ref('t2i')       // 't2i' | 'i2i'
+const mode = ref('t2i')       // 't2i' | 'history'
 const prompt = ref('')
 const model = ref('gpt-image2')
 const gptImageRoute = ref('primary')
@@ -446,6 +448,39 @@ let gptTaskPollTimer = null
 
 const MODEL_OPTIONS = T2I_MODEL_OPTIONS
 const RES_OPTIONS = RESOLUTION_OPTIONS
+const hasI2IReferences = computed(() => Boolean(i2iFiles.value.length || i2iFile.value))
+const GPT_IMAGE_SIZE_TABLE = {
+  '1K': ['1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4'],
+  '2K': ['1:1', '16:9', '9:16', '3:2', '2:3', '4:3', '3:4'],
+  '4K': ['16:9', '9:16', '3:2', '2:3', '4:3', '3:4']
+}
+const resolutionOptions = computed(() => {
+  if (model.value === 'minimax') {
+    return [{ value: '2K', disabled: false, hint: 'MiniMax 当前接口固定清晰度' }]
+  }
+  if (model.value === 'gpt-image2' && hasI2IReferences.value) {
+    return [{ value: '2K', disabled: false, hint: '参考图生成当前固定使用 2K' }]
+  }
+  if (model.value === 'gpt-image2' && !Object.values(GPT_IMAGE_SIZE_TABLE).some(ratios => ratios.includes(ratio.value))) {
+    return [{ value: '2K', disabled: false, hint: `${ratio.value} 暂未配置 GPT-Image2 尺寸映射` }]
+  }
+  return RES_OPTIONS.map(value => {
+    const supportedRatios = GPT_IMAGE_SIZE_TABLE[value] || []
+    const disabled = model.value === 'gpt-image2' && !supportedRatios.includes(ratio.value)
+    return {
+      value,
+      disabled,
+      hint: disabled ? `${value} 不支持 ${ratio.value}，会自动使用 2K` : ''
+    }
+  })
+})
+const resolutionHint = computed(() => {
+  if (model.value === 'minimax') return 'MiniMax 当前不接收分辨率参数，按接口默认清晰度生成。'
+  if (model.value === 'gpt-image2' && hasI2IReferences.value) return '上传参考图后，GPT-Image2 编辑模式后端固定使用 2K。'
+  if (model.value === 'gpt-image2' && !Object.values(GPT_IMAGE_SIZE_TABLE).some(ratios => ratios.includes(ratio.value))) return `${ratio.value} 暂未配置 GPT-Image2 尺寸映射，建议先切到 16:9、9:16、3:2、2:3、4:3、3:4 或 1:1。`
+  if (model.value === 'gpt-image2' && ratio.value === '1:1') return 'GPT-Image2 当前没有 4K 的 1:1 映射，正方图可选 1K 或 2K。'
+  return ''
+})
 const GPT_IMAGE_ROUTES = [
   { label: '主线路', value: 'primary', hint: '安频线路，默认使用' },
   { label: '原线路', value: 'fallback', hint: '原 Image2 线路，主线路不可用时手动切换' }
@@ -457,7 +492,17 @@ function handleModelChange(val) {
   resVal.value = '2K'
 }
 
-// ============ 图生图上传 ============
+function normalizeResolutionSelection() {
+  const options = resolutionOptions.value || []
+  const current = options.find(item => item.value === resVal.value)
+  if (!current || current.disabled) {
+    resVal.value = options.find(item => !item.disabled)?.value || '2K'
+  }
+}
+
+watch([model, ratio, hasI2IReferences], normalizeResolutionSelection)
+
+// ============ 参考图上传 ============
 function syncPrimaryI2IReference() {
   i2iFile.value = i2iFiles.value[0] || null
   i2iPreview.value = i2iPreviews.value[0] || ''
@@ -602,8 +647,8 @@ async function useUrlAsI2IReference(url, label = '生成结果') {
     const cached = imageFileCache.get(normalized)
     const file = cached ? await cached : await imageUrlToFile(normalized, 'i2i-reference.png')
     if (await appendI2IReferences([file], [normalized])) {
-      mode.value = 'i2i'
-      showToast(label + '已加入图生图参考图', 'success')
+      mode.value = 't2i'
+      showToast(label + '已加入参考图', 'success')
     }
   } catch (e) {
     showToast(e.message || '设置参考图失败', 'error')
@@ -948,7 +993,6 @@ function formatGptImageError(e) {
 async function handleGenerate() {
   const hasPrompt = prompt.value.trim() || (model.value === 'gpt-image2' && promptJobs.value.length)
   if (!hasPrompt) return showToast('请输入描述词', 'error')
-  if (mode.value === 'i2i' && !i2iFiles.value.length && !i2iFile.value) return showToast('请上传参考图', 'error')
 
   loading.value = true
   if (model.value !== 'gpt-image2') {
@@ -958,7 +1002,7 @@ async function handleGenerate() {
 
   try {
     if (model.value === 'minimax') {
-      const base64List = mode.value === 'i2i' ? await readI2IBase64List() : []
+      const base64List = hasI2IReferences.value ? await readI2IBase64List() : []
       const base64 = base64List[0] || null
       const data = await generateMiniMaxImage({
         prompt: prompt.value,
@@ -973,7 +1017,7 @@ async function handleGenerate() {
         showToast(data.error || '生成失败', 'error')
       }
     } else if (model.value === 'gpt-image2') {
-      const base64List = mode.value === 'i2i' && prompt.value.trim() ? await readI2IBase64List({ withMeta: true }) : []
+      const base64List = hasI2IReferences.value && prompt.value.trim() ? await readI2IBase64List({ withMeta: true }) : []
       const newJobs = prompt.value.trim() ? addPromptJobs(count.value, base64List) : []
       if (!newJobs.length) resetErroredPromptJobs()
       const queuedBeforeRun = pendingPromptJobs().length
@@ -993,7 +1037,7 @@ async function handleGenerate() {
       }
     } else {
       // 即梦
-      const base64List = mode.value === 'i2i' ? await readI2IBase64List() : []
+      const base64List = hasI2IReferences.value ? await readI2IBase64List() : []
       const base64 = base64List[0] || null
       const data = base64
         ? await editDreaminaImage({ prompt: prompt.value, image_base64: base64, model_version: model.value, ratio: ratio.value, resolution_type: resVal.value })
@@ -1122,12 +1166,32 @@ async function handleCopy(text) {
 }
 
 function handleSaveImg(url) {
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'generated-' + Date.now() + '.png'
-  a.target = '_blank'
-  a.click()
-  showToast('开始下载...', 'success')
+  const normalized = normalizeImageUrl(url)
+  if (!normalized) {
+    showToast('图片地址为空，不能下载', 'error')
+    return
+  }
+  fetch(normalized)
+    .then(resp => {
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+      return resp.blob()
+    })
+    .then(blob => {
+      if (!blob.size) throw new Error('empty image')
+      if (blob.type && !blob.type.startsWith('image/')) throw new Error(blob.type)
+      const objectUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objectUrl
+      a.download = 'generated-' + Date.now() + '.png'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(objectUrl)
+      showToast('图片已开始下载', 'success')
+    })
+    .catch(e => {
+      showToast('图片下载失败：' + (e.message || '请稍后重试'), 'error')
+    })
 }
 
 onMounted(() => {
@@ -1271,6 +1335,17 @@ onUnmounted(() => {
 }
 .btn-option:hover { border-color: var(--border-mid, #3a3a5c); color: var(--text, #e0d8ff); background: var(--surface2, #1e1e3a); }
 .btn-option.active { background: var(--primary-dark, #5a1fdb); border-color: var(--primary-dark, #5a1fdb); color: #fff; }
+.btn-option:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+  background: transparent;
+  color: var(--text-muted, #888);
+}
+.btn-option:disabled:hover {
+  border-color: var(--border, #2a2a4a);
+  background: transparent;
+  color: var(--text-muted, #888);
+}
 .route-option {
   min-width: 76px;
   padding: 5px 10px;
@@ -1478,7 +1553,7 @@ onUnmounted(() => {
   box-shadow: 0 0 0 2px var(--primary, #7b2fff), 0 14px 32px rgba(123, 47, 255, 0.25);
 }
 .prompt-result-cell.dragging .prompt-result-frame::after {
-  content: '拖到图生图参考区';
+  content: '拖到参考图区域';
   position: absolute;
   inset: 0;
   z-index: 3;

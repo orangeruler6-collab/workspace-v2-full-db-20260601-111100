@@ -114,6 +114,8 @@ const WEB_RESEARCH_MAX_OUTPUT_TOKENS = 1800;
 const WEB_RESEARCH_TIMEOUT_MS = 180_000;
 const WEB_RESEARCH_HTTP_TIMEOUT_MS = 25_000;
 const WEB_RESEARCH_SEARCH_RESULT_LIMIT = 4;
+const CHAT_STREAM_TIMEOUT_MS = Number.parseInt(process.env.CHAT_STREAM_TIMEOUT_MS || "", 10) || 8 * 60 * 1000;
+const CHAT_STREAM_IDLE_TIMEOUT_MS = Number.parseInt(process.env.CHAT_STREAM_IDLE_TIMEOUT_MS || "", 10) || 90_000;
 
 class StreamResponseTextError extends Error {
   partialText: string;
@@ -222,6 +224,35 @@ export async function analyzeMaterialFrames(input: {
   return ensureMaterialFrameAnalysisFields(parseMaterialFrameAnalysis(text));
 }
 
+function createTimeoutSignal(parent: AbortSignal | undefined, timeoutMs: number, message: string) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(new Error(message)), timeoutMs);
+  const abortFromParent = () => controller.abort(parent?.reason || new Error("请求已取消"));
+  if (parent?.aborted) abortFromParent();
+  else parent?.addEventListener("abort", abortFromParent, { once: true });
+  return {
+    signal: controller.signal,
+    cleanup() {
+      clearTimeout(timeout);
+      parent?.removeEventListener("abort", abortFromParent);
+    }
+  };
+}
+
+async function readStreamChunk<T>(reader: ReadableStreamDefaultReader<T>, timeoutMs = CHAT_STREAM_IDLE_TIMEOUT_MS) {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => reject(new Error(`模型流式输出超过 ${Math.round(timeoutMs / 1000)} 秒没有新内容`)), timeoutMs);
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
 export async function streamResponseText(input: {
   messages: ChatMessage[];
   reasoningEffort?: ChatReasoningEffort;
@@ -235,21 +266,26 @@ export async function streamResponseText(input: {
     return fallbackChatCompletion(config.model || "local-fallback");
   }
 
-  if (config.wireApi === "chat_completions") {
-    return streamChatCompletion(config, input);
-  }
+  const timeoutSignal = createTimeoutSignal(input.signal, CHAT_STREAM_TIMEOUT_MS, "文案生成超过 8 分钟，已停止等待模型返回");
+  const requestInput = { ...input, signal: timeoutSignal.signal };
 
   try {
-    return await streamResponseApi(config, input);
+    if (config.wireApi === "chat_completions") {
+      return await streamChatCompletion(config, requestInput);
+    }
+
+    return await streamResponseApi(config, requestInput);
   } catch (error) {
     if (
       !(error instanceof StreamResponseTextError) &&
-      !input.tools?.length &&
+      !requestInput.tools?.length &&
       (config.wireApi === "auto" || shouldRetryResponsesAsChatCompletions(error))
     ) {
-      return streamChatCompletion(config, input);
+      return streamChatCompletion(config, requestInput);
     }
     throw error;
+  } finally {
+    timeoutSignal.cleanup();
   }
 }
 
@@ -298,7 +334,7 @@ async function streamResponseApi(
 
   try {
     while (!streamFinished) {
-      const { value, done } = await reader.read();
+      const { value, done } = await readStreamChunk(reader);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split("\n\n");
@@ -388,7 +424,7 @@ async function streamChatCompletion(
 
   try {
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await readStreamChunk(reader);
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       const events = buffer.split("\n\n");

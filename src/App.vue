@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="app-shell">
     <!-- Top Bar -->
     <header class="topbar">
@@ -293,6 +293,7 @@ const FeedbackModule = defineAsyncComponent(() => import('./modules/FeedbackModu
 const VectorModule = defineAsyncComponent(() => import('./modules/VectorModule.vue'))
 const AdminUsersModule = defineAsyncComponent(() => import('./modules/AdminUsersModule.vue'))
 const OperationLogModule = defineAsyncComponent(() => import('./modules/OperationLogModule.vue'))
+const SystemHealthModule = defineAsyncComponent(() => import('./modules/SystemHealthModule.vue'))
 const PostToolsModule = defineAsyncComponent(() => import('./modules/PostToolsModule.vue'))
 const ProjectAgentModule = defineAsyncComponent(() => import('./modules/ProjectAgentModule.vue'))
 const TrafficPlanModule = defineAsyncComponent(() => import('./modules/TrafficPlanModule.vue'))
@@ -387,6 +388,7 @@ const { getActiveModuleComponent, getActiveModuleKey, getStyleWorkbenchPath, isV
   VectorModule,
   AdminUsersModule,
   OperationLogModule,
+  SystemHealthModule,
   PostToolsModule,
   ProjectAgentModule,
   TrafficPlanModule,
@@ -831,3 +833,6 @@ onUnmounted(() => {
 <style>
 @import './style.css';
 </style>
+
+
+

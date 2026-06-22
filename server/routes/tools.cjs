@@ -8,6 +8,7 @@ const createLogger = require('../lib/logger.cjs');
 const searchIntent = require('../lib/searchIntent.cjs');
 const createSqliteAdapter = require('../lib/sqlite.cjs');
 const downloadAdapters = require('../lib/downloadAdapters.cjs');
+const { proxyAgentForUrl } = require('../lib/proxy.cjs');
 
 const logger = createLogger('routes:tools');
 
@@ -222,6 +223,438 @@ module.exports = function createToolsRoutes(deps) {
       .slice(0, 80) || 'media';
   }
 
+  const posttoolsDownloadJobs = new Map();
+  const posttoolsDownloadDelayMs = Math.max(500, Number(process.env.POSTTOOLS_DOWNLOAD_QUEUE_DELAY_MS || 1500));
+
+  const zipCrcTable = (function() {
+    const table = new Uint32Array(256);
+    for (let i = 0; i < 256; i++) {
+      let c = i;
+      for (let k = 0; k < 8; k++) {
+        c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+      }
+      table[i] = c >>> 0;
+    }
+    return table;
+  })();
+
+  function crc32(buffer) {
+    let crc = 0xffffffff;
+    for (let i = 0; i < buffer.length; i++) {
+      crc = zipCrcTable[(crc ^ buffer[i]) & 0xff] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function crc32File(filePath) {
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    const fd = fs.openSync(filePath, 'r');
+    let crc = 0xffffffff;
+    try {
+      let bytesRead = 0;
+      while ((bytesRead = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) {
+        for (let i = 0; i < bytesRead; i++) {
+          crc = zipCrcTable[(crc ^ buffer[i]) & 0xff] ^ (crc >>> 8);
+        }
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    return (crc ^ 0xffffffff) >>> 0;
+  }
+
+  function dosDateTime(date) {
+    const d = date || new Date();
+    const year = Math.max(1980, d.getFullYear());
+    return {
+      time: ((d.getHours() & 31) << 11) | ((d.getMinutes() & 63) << 5) | (Math.floor(d.getSeconds() / 2) & 31),
+      date: (((year - 1980) & 127) << 9) | (((d.getMonth() + 1) & 15) << 5) | (d.getDate() & 31)
+    };
+  }
+
+  function writeZipFile(entries, zipPath) {
+    const centralParts = [];
+    let offset = 0;
+    fs.mkdirSync(path.dirname(zipPath), { recursive: true });
+    const out = fs.openSync(zipPath, 'w');
+    try {
+      entries.forEach(function(entry) {
+        const stat = fs.statSync(entry.absolutePath);
+        const size = stat.size;
+        if (size > 0xffffffff) throw new Error('zip entry too large: ' + entry.name);
+        const nameBuffer = Buffer.from(entry.name, 'utf8');
+        const crc = crc32File(entry.absolutePath);
+        const dt = dosDateTime(stat.mtime);
+        const local = Buffer.alloc(30);
+        local.writeUInt32LE(0x04034b50, 0);
+        local.writeUInt16LE(20, 4);
+        local.writeUInt16LE(0x0800, 6);
+        local.writeUInt16LE(0, 8);
+        local.writeUInt16LE(dt.time, 10);
+        local.writeUInt16LE(dt.date, 12);
+        local.writeUInt32LE(crc, 14);
+        local.writeUInt32LE(size, 18);
+        local.writeUInt32LE(size, 22);
+        local.writeUInt16LE(nameBuffer.length, 26);
+        local.writeUInt16LE(0, 28);
+        fs.writeSync(out, local);
+        fs.writeSync(out, nameBuffer);
+
+        const input = fs.openSync(entry.absolutePath, 'r');
+        const buffer = Buffer.allocUnsafe(1024 * 1024);
+        try {
+          let bytesRead = 0;
+          while ((bytesRead = fs.readSync(input, buffer, 0, buffer.length, null)) > 0) {
+            fs.writeSync(out, buffer, 0, bytesRead);
+          }
+        } finally {
+          fs.closeSync(input);
+        }
+
+        const central = Buffer.alloc(46);
+        central.writeUInt32LE(0x02014b50, 0);
+        central.writeUInt16LE(20, 4);
+        central.writeUInt16LE(20, 6);
+        central.writeUInt16LE(0x0800, 8);
+        central.writeUInt16LE(0, 10);
+        central.writeUInt16LE(dt.time, 12);
+        central.writeUInt16LE(dt.date, 14);
+        central.writeUInt32LE(crc, 16);
+        central.writeUInt32LE(size, 20);
+        central.writeUInt32LE(size, 24);
+        central.writeUInt16LE(nameBuffer.length, 28);
+        central.writeUInt16LE(0, 30);
+        central.writeUInt16LE(0, 32);
+        central.writeUInt16LE(0, 34);
+        central.writeUInt16LE(0, 36);
+        central.writeUInt32LE(0, 38);
+        central.writeUInt32LE(offset, 42);
+        centralParts.push(central, nameBuffer);
+        offset += local.length + nameBuffer.length + size;
+      });
+
+      const centralOffset = offset;
+      centralParts.forEach(function(part) {
+        fs.writeSync(out, part);
+        offset += part.length;
+      });
+      const centralSize = offset - centralOffset;
+      const end = Buffer.alloc(22);
+      end.writeUInt32LE(0x06054b50, 0);
+      end.writeUInt16LE(0, 4);
+      end.writeUInt16LE(0, 6);
+      end.writeUInt16LE(entries.length, 8);
+      end.writeUInt16LE(entries.length, 10);
+      end.writeUInt32LE(centralSize, 12);
+      end.writeUInt32LE(centralOffset, 16);
+      end.writeUInt16LE(0, 20);
+      fs.writeSync(out, end);
+    } finally {
+      fs.closeSync(out);
+    }
+  }
+
+  function detectPosttoolsDownloadPlatform(value) {
+    const text = String(value || '').trim();
+    if (/bilibili\.com|b23\.tv|\bBV[0-9A-Za-z]{8,}\b/i.test(text)) return 'bilibili';
+    if (/douyin\.com|iesdouyin\.com|v\.douyin\.com/i.test(text)) return 'douyin';
+    return '';
+  }
+
+  function uploadFileToAbsolute(file) {
+    if (!file || typeof file !== 'object') return '';
+    if (file.path) {
+      const rawPath = String(file.path);
+      if (path.isAbsolute(rawPath) && fs.existsSync(rawPath)) return rawPath;
+      if (rawPath.startsWith('/uploads/')) {
+        const full = resolveUploadPath(rawPath);
+        if (full && fs.existsSync(full)) return full;
+      } else {
+        const full = path.join(root, 'public', 'uploads', rawPath.replace(/^\/+/, ''));
+        if (fs.existsSync(full)) return full;
+      }
+    }
+    const url = String(file.download_url || file.url || '');
+    const match = url.match(/(?:^|https?:\/\/[^/]+)\/uploads\/([^?#]+)/);
+    if (match) {
+      try {
+        const full = path.join(root, 'public', 'uploads', decodeURIComponent(match[1]).replace(/^\/+/, ''));
+        if (fs.existsSync(full)) return full;
+      } catch(e) {}
+    }
+    return '';
+  }
+
+  function downloadPosttoolsVideo(body) {
+    const platform = String(body.platform || '').toLowerCase();
+    const url = String(body.url || '').trim();
+    const quality = String(body.quality || body.downloadQuality || '1080').toLowerCase();
+    if (!url) return Promise.resolve({ ok: false, error: 'url required', files: [] });
+    if (platform !== 'douyin' && platform !== 'bilibili') {
+      return Promise.resolve({ ok: false, error: 'unsupported platform', files: [] });
+    }
+
+    logger.info('/api/posttools/video-download', { platform: platform, url: url });
+
+    if (platform === 'douyin') {
+      return runPython('douyin_downloader_bridge.py', 'download', {
+        url: url,
+        autoTranscript: false,
+        downloadAssets: true,
+        downloadType: 'mp4',
+        quality: quality === '720' || quality === '720p' ? '720' : '1080'
+      }, 1800).then(function(result) {
+        const files = Array.isArray(result.files) ? result.files : [];
+        return Object.assign({}, result, {
+          ok: result.success !== false && files.length > 0,
+          platform: 'douyin',
+          files: files,
+          error: result.success === false || !files.length ? (result.error || result.stderr || result.log || result.message || 'Douyin video download failed') : ''
+        });
+      }).catch(function(e) {
+        logger.error('/api/posttools/video-download douyin failed', e);
+        return { ok: false, platform: 'douyin', error: e.message || String(e), files: [] };
+      });
+    }
+
+    const bvid = extractBvid(url);
+    if (!bvid) {
+      return Promise.resolve({ ok: false, platform: 'bilibili', error: '未识别到 B 站 BV 号', files: [] });
+    }
+    const outputDir = path.join(root, 'public', 'uploads', 'posttools', 'bilibili');
+    return downloadAdapters.downloadBilibili({
+      root: root,
+      bvid: bvid,
+      url: url,
+      outputDir: outputDir,
+      quality: quality === '720' || quality === '720p' ? '720P \u9ad8\u6e05' : '1080P \u9ad8\u7801\u7387, 1080P \u9ad8\u6e05, 720P \u9ad8\u6e05',
+      timeout: 15 * 60 * 1000
+    }).then(function(result) {
+      const files = (result.files || [])
+        .filter(function(file) { return fs.existsSync(file); })
+        .map(fileEntryFromAbsolute);
+      return {
+        ok: result.ok && files.length > 0,
+        platform: 'bilibili',
+        tool: result.tool || '',
+        files: files,
+        attempts: result.attempts || [],
+        error: result.ok && files.length ? '' : (result.error || 'B 站视频下载失败')
+      };
+    }).catch(function(e) {
+      logger.error('/api/posttools/video-download bilibili failed', e);
+      return { ok: false, platform: 'bilibili', error: e.message || String(e), files: [] };
+    });
+  }
+
+  function snapshotPosttoolsDownloadJob(job) {
+    if (!job) return null;
+    const live = scanPosttoolsDownloadProgress(job);
+    return {
+      id: job.id,
+      status: job.status,
+      total: job.total,
+      done: job.done,
+      success: job.success,
+      failed: job.failed,
+      currentIndex: job.currentIndex || 0,
+      currentStartedAt: job.currentStartedAt || '',
+      phase: job.phase || '',
+      current: job.current,
+      liveFiles: live.count,
+      liveBytes: live.bytes,
+      liveLatestAt: live.latestAt,
+      error: job.error,
+      zip_url: job.zip_url,
+      zip_path: job.zip_path,
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+      items: job.items.map(function(item) {
+        return {
+          url: item.url,
+          platform: item.platform,
+          status: item.status,
+          error: item.error,
+          files: item.files || []
+        };
+      })
+    };
+  }
+
+  function scanPosttoolsDownloadProgress(job) {
+    const since = Date.parse(job && job.createdAt || '') || 0;
+    const dirs = [
+      path.join(root, 'public', 'uploads', 'douyin'),
+      path.join(root, 'public', 'uploads', 'posttools', 'bilibili')
+    ];
+    const result = { count: 0, bytes: 0, latestAt: '' };
+    dirs.forEach(function(dir) {
+      try {
+        if (!fs.existsSync(dir)) return;
+        fs.readdirSync(dir, { withFileTypes: true }).forEach(function(entry) {
+          if (!entry.isFile()) return;
+          if (!/\.(mp4|mov|mkv|webm|flv|m4v)$/i.test(entry.name)) return;
+          const fullPath = path.join(dir, entry.name);
+          const stat = fs.statSync(fullPath);
+          if (since && stat.mtimeMs < since - 2000) return;
+          result.count += 1;
+          result.bytes += stat.size;
+          if (!result.latestAt || stat.mtimeMs > Date.parse(result.latestAt)) {
+            result.latestAt = stat.mtime.toISOString();
+          }
+        });
+      } catch(e) {}
+    });
+    return result;
+  }
+
+  function runPosttoolsDownloadJob(job) {
+    Promise.resolve().then(async function() {
+      job.status = 'running';
+      job.phase = 'downloading';
+      job.updatedAt = new Date().toISOString();
+      const zipSources = [];
+      for (let i = 0; i < job.items.length; i++) {
+        const item = job.items[i];
+        item.status = 'running';
+        job.currentIndex = i + 1;
+        job.currentStartedAt = new Date().toISOString();
+        job.phase = 'downloading';
+        job.current = item.url;
+        job.updatedAt = new Date().toISOString();
+        try {
+          const result = await downloadPosttoolsVideo({ platform: item.platform, url: item.url, quality: job.quality });
+          const files = Array.isArray(result.files) ? result.files : [];
+          if (!result.ok || !files.length) throw new Error(result.error || '视频下载失败');
+          item.status = 'done';
+          item.files = files;
+          item.error = '';
+          job.success += 1;
+          files.forEach(function(file) {
+            const absolutePath = uploadFileToAbsolute(file);
+            if (absolutePath) zipSources.push({ file: file, absolutePath: absolutePath, index: i + 1 });
+          });
+        } catch (e) {
+          item.status = 'error';
+          item.error = e.message || String(e);
+          job.failed += 1;
+        }
+        job.done += 1;
+        job.updatedAt = new Date().toISOString();
+        if (i < job.items.length - 1) await delay(posttoolsDownloadDelayMs);
+      }
+
+      if (zipSources.length) {
+        job.phase = 'zipping';
+        job.current = 'zipping';
+        job.updatedAt = new Date().toISOString();
+        const zipDir = path.join(root, 'public', 'uploads', 'posttools', 'zips');
+        const zipName = 'posttools_download_' + job.id + '.zip';
+        const usedNames = new Set();
+        const entries = zipSources.map(function(source, idx) {
+          const ext = path.extname(source.absolutePath) || path.extname(source.file && source.file.name || '') || '.mp4';
+          const base = safeMediaName(path.basename(source.file && source.file.name || source.absolutePath, ext));
+          let name = String(source.index).padStart(2, '0') + '_' + base + ext;
+          let dedupe = 2;
+          while (usedNames.has(name.toLowerCase())) {
+            name = String(source.index).padStart(2, '0') + '_' + base + '_' + dedupe + ext;
+            dedupe += 1;
+          }
+          usedNames.add(name.toLowerCase());
+          return { name: name, absolutePath: source.absolutePath };
+        });
+        const zipPath = path.join(zipDir, zipName);
+        writeZipFile(entries, zipPath);
+        job.zip_url = '/uploads/posttools/zips/' + encodeURIComponent(zipName);
+        job.zip_path = 'posttools/zips/' + zipName;
+      }
+      job.status = job.success ? 'done' : 'error';
+      job.error = job.success ? '' : '队列任务全部失败';
+      job.current = '';
+      job.currentIndex = 0;
+      job.phase = job.success ? 'done' : 'error';
+      job.updatedAt = new Date().toISOString();
+    }).catch(function(e) {
+      logger.error('/api/posttools/video-download-batch worker failed', e);
+      job.status = 'error';
+      job.error = e.message || String(e);
+      job.current = '';
+      job.currentIndex = 0;
+      job.phase = 'error';
+      job.updatedAt = new Date().toISOString();
+    });
+  }
+
+  function createPosttoolsDownloadJob(body) {
+    const rawLinks = Array.isArray(body.links) ? body.links : String(body.links || body.url || '').split(/\r?\n/);
+    const seen = new Set();
+    const items = rawLinks.map(function(item) {
+      const url = typeof item === 'string' ? item : (item && (item.url || item.link) || '');
+      const normalized = String(url || '').trim();
+      const platform = detectPosttoolsDownloadPlatform(normalized);
+      return normalized && platform ? { url: normalized, platform: platform, status: 'pending', error: '', files: [] } : null;
+    }).filter(function(item) {
+      if (!item) return false;
+      const key = item.url.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+    if (!items.length) return null;
+    const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+    const now = new Date().toISOString();
+    const job = {
+      id: id,
+      quality: String(body.quality || body.downloadQuality || '1080'),
+      status: 'queued',
+      total: items.length,
+      done: 0,
+      success: 0,
+      failed: 0,
+      currentIndex: 0,
+      currentStartedAt: '',
+      phase: 'queued',
+      current: '',
+      error: '',
+      zip_url: '',
+      zip_path: '',
+      createdAt: now,
+      updatedAt: now,
+      items: items
+    };
+    posttoolsDownloadJobs.set(id, job);
+    runPosttoolsDownloadJob(job);
+    return job;
+  }
+
+  function listPosttoolsDownloadZips(limit) {
+    const zipDir = path.join(root, 'public', 'uploads', 'posttools', 'zips');
+    try {
+      if (!fs.existsSync(zipDir)) return [];
+      return fs.readdirSync(zipDir)
+        .filter(function(name) { return /\.zip$/i.test(name); })
+        .map(function(name) {
+          const fullPath = path.join(zipDir, name);
+          const stat = fs.statSync(fullPath);
+          return {
+            name: name,
+            url: '/uploads/posttools/zips/' + encodeURIComponent(name),
+            download_url: '/uploads/posttools/zips/' + encodeURIComponent(name),
+            path: 'posttools/zips/' + name,
+            type: 'zip',
+            size: stat.size,
+            mtime: stat.mtimeMs,
+            updatedAt: stat.mtime.toISOString()
+          };
+        })
+        .sort(function(a, b) { return b.mtime - a.mtime; })
+        .slice(0, Math.max(1, Number(limit) || 10));
+    } catch (e) {
+      logger.warn('list posttools download zips failed', e);
+      return [];
+    }
+  }
+
   function runFfmpeg(args, timeoutMs) {
     return new Promise(function(resolve) {
       const proc = spawn(ffmpegBin(), args, { cwd: root, windowsHide: true });
@@ -252,7 +685,8 @@ module.exports = function createToolsRoutes(deps) {
         return;
       }
       const audioPath = path.join(os.tmpdir(), 'bili_fallback_audio_' + Date.now() + '_' + Math.random().toString(36).slice(2) + '.mp3');
-      const maxSeconds = Math.max(30, Math.min(600, Number(options && options.maxSeconds) || 240));
+      const configuredMaxSeconds = Number(options && options.maxSeconds) || Number(process.env.BILIBILI_TRANSCRIBE_MAX_SECONDS) || 1800;
+      const maxSeconds = Math.max(30, Math.min(7200, configuredMaxSeconds));
       const ff = spawn(ffmpegBin(), [
         '-y',
         '-i', videoPath,
@@ -304,6 +738,7 @@ module.exports = function createToolsRoutes(deps) {
           port: 443,
           path: '/v1/audio/transcriptions',
           method: 'POST',
+          agent: proxyAgentForUrl('https://api.siliconflow.cn/v1/audio/transcriptions'),
           headers: {
             'Content-Type': 'multipart/form-data; boundary=' + boundary,
             'Content-Length': body.length,
@@ -331,7 +766,7 @@ module.exports = function createToolsRoutes(deps) {
           try { fs.unlinkSync(audioPath); } catch(e) {}
           resolve({ text: '', error: err.message || String(err) });
         });
-        req.setTimeout(240000, function() {
+        req.setTimeout(Math.max(240000, Math.min(900000, maxSeconds * 1000)), function() {
           req.destroy(new Error('SiliconFlow transcription timeout'));
         });
         req.write(body);
@@ -360,7 +795,7 @@ module.exports = function createToolsRoutes(deps) {
         };
       }
       const videoPath = downloaded.files.find(file => downloadAdapters.getMediaKind(file) === 'video') || downloaded.files[0];
-      const transcribed = await transcribeMediaFileWithSiliconFlow(videoPath, { maxSeconds: 240 });
+      const transcribed = await transcribeMediaFileWithSiliconFlow(videoPath, {});
       if (!transcribed.text) {
         return {
           text: '',
@@ -481,7 +916,8 @@ module.exports = function createToolsRoutes(deps) {
     });
   }
 
-  function callMiniMaxMessages(messages, temperature, maxTokens, cb) {
+  function callMiniMaxMessages(messages, temperature, maxTokens, cb, options) {
+    options = options || {};
     console.error('[DEBUG callMiniMaxMessages] model=MiniMax-M2.7-highspeed apiHost=api.minimaxi.com temperature=' + temperature);
     var apiKey = minimaxApiKey;
     var apiHost = 'api.minimaxi.com';
@@ -520,7 +956,7 @@ module.exports = function createToolsRoutes(deps) {
       });
     });
     req.on('error', function(e) { cb(e); });
-    req.setTimeout(120000, function() {
+    req.setTimeout(options.timeoutMs || 120000, function() {
       req.destroy(new Error('MiniMax request timeout'));
     });
     req.write(payload);
@@ -1789,6 +2225,45 @@ module.exports = function createToolsRoutes(deps) {
       });
     },
 
+    '/api/posttools/video-download': function(body, cb) {
+      downloadPosttoolsVideo(body || {}).then(cb).catch(function(e) {
+        cb({ ok: false, error: e.message || String(e), files: [] });
+      });
+    },
+
+    '/api/posttools/video-download-batch-start': function(body, cb) {
+      const job = createPosttoolsDownloadJob(body || {});
+      if (!job) {
+        cb({ ok: false, error: '请先粘贴抖音或 B 站视频链接', job: null });
+        return;
+      }
+      cb({ ok: true, job: snapshotPosttoolsDownloadJob(job) });
+    },
+
+    '/api/posttools/video-download-batch-status': function(body, cb) {
+      const id = String(body && body.id || '').trim();
+      const job = id ? posttoolsDownloadJobs.get(id) : null;
+      if (!job) {
+        cb({ ok: false, error: '未找到批量下载任务', job: null });
+        return;
+      }
+      cb({ ok: true, job: snapshotPosttoolsDownloadJob(job) });
+    },
+
+    '/api/posttools/video-download-batch-latest': function(body, cb) {
+      const files = listPosttoolsDownloadZips(body && body.limit);
+      cb({ ok: true, files: files, latest: files[0] || null });
+    },
+
+    '/api/posttools/video-download-batch-jobs': function(body, cb) {
+      const limit = Math.max(1, Number(body && body.limit) || 10);
+      const jobs = Array.from(posttoolsDownloadJobs.values())
+        .sort(function(a, b) { return Date.parse(b.createdAt || '') - Date.parse(a.createdAt || ''); })
+        .slice(0, limit)
+        .map(snapshotPosttoolsDownloadJob);
+      cb({ ok: true, jobs: jobs });
+    },
+
     '/api/posttools/media-convert': function(body, cb) {
       const action = String(body.action || '').trim();
       const source = String(body.source || '').trim();
@@ -1944,7 +2419,8 @@ module.exports = function createToolsRoutes(deps) {
         callOpenAICompatible(messages, {
           model: body.model || 'gpt-5.5',
           temperature: body.temperature === undefined ? 0.7 : body.temperature,
-          maxTokens: body.max_tokens || body.maxTokens || 2000
+          maxTokens: body.max_tokens || body.maxTokens || 2000,
+          timeoutMs: body.timeoutMs || body.timeout_ms || 180000
         }).then(function(reply) {
           cb({ reply: reply || 'no reply', model: body.model || 'gpt-5.5' });
         }).catch(function(err) {
@@ -1952,10 +2428,10 @@ module.exports = function createToolsRoutes(deps) {
         });
         return;
       }
-      callMiniMaxMessages(messages, 0.7, 2000, function(err, reply) {
+      callMiniMaxMessages(messages, 0.7, body.max_tokens || body.maxTokens || 2000, function(err, reply) {
         if (err) { cb({ reply: 'error: ' + err.message }); return; }
         cb({ reply: reply || 'no reply' });
-      });
+      }, { timeoutMs: body.timeoutMs || body.timeout_ms || 180000 });
     },
 
     '/api/ai-fix': function(body, cb) {
@@ -2072,59 +2548,119 @@ ${videoUrl ? '视频链接：' + videoUrl : ''}
         : (scenario ? '重点使用「' + scenario + '」风格，' : '五大风格（逻辑鬼才、本地/业内人、抽象乐子人、阴阳怪气高手、暴躁/狂热老铁）混合使用，');
       const accountLine = account ? '\n账号倾向：' + account + '（可用该账号的人设语气）' : '';
       const targetCount = count;
-      const aiSeedCount = Math.min(targetCount, isDanmaku ? 80 : 50);
-      const systemPrompt = isDanmaku
-        ? '你是一个熟悉 B站弹幕语境的内容互动策划。你只能输出一句接一句的弹幕文字，绝对不能输出任何序号、任何前缀、任何引导语。每句话就是一条弹幕，句子之间用换行分隔。禁止输出编号、禁止输出"弹幕1："这类前缀，禁止输出换行符以外的任何分隔符。弹幕要短、快、贴画面感，适合飘在视频上。'
-        : '你是一个混迹于国内各大内容平台的最潮、最活跃的老网民。\n【核心规则】你只能输出一句接一句的评论文字，绝对不能输出任何序号、任何前缀、任何引导语。每句话就是一条评论，句子之间用换行分隔。禁止输出编号、禁止输出"评论1："这类前缀，禁止输出换行符以外的任何分隔符。评论就是纯文字句子。\n\n深谙当下的造梗逻辑与网民心态。绝对禁止使用远古老土梗（yyds、绝绝子、神马、蓝瘦香菇等）。必须使用当下最鲜活的缩写、抽象话、阴阳怪气句式或精准破防词汇。禁止说教，禁止礼貌用语，禁止总结陈词。允许标点符号滥用（如！！！、？？？）、口语化错别字、以及（狗头）（吃瓜）等文字表情后缀。';
       (async function() {
         const comments = [];
         const seen = new Set();
-        let warning = '';
-        if (aiSeedCount > 0) {
-          const batchCount = aiSeedCount;
-          const longCount = isDanmaku ? Math.ceil(batchCount * 0.08) : Math.ceil(batchCount * 0.15);
-          const shortCount = batchCount - longCount;
-          const lengthRule = isDanmaku
-            ? '其中长弹幕' + longCount + '条（12-24字，适合关键情绪点），短弹幕' + shortCount + '条（3-14字，重现场反应、玩梗、吐槽、惊讶）。'
-            : '其中长评' + longCount + '条（20-40字，重逻辑推演、情绪爆发或深度锐评），短评' + shortCount + '条（5-20字，重情绪宣泄、玩梗、神吐槽或极简抽象）。';
-          const userPrompt = '视频文案：\n' + script + '\n' + (accountLine || '') + '\n\n' + scenarioDesc + '请生成恰好' + batchCount + '条' + itemLabel + '，' + lengthRule + '\n\n【强制规则】\n1. 只能输出恰好' + batchCount + '行纯文字，每行就是一条' + itemLabel + '。\n2. 每行直接是' + itemLabel + '内容，不允许以任何字符开头（不能是"1."、"' + itemLabel + '1："、"——"、"- "等）。\n3. 不能有空行，不能有额外的换行。\n4. 不能输出任何说明、备注、结语。\n5. 每条' + itemLabel + '必须针对视频文案的具体内容，不能泛泛而谈。\n\n直接开始输出' + batchCount + '行' + itemLabel + '：';
-          try {
-            const reply = await callTextModelWithRetry(systemPrompt, userPrompt, {
-              maxTokens: Math.min(9000, Math.max(1800, batchCount * (isDanmaku ? 30 : 55))),
-              temperature: isDanmaku ? 0.82 : 0.76,
-              timeoutMs: isDanmaku ? 30000 : 25000,
-              attempts: 1
+        const batchAngles = isDanmaku
+          ? ['震惊反应', '现场吐槽', '抽象玩梗', '节奏跟拍', '夸张惊呼']
+          : ['更毒舌', '更共鸣', '更抽象', '更拆解', '更戏谑'];
+        const maxWaves = 3;
+        let lastError = '';
+
+        function plannedBatchCount(remaining) {
+          if (remaining <= 40) return 1;
+          if (remaining <= 80) return 2;
+          if (remaining <= 150) return 3;
+          if (remaining <= 240) return 4;
+          return 5;
+        }
+
+        async function runWave(waveIndex) {
+          const remaining = targetCount - comments.length;
+          const batchCount = plannedBatchCount(remaining);
+          const baseSize = Math.ceil(remaining / batchCount);
+          const batchMaxSize = isDanmaku ? 80 : 70;
+          const extraPerBatch = batchCount === 1 ? 0 : (remaining >= 100 ? 5 : 2);
+          const promptIntro = isDanmaku
+            ? '你是熟悉中文短视频弹幕语境的内容策划。'
+            : '你是熟悉中文短视频评论区语境的内容策划。';
+          const styleRule = isDanmaku
+            ? '只输出中文弹幕，每行一条，短、快、贴画面感。'
+            : '只输出中文评论，每行一条，具体、犀利、有画面感。';
+          const specs = [];
+          for (let index = 0; index < batchCount; index += 1) {
+            specs.push({
+              requestCount: Math.min(batchMaxSize, baseSize + extraPerBatch),
+              angle: batchAngles[(waveIndex + index) % batchAngles.length],
+              slot: index + 1
             });
-            parseGeneratedCommentLines(reply, batchCount).forEach(function(line) {
+          }
+
+          const results = await Promise.allSettled(specs.map(function(spec) {
+            let userPrompt = [
+              '视频文案：',
+              script,
+              accountLine || '',
+              scenarioDesc,
+              '本批请补充 ' + spec.requestCount + ' 条' + itemLabel + '。',
+              '本批风格重点：' + spec.angle + '。',
+              '要求：不要重复之前已经生成的内容，不要泛泛而谈，不要模板化，不要编号，不要标题，不要解释。',
+              '如果文案里出现日文假名、音乐符号、emoji、口吃或 ASR 噪声，比如 ははは、はいあ、🎼，请忽略这些噪声，继续围绕中文主体内容写。',
+              styleRule,
+              '只输出结果本身，每行一条。'
+            ].filter(Boolean).join('\n');
+
+            if (comments.length) {
+              userPrompt += '\n\n已生成内容（不要重复）：\n' + comments.slice(-30).join('\n');
+            }
+
+            return callTextModelWithRetry(promptIntro, userPrompt, {
+              maxTokens: Math.min(9000, Math.max(1800, spec.requestCount * (isDanmaku ? 36 : 70))),
+              temperature: isDanmaku ? 0.82 : 0.76,
+              timeoutMs: 90000,
+              attempts: 2
+            });
+          }));
+
+          let added = 0;
+          results.forEach(function(result, index) {
+            if (result.status !== 'fulfilled') {
+              lastError = String(result.reason && result.reason.message || result.reason || '').slice(0, 180);
+              return;
+            }
+            parseGeneratedCommentLines(result.value, specs[index].requestCount * 2).forEach(function(line) {
               const key = line.replace(/\s+/g, '');
               if (!seen.has(key)) {
                 seen.add(key);
                 comments.push(line);
+                added += 1;
               }
             });
-          } catch (e) {
-            warning = '模型生成超时，已使用本地兜底补齐：' + String(e && e.message || e).slice(0, 120);
+          });
+
+          if (!added && !lastError) {
+            lastError = '模型返回内容无法解析';
+          }
+          return added;
+        }
+
+        for (let wave = 0; comments.length < targetCount && wave < maxWaves; wave += 1) {
+          const added = await runWave(wave);
+          if (!added && comments.length < targetCount) {
+            lastError = lastError || '模型返回内容无法解析';
           }
         }
+
         if (comments.length < targetCount) {
-          fallbackCommentItems(script, targetCount, isDanmaku).forEach(function(line) {
-            const key = line.replace(/\s+/g, '');
-            if (!seen.has(key)) {
-              seen.add(key);
-              comments.push(line);
-            }
+          cb({
+            error: 'AI 只生成了 ' + comments.length + '/' + targetCount + ' 条，请稍后重试或减少条数' + (lastError ? '：' + lastError : ''),
+            comments: comments.slice(0, targetCount),
+            fallback: false,
+            warning: lastError
           });
+          return;
         }
+
         cb({
           comments: comments.slice(0, targetCount),
-          fallback: Boolean(warning),
-          warning: warning
+          fallback: false,
+          warning: ''
         });
       })().catch(function(e) {
         cb({
-          comments: fallbackCommentItems(script, targetCount, isDanmaku),
-          fallback: true,
-          warning: '生成失败，已使用本地兜底：' + String(e && e.message || e).slice(0, 120)
+          error: 'AI 生成失败：' + String(e && e.message || e).slice(0, 180),
+          comments: [],
+          fallback: false
         });
       });
     },

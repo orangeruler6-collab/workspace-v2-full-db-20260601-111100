@@ -19,6 +19,8 @@ export type RewriteSourceExtraction = {
 };
 
 const URL_PATTERN = /https?:\/\/[^\s<>"'，。！？、]+/gi;
+const FEISHU_URL_PATTERN =
+  /(?:https?:\/\/)?(?:[^/\s<>"'，。！？、]+\.)?(?:feishu|larksuite)\.(?:cn|com)\/(?:docx|wiki|docs|doc)\/[^\s<>"'，。！？、]+/gi;
 
 export function extractRewriteSourceMaterial(input: string): RewriteSourceExtraction {
   const rawBlocks = splitSourceBlocks(input);
@@ -88,9 +90,14 @@ function isExplicitMaterialBlock(block: string) {
 }
 
 export function extractSourceUrls(input: string) {
-  return [...input.matchAll(URL_PATTERN)]
+  const normalized = repairSourceUrlText(input);
+  const urls = [
+    ...normalized.matchAll(FEISHU_URL_PATTERN),
+    ...normalized.matchAll(URL_PATTERN)
+  ]
     .map((match) => normalizeUrlToken(match[0]))
     .filter(Boolean);
+  return [...new Map(urls.map((url) => [url.toLowerCase(), url])).values()];
 }
 
 export function extractFirstSourceUrl(input: string) {
@@ -98,7 +105,20 @@ export function extractFirstSourceUrl(input: string) {
 }
 
 function normalizeUrlToken(url: string) {
-  return url.replace(/[)\]}>，。！？、；;,.!?]+$/g, "");
+  let value = url.replace(/[)\]}>，。！？、；;,.!?]+$/g, "");
+  if (value && !/^https?:\/\//i.test(value)) value = `https://${value}`;
+  return value;
+}
+
+function repairSourceUrlText(input: string) {
+  return String(input || "")
+    .replace(/\bh\s*t\s*p\s*s?\s*:\s*\/\s*\//gi, "https://")
+    .replace(/h\s*t\s*t\s*p\s*s?\s*:\s*\/\s*\//gi, (match) => match.toLowerCase().includes("https") ? "https://" : "http://")
+    .replace(/https?:\s*\/\s*\//gi, (match) => match.toLowerCase().startsWith("https") ? "https://" : "http://")
+    .replace(/\b([a-z0-9-]{3,})\s+(?=(?:feishu|larksuite)\s*[.\s]*(?:cn|com)\b)/gi, "$1.")
+    .replace(/\b(feishu|larksuite)\s*[.\s]+\s*(cn|com)\b/gi, "$1.$2")
+    .replace(/\s+(?=\/(?:docx|wiki|docs|doc)\b)/gi, "")
+    .replace(/\/\s+(?=[A-Za-z0-9_-]{8,})/g, "/");
 }
 
 function cleanShareText(block: string, urls: string[]) {

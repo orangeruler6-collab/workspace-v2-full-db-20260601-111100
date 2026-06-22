@@ -98,6 +98,19 @@ module.exports = function createLlmRuntime(options) {
     catch(e) { return String(baseUrl || '').replace(/^https?:\/\//, '').split('/')[0]; }
   }
 
+  function extractChatMessageContent(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      return value.map(extractChatMessageContent).filter(Boolean).join('\n');
+    }
+    if (typeof value !== 'object') return '';
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.output_text === 'string') return value.output_text;
+    if (value.content) return extractChatMessageContent(value.content);
+    return '';
+  }
+
   function requestOpenAIProvider(messages, requestOptions) {
     requestOptions = requestOptions || {};
     return new Promise(function(resolve, reject) {
@@ -146,7 +159,7 @@ module.exports = function createLlmRuntime(options) {
             try {
               var json = JSON.parse(data);
               var message = json.choices && json.choices[0] && json.choices[0].message;
-              resolve(stripThinking(message ? (message.content || '') : ''));
+              resolve(stripThinking(message ? extractChatMessageContent(message.content) : ''));
             } catch(e) {
               reject(new Error('model JSON parse error: ' + data.substring(0, 200)));
             }
