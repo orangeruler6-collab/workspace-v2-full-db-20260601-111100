@@ -145,9 +145,9 @@
               :aria-current="!item.children && activeModule === item.id ? 'page' : undefined"
               :aria-expanded="item.children ? isNavGroupOpen(item.id) : undefined"
               @click="handleNavItemClick(item)">
-              <span class="nav-icon"><NavIcon :name="item.id" /></span>
+              <span class="nav-icon">{{ item.icon }}</span>
               <span class="nav-label">{{ item.label }}</span>
-              <NavIcon v-if="item.children" name="chevron" :size="14" class="nav-chevron" />
+              <span v-if="item.children" class="nav-chevron">{{ isNavGroupOpen(item.id) ? '⌄' : '›' }}</span>
             </button>
             <div v-if="item.children && isNavGroupOpen(item.id)" class="nav-children">
               <button
@@ -159,7 +159,7 @@
                 :class="{ active: activeModule === child.id }"
                 :aria-current="activeModule === child.id ? 'page' : undefined"
                 @click="setActiveModule(child.id)">
-                <span class="nav-icon"><NavIcon :name="child.id" /></span>
+                <span class="nav-icon">{{ child.icon }}</span>
                 <span class="nav-label">{{ child.label }}</span>
               </button>
             </div>
@@ -175,7 +175,7 @@
             <div class="account-status">{{ accountStatus }}</div>
           </div>
           <button v-if="!AUTH_DISABLED" class="account-edit" type="button" aria-label="退出登录" title="退出登录" @click="handleLogout">
-            <NavIcon name="logout" :size="16" />
+            ⎋
           </button>
         </div>
       </aside>
@@ -253,7 +253,6 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, defineAsyncComponent, nextTick } from 'vue'
 import ChatBubble from './components/ChatBubble.vue'
-import NavIcon from './components/NavIcon.vue'
 import BaseConfirmDialog from './components/BaseConfirmDialog.vue'
 import BaseToast from './components/BaseToast.vue'
 import UsagiCelebration from './components/UsagiCelebration.vue'
@@ -851,4 +850,3 @@ onUnmounted(() => {
 @import './style.css';
 @import './style-workbench-native.css';
 </style>
-

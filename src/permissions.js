@@ -20,8 +20,8 @@ export const MODULE_DEFINITIONS = [
       { id: 'styleLibrary', label: '账号库', icon: '📚' },
       { id: 'styleProjectWorkbench', label: '项目工作台', icon: '🗂️' },
       { id: 'styleWriter', label: '对话写作', icon: '💬' },
-      { id: 'styleAssets', label: '评论生成', icon: '💬' },
-      { id: 'styleDouyinHotlist', label: '抖音热榜', icon: '榜' }
+      { id: 'workflow', label: '文案工作流', icon: '流' },
+      { id: 'tools', label: '文案工具', icon: '🧰' }
     ]
   },
   { id: 'projectAgent', label: '项目助手', icon: '◈' },
