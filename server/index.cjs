@@ -254,6 +254,37 @@ function isPublicRoute(routePath) {
 }
 
 function moduleForRoute(routePath) {
+  // Native style-workbench routes share the main API server. Keep these
+  // mappings ahead of the legacy tools routes so authenticated requests are
+  // authorized against the corresponding workbench module instead of falling
+  // through to the default-deny branch.
+  if (routePath === '/api/health/style-workbench') return 'auth';
+  if (
+    routePath.indexOf('/api/library') === 0 ||
+    routePath.indexOf('/api/accounts') === 0 ||
+    routePath.indexOf('/api/videos') === 0 ||
+    routePath.indexOf('/api/collect') === 0 ||
+    routePath.indexOf('/api/transcribe') === 0 ||
+    routePath.indexOf('/api/batch-transcribe') === 0 ||
+    routePath.indexOf('/api/transcripts') === 0 ||
+    routePath.indexOf('/api/style') === 0 ||
+    routePath.indexOf('/api/jobs') === 0 ||
+    routePath.indexOf('/api/tools/single-video') === 0
+  ) return 'styleLibrary';
+  if (
+    routePath.indexOf('/api/projects') === 0 ||
+    routePath.indexOf('/api/copy-sources') === 0
+  ) return 'styleProjectWorkbench';
+  if (
+    routePath.indexOf('/api/write') === 0 ||
+    routePath.indexOf('/api/drafts') === 0 ||
+    routePath.indexOf('/api/draft-assets') === 0 ||
+    routePath === '/api/engagement' ||
+    routePath === '/api/feishu/document' ||
+    routePath === '/api/tools/publish-copy'
+  ) return 'styleWriter';
+  if (routePath.indexOf('/api/gross-margin') === 0) return 'styleGrossMargin';
+  if (routePath.indexOf('/api/douyin-hotlist') === 0) return 'styleDouyinHotlist';
   if (routePath.indexOf('/api/admin/users') === 0) return 'adminUsers';
   if (routePath.indexOf('/api/admin/logs') === 0) return 'operationLogs';
   if (routePath.indexOf('/api/agent') === 0) return 'projectAgent';
@@ -981,6 +1012,11 @@ function routeRequest(req, res) {
     body._token = token;
     body._req = req;
     var route = routes[routePath];
+    var styleJobMatch = routePath.match(/^\/api\/jobs\/([^/]+)$/);
+    if (!route && styleJobMatch && routes['/api/jobs/:jobId']) {
+      body.jobId = decodeURIComponent(styleJobMatch[1]);
+      route = routes['/api/jobs/:jobId'];
+    }
     var profitItemMatch = routePath.match(/^\/api\/profits\/(\d+)$/);
     if (!route && profitItemMatch && routes['/api/profits/:id']) {
       body.id = profitItemMatch[1];
