@@ -14,7 +14,7 @@
     "watchdog:status": "node scripts/service-watchdog.cjs status",
     "watchdog:check": "node scripts/service-watchdog.cjs check",
     "collect:account-data": "node scripts/collect-account-data-batch.cjs",
-    "build": "vite build",
+    "build": "vite build --outDir dist-web",
     "check:backend": "node scripts/check-backend.cjs",
     "check:encoding": "node scripts/check-encoding.cjs",
     "smoke:api": "node scripts/smoke-api.cjs",
