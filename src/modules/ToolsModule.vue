@@ -321,6 +321,87 @@
 
       </section>
       <section class="tools-right-column">
+        <div class="card tool-card publish-copy-card">
+          <div class="card-hdr">
+            <span class="tool-icon">标</span>
+            <div class="card-title-group">
+              <span class="card-title">标题 Tag 生成</span>
+              <span class="card-caption">根据选题、口播稿或转写稿生成标题和发布文案</span>
+            </div>
+            <div class="transcribe-switch" aria-label="发布平台">
+              <button
+                v-for="option in publishPlatformOptions"
+                :key="option.value"
+                type="button"
+                class="mode-btn"
+                :class="{ active: publishInput.platform === option.value }"
+                @click="publishInput.platform = option.value">
+                {{ option.label }}
+              </button>
+            </div>
+          </div>
+
+          <div class="card-body publish-copy-body">
+            <div class="form-line publish-copy-fields">
+              <label class="field-block">
+                <span>选题 / 关键词</span>
+                <input v-model="publishInput.topicHint" class="inp" placeholder="可留空，例如：防沉迷、遗忘之海、版本更新" />
+              </label>
+              <label class="field-block">
+                <span>生成条数</span>
+                <select v-model.number="publishInput.candidateCount" class="inp compact-select">
+                  <option :value="4">4 条</option>
+                  <option :value="6">6 条</option>
+                  <option :value="8">8 条</option>
+                </select>
+              </label>
+            </div>
+
+            <label class="field-block">
+              <span>素材文案</span>
+              <textarea
+                v-model="publishInput.sourceText"
+                class="inp publish-copy-textarea"
+                rows="5"
+                placeholder="粘贴口播稿、选题草稿、视频转写或链接提取出的文案" />
+            </label>
+
+            <div class="action-row">
+              <button class="btn btn-primary" :disabled="publishLoading || !publishInput.sourceText.trim()" @click="handleGeneratePublishCopy">
+                {{ publishLoading ? '生成中...' : '生成标题 Tag' }}
+              </button>
+              <button class="btn btn-ghost btn-sm" type="button" :disabled="!latestTranscriptText" @click="fillPublishFromTranscript">
+                带入当前转写
+              </button>
+              <button class="btn btn-ghost btn-sm" type="button" :disabled="!publishCandidates.length" @click="handleCopy(publishCandidates.map(formatPublishCandidate).join('\n\n'))">
+                复制全部
+              </button>
+            </div>
+
+            <div v-if="publishError" class="result-box error-box">
+              {{ publishError }}
+            </div>
+
+            <div v-if="publishCandidates.length" class="publish-candidate-list">
+              <article v-for="(candidate, index) in publishCandidates" :key="`${candidate.title || index}-${index}`" class="publish-candidate-card">
+                <div class="publish-candidate-head">
+                  <span class="result-tag">{{ publishPlatformLabel(candidate.platform) }}</span>
+                  <span>{{ candidate.angle || candidate.frameworkName || `候选 ${index + 1}` }}</span>
+                </div>
+                <strong>{{ candidate.title }}</strong>
+                <p>{{ candidate.caption }}</p>
+                <button class="btn btn-ghost btn-sm" type="button" @click="handleCopy(formatPublishCandidate(candidate))">
+                  复制
+                </button>
+              </article>
+            </div>
+
+            <div v-else-if="!publishLoading" class="result-box">
+              结果会显示在这里，可以从当前转写一键带入。
+            </div>
+          </div>
+        </div>
+
         <CommentGeneratorPanel ref="commentPanelRef" />
       </section>
     </div>
@@ -328,9 +409,10 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { useToast } from '../composables/useToast'
 import { useClipboard } from '../composables/useClipboard'
+import { generatePublishCopy } from '../api/styleWorkbench'
 import { useDouyinTool } from './tools/useDouyinTool'
 import { useBilibiliTranscription } from './tools/useBilibiliTranscription'
 import { useAudioTranscription } from './tools/useAudioTranscription'
@@ -342,6 +424,20 @@ const { handleCopy } = useClipboard(showToast)
 const transcribePlatform = ref('douyin')
 const commentPanelRef = ref(null)
 const audioDragging = ref(false)
+const publishInput = reactive({
+  platform: 'both',
+  topicHint: '',
+  sourceText: '',
+  candidateCount: 6
+})
+const publishLoading = ref(false)
+const publishError = ref('')
+const publishResult = ref(null)
+const publishPlatformOptions = [
+  { value: 'both', label: '双平台' },
+  { value: 'douyin', label: '抖音' },
+  { value: 'bilibili', label: 'B站' }
+]
 
 const {
   douyinUrl,
@@ -392,6 +488,19 @@ const {
   handleFixAudio
 } = useAudioTranscription(showToast)
 
+const latestTranscriptText = computed(() => {
+  return String(
+    douyinTranscriptText.value
+    || bilibiliResult.value
+    || audioResult.value
+    || ''
+  ).trim()
+})
+const publishCandidates = computed(() => {
+  const candidates = publishResult.value?.candidates
+  return Array.isArray(candidates) ? candidates : []
+})
+
 function handleAudioFileChange(event) {
   const file = event.target.files && event.target.files[0]
   event.target.value = ''
@@ -414,6 +523,49 @@ function handleGenerateCopy(platform, text) {
   })
   transcribePlatform.value = platform
   showToast('已带入评论生成区', 'success')
+}
+
+function fillPublishFromTranscript() {
+  const value = latestTranscriptText.value
+  if (!value) return
+  publishInput.sourceText = value
+  showToast('已带入标题 Tag 生成区', 'success')
+}
+
+async function handleGeneratePublishCopy() {
+  const sourceText = publishInput.sourceText.trim()
+  if (!sourceText) return showToast('请先粘贴素材文案', 'error')
+  publishLoading.value = true
+  publishError.value = ''
+  try {
+    publishResult.value = await generatePublishCopy({
+      platform: publishInput.platform,
+      sourceText,
+      topicHint: publishInput.topicHint.trim() || undefined,
+      candidateCount: publishInput.candidateCount
+    })
+    if (!publishCandidates.value.length) {
+      publishError.value = '没有生成可用结果'
+      return
+    }
+    showToast('标题 Tag 已生成', 'success')
+  } catch (err) {
+    publishError.value = err?.message || '标题 Tag 生成失败'
+    showToast(publishError.value, 'error')
+  } finally {
+    publishLoading.value = false
+  }
+}
+
+function formatPublishCandidate(candidate) {
+  return `${candidate?.title || ''}\n${candidate?.caption || ''}`.trim()
+}
+
+function publishPlatformLabel(platform) {
+  if (platform === 'both') return '双平台'
+  if (platform === 'bilibili') return 'B站'
+  if (platform === 'douyin') return '抖音'
+  return platform || '平台'
 }
 
 function fileTypeLabel(type) {
@@ -828,6 +980,63 @@ function audioSourceLabel(source) {
 
 .result-textarea {
   min-height: 240px;
+}
+
+.publish-copy-body {
+  gap: 12px;
+}
+
+.publish-copy-fields {
+  align-items: end;
+}
+
+.publish-copy-fields .compact-select {
+  max-width: none;
+}
+
+.publish-copy-textarea {
+  width: 100%;
+  min-height: 122px;
+  resize: vertical;
+}
+
+.publish-candidate-list {
+  display: grid;
+  gap: 10px;
+}
+
+.publish-candidate-card {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-bg-soft);
+}
+
+.publish-candidate-card strong {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.publish-candidate-card p {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.publish-candidate-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 800;
 }
 
 .bilibili-route-panel {

@@ -1719,6 +1719,21 @@
     grid-row: 4;
   }
 
+  /* The library no longer has a page header, so it only needs the quick
+     collection bar and the workspace row. Keeping the old three-row frame
+     placed the workspace inside the fixed 85px row and clipped every pane. */
+  .style-workbench-native .library-page.workbench-frame-page:has(> .workbench-leading-panel) {
+    grid-template-rows: var(--workbench-leading-panel-height) minmax(0, 1fr);
+  }
+
+  .style-workbench-native .library-page.workbench-frame-page:has(> .workbench-leading-panel):has(> :is(.notice, .error)) {
+    grid-template-rows: var(--workbench-leading-panel-height) auto minmax(0, 1fr);
+  }
+
+  .style-workbench-native .library-page.workbench-frame-page:has(> .workbench-leading-panel):has(> :is(.notice, .error)) > .workbench-frame-workspace {
+    grid-row: 3;
+  }
+
   .style-workbench-native .workbench-frame-workspace {
     min-height: 0;
     height: 100%;
