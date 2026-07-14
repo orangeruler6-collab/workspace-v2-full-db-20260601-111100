@@ -21,8 +21,6 @@ export const MODULE_DEFINITIONS = [
       { id: 'styleProjectWorkbench', label: '项目工作台', icon: '🗂️' },
       { id: 'styleWriter', label: '对话写作', icon: '💬' },
       { id: 'styleAssets', label: '评论生成', icon: '💬' },
-      { id: 'tools', label: '文案工具', icon: '🧰' },
-      { id: 'styleGrossMargin', label: '数据维护', icon: '🧮' },
       { id: 'styleDouyinHotlist', label: '抖音热榜', icon: '榜' }
     ]
   },
@@ -41,15 +39,6 @@ export const MODULE_DEFINITIONS = [
   { id: 'systemHealth', label: '全模块自检', icon: '◎', adminOnly: true }
 ]
 
-const copyWorkbenchChildren = MODULE_DEFINITIONS.find(item => item.id === 'copyWorkbench')?.children
-if (copyWorkbenchChildren && !copyWorkbenchChildren.some(item => item.id === 'workflow')) {
-  const writerIndex = copyWorkbenchChildren.findIndex(item => item.id === 'styleWriter')
-  copyWorkbenchChildren.splice(Math.max(0, writerIndex + 1), 0, {
-    id: 'workflow',
-    label: '文案工作流',
-    icon: '流'
-  })
-}
 export const HIDDEN_MODULE_DEFINITIONS = [
   { id: 'trafficApply', label: '投流申请', icon: '◆', hidden: true },
   { id: 'copygen', label: '文案生成器', icon: '✍️', hidden: true },
