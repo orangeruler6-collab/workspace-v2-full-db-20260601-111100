@@ -2404,10 +2404,22 @@ module.exports = function createTrafficPlanV2Routes(deps) {
     try {
       const settings = await readSettings(db, key);
       await autoArchiveReachedProjects(db, key);
-      const projectRows = await all(db, 'SELECT payload FROM traffic_v2_projects WHERE user_key=? ORDER BY updated_at DESC', [key]);
+      const projectRows = await all(db, 'SELECT payload,created_at,updated_at FROM traffic_v2_projects WHERE user_key=?', [key]);
       const executionRows = await all(db, 'SELECT payload FROM traffic_v2_executions WHERE user_key=? ORDER BY updated_at DESC', [key]);
       const applicationRows = await all(db, 'SELECT payload FROM traffic_v2_applications WHERE user_key=? ORDER BY updated_at DESC', [key]);
-      let projects = projectRows.map(function(row) { return parseJson(row.payload, null); }).filter(Boolean);
+      let projects = projectRows.map(function(row) {
+        const project = parseJson(row.payload, null);
+        if (!project) return null;
+        const payloadCreatedAt = Date.parse(text(project.createdAt));
+        const storedCreatedAt = num(row.created_at) * 1000;
+        const storedUpdatedAt = num(row.updated_at) * 1000;
+        return {
+          project: project,
+          sortAt: Number.isFinite(payloadCreatedAt) ? payloadCreatedAt : (storedCreatedAt || storedUpdatedAt)
+        };
+      }).filter(Boolean).sort(function(a, b) {
+        return b.sortAt - a.sortAt || text(b.project.projectId).localeCompare(text(a.project.projectId));
+      }).map(function(item) { return item.project; });
       let executions = executionRows.map(function(row) {
         return enrichAccountIdentity(parseJson(row.payload, null), settings.accountStandards);
       }).filter(Boolean);
@@ -2572,7 +2584,7 @@ module.exports = function createTrafficPlanV2Routes(deps) {
     const at = nowSec();
     try {
       const settings = await readSettings(db, key);
-      const projectRow = await get(db, 'SELECT payload FROM traffic_v2_projects WHERE user_key=? AND project_id=?', [key, id]);
+      const projectRow = await get(db, 'SELECT payload,created_at FROM traffic_v2_projects WHERE user_key=? AND project_id=?', [key, id]);
       const currentProject = parseJson(projectRow && projectRow.payload, null);
       if (!currentProject) return { ok: false, error: '项目不存在' };
       const targetCpm = money(rawProject.targetCpm || currentProject.targetCpm || defaultTargetCpm(rawProject.platform || currentProject.platform));
@@ -2644,7 +2656,7 @@ module.exports = function createTrafficPlanV2Routes(deps) {
         nextProject.scheduleDate,
         nextProject.targetCpm,
         jsonValue(nextProject),
-        at,
+        num(projectRow.created_at) || at,
         at
       ]);
       for (const execution of normalizedExecutions) {
