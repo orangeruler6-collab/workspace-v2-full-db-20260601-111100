@@ -1447,7 +1447,7 @@ module.exports = function createAccountDataRoutes(deps) {
     const displayWorks = rawWorks.filter(function(work) {
       const accountKey = publishAccountKey(work.account || work.profile || work.accountId);
       const main = mainPlatformByAccount.get(accountKey);
-      return !main || String(work.platform || '').trim() === main.platform || (Number(work.views) || 0) >= 100000;
+      return !main || String(work.platform || '').trim() === main.platform;
     });
     return {
       generatedAt: new Date().toISOString(),

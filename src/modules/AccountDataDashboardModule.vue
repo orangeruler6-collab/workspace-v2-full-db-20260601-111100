@@ -1482,7 +1482,7 @@ function filterWorksByPlatform(platform = activePlatform.value) {
 
 const displayPostWorks = computed(() => {
   return activePlatform.value === 'all'
-    ? dedupeContentWorks(filteredRangeWorks.value.filter(work => isMainPlatformWork(work) || (Number(work?.views) || 0) >= 100000))
+    ? dedupeContentWorks(filteredRangeWorks.value.filter(work => isMainPlatformWork(work)))
     : filteredRangeWorks.value
 })
 
@@ -2136,7 +2136,7 @@ async function openPostBarModal(bar) {
       .filter(item => activePlatform.value === 'all' || item.platform === activePlatform.value)
       .filter(item => !item.publishVolumeExcluded)
     if (activePlatform.value === 'all') {
-      works = dedupeContentWorks(works.filter(work => isMainPlatformWork(work) || (Number(work?.views) || 0) >= 100000))
+      works = dedupeContentWorks(works.filter(work => isMainPlatformWork(work)))
     }
     if (postBarModalKey.value === modalKey) postBarModalLoadedWorks.value = works
   } catch (error) {

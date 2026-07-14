@@ -404,7 +404,29 @@ function desktopLoginAccountRows() {
     });
 }
 
-const catalogAccounts = accounts.concat(desktopLoginAccountRows());
+// B站商务标准表中的账号以 B站为主平台，其余账号统一以抖音为主平台。
+// 主平台必须固定，不能根据某次采集到的发文量动态变化。
+const bilibiliPrimaryAccountIds = new Set([
+  'nishuihan-leiya',
+  'login-profile-35',
+  'login-profile-36',
+  'login-profile-32',
+  'login-profile-28',
+  'login-profile-29',
+  'login-profile-11',
+  'login-profile-34',
+  'login-profile-22',
+  'login-profile-13',
+  'login-profile-39',
+  'login-profile-40',
+  'login-profile-41',
+  'login-profile-43',
+  'login-profile-31'
+]);
+
+const catalogAccounts = accounts.concat(desktopLoginAccountRows()).map(account => Object.assign({}, account, {
+  primaryPlatform: account.primaryPlatform || (bilibiliPrimaryAccountIds.has(account.id) ? 'bilibili' : 'douyin')
+}));
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
