@@ -302,7 +302,6 @@ const StyleProjectWorkbenchModule = defineAsyncComponent(() => import('./modules
 const StyleWriterModule = defineAsyncComponent(() => import('./modules/StyleWriterModule.vue'))
 const StyleAssetsModule = defineAsyncComponent(() => import('./modules/StyleAssetsModule.vue'))
 const DouyinHotlistModule = defineAsyncComponent(() => import('./modules/DouyinHotlistModule.vue'))
-const StyleToolsModule = defineAsyncComponent(() => import('./modules/StyleToolsModule.vue'))
 
 const { confirmState, confirmAccept, confirmCancel } = provideConfirm()
 const { toast, showToast: showGlobalToast } = provideToast()
@@ -333,45 +332,36 @@ const COPY_MAINTENANCE_MODULES = new Set([
   'styleCopyTools',
   'styleDrafts'
 ])
-const UPDATE_ANNOUNCEMENT_VERSION = '2026-07-09-ops-workflow-schedule'
+const UPDATE_ANNOUNCEMENT_VERSION = '2026-07-14-workbench-efficiency-update'
 const UPDATE_ANNOUNCEMENT_KEY = 'usagi_update_announcement_seen_version'
 const updateAnnouncement = {
-  versionLabel: '7/9 工作流与排期更新',
-  title: '7/9 工作流、投流与排期看板更新',
-  subtitle: '本次重点处理账号分组、转写精度、投流申请、评论生成和排期待办联动，减少重复录入和页面来回切换。',
+  versionLabel: '7/14 工作台与效率更新',
+  title: '7/14 文案、数据、下载与生图更新',
+  subtitle: '本次更新覆盖文案生产、日报产出、视频下载和 AI 生图，进一步缩短日常内容工作的处理时间。',
   items: [
     {
-      icon: '🔁',
-      title: '账号换组与名单调整',
-      desc: '已按最新组织结构调整账号归属、人员分组和一部/六组相关映射，投流计划与排期相关视图同步适配。'
+      icon: '1',
+      title: '文案工作台上线',
+      desc: '账号库、项目工作台和对话写作已完成接入；原有文案工具继续保留旧版，不切换到新版工具台。'
     },
     {
-      icon: '🎧',
-      title: '转写精度提高',
-      desc: '文案工具转写链路已优化，优先试用更准确的转写渠道，提升口播稿和素材拆解可用度。'
+      icon: '2',
+      title: '数据采集提前至 16:00',
+      desc: '数据看板全量采集调整为每天 16:00 开始，通常可在 18:00 前完成；各组可在 18:00 通过项目助手生成当日组内日报。'
     },
     {
-      icon: '📈',
-      title: '投流申请与账号模板调整',
-      desc: '投流计划账号模板不再强绑定固定维护量，后续根据 CPM 浮动计算；账号模板仍默认勾选。互动量梯度已从 50 调整为 10，方便微调。'
+      icon: '3',
+      title: 'B站下载提升至 1080P',
+      desc: 'B站视频下载默认优先获取 1080P 清晰度，提升后期剪辑、素材复用和画面细节表现。'
     },
     {
-      icon: '🛠️',
-      title: '文案工作台维护',
-      desc: 'Next 版文案工作台进入维护阶段，旧文案入口临时暂停；当前文案需求请先使用「文案工作流」。'
-    },
-    {
-      icon: '⚡',
-      title: '评论生成加速',
-      desc: '评论生成性能已优化，目前 200 条评论平均约 1 分钟完成。'
-    },
-    {
-      icon: '📅',
-      title: '排期看板/部门待办优化',
-      desc: '部门待办已映射到组内排期表，映射任务支持拖动分配给组内成员，并同步保存负责人。'
+      icon: '4',
+      title: 'AI 生图默认调整为 1K',
+      desc: 'AI 生图默认分辨率降低至 1K，以提升生成速度并减少资源消耗；有高清需求时仍可自由选择 2K 或 4K。'
     }
   ],
   history: [
+    { version: '7/14 工作台与效率更新', title: '文案工作台上线、16:00 采集、B站 1080P 下载、AI 生图默认 1K' },
     { version: '7/9 工作流与排期更新', title: '账号换组、转写精度、投流模板、评论加速、待办映射' },
     { version: '文案工作台维护', title: '旧文案入口暂停，文案需求迁移到文案工作流' },
     { version: 'AI 生图恢复', title: '主线路图生图恢复，任务改为串行队列' },
@@ -401,7 +391,6 @@ const manuallyOpenedNavGroups = ref(new Set())
 const { getActiveModuleComponent, getActiveModuleKey, isValidModule } = useModuleMap({
   CopyGenModule,
   ToolsModule,
-  StyleToolsModule,
   WorkflowModule,
   DailyHotModule,
   AccountMonitorModule,

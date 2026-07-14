@@ -101,7 +101,7 @@ export function useModuleMap(imports) {
   const MODULE_MAP = {
     copygen:    imports.CopyGenModule,
     projectAgent: imports.ProjectAgentModule,
-    tools:      imports.StyleToolsModule || imports.ToolsModule,
+    tools:      imports.ToolsModule,
     workflow:   imports.WorkflowModule,
     dailyhot:   imports.DailyHotModule,
     accountmonitor: imports.AccountMonitorModule,
@@ -161,6 +161,5 @@ export function useModuleMap(imports) {
     isValidModule
   }
 }
-
 
 
