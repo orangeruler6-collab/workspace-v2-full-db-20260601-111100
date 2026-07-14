@@ -1,28 +1,6 @@
 <template>
   <section class="style-workbench-native">
     <div class="page project-workbench-page">
-      <header class="page-header">
-        <div class="page-title-group">
-          <span class="page-title-eyebrow">项目策划台</span>
-          <div class="page-title-row">
-            <span class="page-title-mark" aria-hidden="true">
-              <FolderKanban :size="20" :stroke-width="2.1" />
-            </span>
-            <div class="page-title-copy">
-              <h1>项目工作台</h1>
-              <p class="subtle">素材、账号、项目风格。</p>
-            </div>
-          </div>
-        </div>
-        <div class="page-header-meta">
-          <span v-if="selectedProject" class="stat-pill">{{ isDirty ? '有未保存修改' : '项目已同步' }}</span>
-          <button class="btn ghost" type="button" :disabled="loading" @click="loadAll">
-            <RefreshCw :size="16" aria-hidden="true" />
-            {{ loading ? '读取中' : '刷新' }}
-          </button>
-        </div>
-      </header>
-
       <div v-if="error" class="error" role="alert">{{ error }}</div>
 
       <section class="project-workbench-shell">

@@ -124,7 +124,7 @@
                   @click="openDraft(draft)">
                   <span class="writer-history-copy">
                     <strong class="list-title">{{ draft.title || '未命名草稿' }}</strong>
-                    <span class="list-meta">{{ draft.accountName || draft.projectName || draft.targetType }} · {{ timeLabel(draft.updatedAt) }}</span>
+                    <span class="list-meta">{{ draft.accountName || draft.projectName || draft.targetType }} · {{ timeLabel(draft.updatedAt || draft.createdAt) }}</span>
                   </span>
                   <span class="status-pill">{{ modeLabel(draft.mode) }}</span>
                 </button>
@@ -162,7 +162,7 @@ const form = reactive({
 
 const accounts = computed(() => library.value?.accounts || [])
 const projects = computed(() => library.value?.projects || [])
-const drafts = computed(() => draftState.value?.drafts || [])
+const drafts = computed(() => Array.isArray(draftState.value) ? draftState.value : (draftState.value?.drafts || []))
 const activeTitle = computed(() => {
   if (form.targetType === 'project') return projects.value.find((project) => project.id === form.projectId)?.name || ''
   return accounts.value.find((account) => account.id === form.accountId)?.name || ''

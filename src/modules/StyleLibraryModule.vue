@@ -1,24 +1,6 @@
 <template>
   <section class="style-workbench-native">
     <div class="page library-page workbench-frame-page">
-      <header class="page-header">
-        <div class="page-title-group">
-          <span class="page-title-eyebrow">账号风格</span>
-          <div class="page-title-row">
-            <div class="page-title-copy">
-              <h1>账号库</h1>
-              <p class="subtle">采集、转写、风格沉淀。</p>
-            </div>
-          </div>
-        </div>
-        <div class="page-header-meta">
-          <button class="btn ghost" type="button" :disabled="loading" @click="loadAll">
-            <RefreshCw :size="16" aria-hidden="true" />
-            刷新
-          </button>
-        </div>
-      </header>
-
       <section class="panel workbench-leading-panel library-quick-start" aria-label="账号采集">
         <div class="library-quick-form">
           <div class="library-quick-fields">
