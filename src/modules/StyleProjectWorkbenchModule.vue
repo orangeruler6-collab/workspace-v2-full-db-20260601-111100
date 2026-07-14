@@ -166,6 +166,33 @@
           </div>
         </main>
       </section>
+
+      <div v-if="projectPickerOpen" class="modal-backdrop" @click.self="projectPickerOpen = false">
+        <section class="modal-panel project-picker-modal" role="dialog" aria-modal="true" aria-labelledby="project-picker-title">
+          <div class="modal-header">
+            <div>
+              <span class="eyebrow">项目记录</span>
+              <h2 id="project-picker-title">选择项目</h2>
+              <p class="pane-subtitle">已同步 {{ projects.length }} 个旧项目</p>
+            </div>
+            <button class="btn icon-btn icon-only" type="button" aria-label="关闭" @click="projectPickerOpen = false">×</button>
+          </div>
+          <div class="project-picker-body">
+            <div class="project-picker-list">
+              <button
+                v-for="project in projects"
+                :key="project.id"
+                class="project-picker-row"
+                :class="{ active: selectedProject?.id === project.id }"
+                type="button"
+                @click="selectProject(project)">
+                <strong>{{ project.name }}</strong>
+                <span>{{ project.sourceMaterialCount || project.sourceMaterialIds?.length || 0 }} 份素材 · {{ projectDraftCount(project.id) }} 条历史文案</span>
+              </button>
+            </div>
+          </div>
+        </section>
+      </div>
     </div>
   </section>
 </template>
@@ -193,6 +220,7 @@ const library = ref(null)
 const copySourceState = ref({ sources: [] })
 const selectedProject = ref(null)
 const projectDetail = ref(null)
+const projectPickerOpen = ref(false)
 const styleDraft = ref('')
 const projectForm = reactive({
   projectId: '',
@@ -300,6 +328,7 @@ async function loadAll() {
 }
 
 async function selectProject(project) {
+  projectPickerOpen.value = false
   selectedProject.value = project
   projectForm.projectId = project.id
   projectForm.name = project.name
@@ -405,8 +434,12 @@ function handlePrimaryFlowAction() {
 }
 
 function focusProjectSelection() {
-  const firstProject = projects.value[0]
-  if (firstProject && !selectedProject.value) selectProject(firstProject)
+  projectPickerOpen.value = true
+}
+
+function projectDraftCount(projectId) {
+  const drafts = Array.isArray(library.value?.drafts) ? library.value.drafts : []
+  return drafts.filter((draft) => draft.targetType === 'project' && draft.projectId === projectId).length
 }
 
 function focusSourceSelection() {}
