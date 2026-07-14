@@ -1,21 +1,6 @@
 <template>
   <section class="style-workbench-native">
     <div class="page writer-page">
-      <header class="page-header writer-page-header">
-        <div class="writer-page-heading">
-          <h1>对话写作</h1>
-          <p>选风格 · 写需求 · 生成</p>
-        </div>
-        <div class="page-header-meta">
-          <span class="stat-pill">{{ accounts.length }} 个账号</span>
-          <span class="stat-pill">{{ projects.length }} 个项目</span>
-          <button class="btn ghost" type="button" :disabled="loading" @click="loadAll">
-            <span class="style-workbench-icon" aria-hidden="true">↻</span>
-            刷新
-          </button>
-        </div>
-      </header>
-
       <div v-if="error" class="error" role="alert">{{ error }}</div>
 
       <section class="writer-workbench">
@@ -268,59 +253,3 @@ function timeLabel(value) {
   return new Date(value).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
 }
 </script>
-
-
-<style scoped>
-.writer-page-header {
-  align-items: center;
-  min-height: 42px;
-  padding: 0 0 8px;
-  gap: 14px;
-}
-
-.writer-page-heading {
-  display: flex;
-  align-items: baseline;
-  min-width: 0;
-  gap: 12px;
-}
-
-.writer-page-heading h1 {
-  margin: 0;
-  font-size: 20px;
-  line-height: 1.2;
-  white-space: nowrap;
-}
-
-.writer-page-heading p {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.writer-page-header :deep(.page-header-meta) {
-  gap: 6px;
-  padding-top: 0;
-}
-
-.writer-page-header :deep(.stat-pill),
-.writer-page-header :deep(.btn) {
-  min-height: 30px;
-}
-
-@media (max-width: 760px) {
-  .writer-page-header {
-    align-items: flex-start;
-    padding-bottom: 8px;
-  }
-
-  .writer-page-heading {
-    display: block;
-  }
-
-  .writer-page-heading p {
-    margin-top: 3px;
-  }
-}
-</style>
