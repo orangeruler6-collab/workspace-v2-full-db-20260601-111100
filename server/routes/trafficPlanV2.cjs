@@ -14,25 +14,27 @@ try {
 const logger = createLogger('routes:trafficPlanV2');
 
 const GROUP_ACCOUNTS = [
-  { groupName: '内容一组', members: ['许树杰', '许梦婷', '刘登魁', '许国锬', '叶进生', '高明镇', '薛荐轩', '叶颖'], accounts: ['花无缺', '葵仔不想肝', '最翁Damnnn', '薛定谔的机', '跑腿的包子', '李野王SG', '游电工厂', '硬件侠', '素材'] },
+  { groupName: '内容一部', aliases: ['内容一组'], members: ['薛荐轩', '廖李星', '高明镇', '林孝添', '叶子健', '许国锬', '许树杰', '林语婷', '许梦婷'], accounts: ['最游话说', '薛定谔的机', '李野王SG', '游电工厂', '硬件侠', '情风师兄', '上官北丶', '王路飞CP', '素材'] },
   { groupName: '内容二组', members: ['傅思敏', '赵良杰', '陈乐恒', '吴恒', '李扬林', '施律彬', '罗晓棋'], accounts: ['痞仔伯爵', '暴走星号键', '雷鸭Fist', '报告砖家', '沙雕101', '网瘾少女一条', '素材'] },
-  { groupName: '内容三组', members: ['曹媛', '陈泓睿', '林文涛', '刘佳琳', '肖子璇'], accounts: ['策划克星阿强', '中二探长', '团子好贵', '嘿小虎', '灵梦小师妹', '饭十七', '皮皮说游戏', '素材'] },
+  { groupName: '内容三组', members: ['曹媛', '陈泓睿', '林文涛', '刘佳琳', '肖子璇'], accounts: ['策划克星阿强', '中二探长', '团子好贵', '嘿小虎', '灵梦小师妹', '跑腿的包子', '饭十七', '皮皮说游戏', '娱乐小狮酱', '甄有话说', '素材'] },
   { groupName: '内容四组', members: ['姚希', '陈健伊', '宋丽佳', '林宇辰'], accounts: ['天机妹', '花蛮楼', '麦小雯', '夏天丶Cat', '有事找学姐', '小张同学', '素材'] },
   { groupName: '内容五组', members: ['朱信宇', '林心语', '商光涵', '杨鸿霆', '吴楷煌'], accounts: ['游小妹', '游热娃子', '超玩教授', 'Lee小强', '木游话说', '麦冬冬', '素材'] },
-  { groupName: '内容六组', members: ['廖李星', '吴皓轩', '林孝添', '林语婷', '张碧珊', '叶子健'], accounts: ['不玩就分手', '游点慌', '游戏永动机', '畅玩百晓生', '夏洛', '游侠蹦蹦', '王路飞cp', '上官北丶', '情风师兄', '素材'] }
+  { groupName: '内容六组', members: ['张莹珊', '刘思嫚', '吴皓轩', '邓姝', '叶进生', '叶颖', '刘登魁'], accounts: ['花无缺', '葵仔不想肝', '游戏永动机', '畅玩百晓生', '素材'] },
+  { groupName: 'MCN经纪组', aliases: ['MCN经济组', '经济组'], members: ['张家豪', '钟文祯', '龙星羽', '吴羿玄'], accounts: ['素材'] }
 ];
 
 const PRICE_TABLES = [
   {
     platform: 'douyin',
     items: [
-      { id: 'douyin-play-qianchuan-new', service: 'play', name: '千川（新）', unitPrice: 28, quantityUnit: '万', minimumQuantity: 1 },
-      { id: 'douyin-play-qianchuan-10w', service: 'play', name: '普通千川', unitPrice: 30, quantityUnit: '万', minimumQuantity: 1, priceTiers: [{ min: 1, max: 49, unitPrice: 30 }, { min: 50, unitPrice: 28 }] },
+      { id: 'douyin-play-qianchuan-new', service: 'play', name: '千川（新）', unitPrice: 25, quantityUnit: '万', minimumQuantity: 1, priceTiers: [{ min: 1, max: 9, unitPrice: 25 }, { min: 10, unitPrice: 23 }] },
+      { id: 'douyin-play-qianchuan-10w', service: 'play', name: '普通千川', unitPrice: 25, quantityUnit: '万', minimumQuantity: 1, priceTiers: [{ min: 1, max: 9, unitPrice: 25 }, { min: 10, unitPrice: 23 }] },
+      { id: 'douyin-play-qianchuan-25', service: 'play', name: '普通千川25档', unitPrice: 25, quantityUnit: '万', minimumQuantity: 1 },
       { id: 'douyin-play-qianchuan-high-10w', service: 'play', name: '商业流', unitPrice: 48, quantityUnit: '万', minimumQuantity: 1 },
       { id: 'douyin-play-tech', service: 'play', name: '千川无视版(hkj)', unitPrice: 55, quantityUnit: '万', minimumQuantity: 3 },
-      { id: 'douyin-like-tech', service: 'like', name: '黑科技', unitPrice: 20, quantityUnit: '千' },
+      { id: 'douyin-like-tech', service: 'like', name: '黑科技', unitPrice: 8, quantityUnit: '千' },
       { id: 'douyin-like-qianchuan-1000', service: 'like', name: '千川', unitPrice: 110, quantityUnit: '千', minimumQuantity: 1 },
-      { id: 'douyin-comment-custom', service: 'comment', name: '自定义', unitPrice: 1, quantityUnit: '个' },
+      { id: 'douyin-comment-custom', service: 'comment', name: '自定义', unitPrice: 0.8, quantityUnit: '个' },
       { id: 'douyin-favorite-standard', service: 'favorite', name: '默认', unitPrice: 0.1, quantityUnit: '个' },
       { id: 'douyin-share-standard', service: 'share', name: '默认', unitPrice: 0.2, quantityUnit: '个' },
       { id: 'douyin-douplus-default', service: 'douPlus', name: 'dou+', unitPrice: 1, quantityUnit: '元' }
@@ -41,7 +43,7 @@ const PRICE_TABLES = [
   {
     platform: 'bilibili',
     items: [
-      { id: 'bilibili-play-default', service: 'play', name: '正常通道', unitPrice: 60, quantityUnit: '万' },
+      { id: 'bilibili-play-default', service: 'play', name: '正常通道', unitPrice: 80, quantityUnit: '万' },
       { id: 'bilibili-play-fast', service: 'play', name: '快速通道', unitPrice: 180, quantityUnit: '万' },
       { id: 'bilibili-like-default', service: 'like', name: '默认', unitPrice: 30, quantityUnit: '千' },
       { id: 'bilibili-comment-custom', service: 'comment', name: '自定义', unitPrice: 0.7, quantityUnit: '个' },
@@ -79,9 +81,12 @@ const DEFAULT_PRESETS = [
 ];
 
 const ACCOUNT_NAME_ALIASES = [
+  { canonical: '葵仔不想肝', aliases: ['魁仔不想肝', '尼大木家族'] },
   { canonical: '木游话说', aliases: ['尼大木'] },
   { canonical: '策划克星阿强', aliases: ['苏大强'] },
-  { canonical: '最翁Damnnn', aliases: ['最翁说游'] },
+  { canonical: '最游话说', aliases: ['最翁Damnnn', '最翁damn', '最翁说游'] },
+  { canonical: '畅玩百晓生', aliases: ['畅玩白晓生'] },
+  { canonical: '王路飞CP', aliases: ['王路飞cp'] },
   { canonical: '麦小雯', aliases: ['麦晓花'] }
 ];
 
@@ -242,13 +247,6 @@ function mergeInquiryAccountInfo(standards) {
       accountId: info.accountId || standard.accountId || '',
       uid: info.uid || standard.uid || '',
       cooperationCode: info.cooperationCode || standard.cooperationCode || '',
-      originalPrice: info.originalPrice || standard.originalPrice || standard.quotePrice || 0,
-      quotePrice: standard.quotePrice || info.quotePrice || 0,
-      longOriginalPrice: info.longOriginalPrice || standard.longOriginalPrice || standard.longQuotePrice || 0,
-      longQuotePrice: standard.longQuotePrice || info.longQuotePrice || 0,
-      customOriginalPrice: info.customOriginalPrice || standard.customOriginalPrice || standard.customQuotePrice || 0,
-      customQuotePrice: standard.customQuotePrice || info.customQuotePrice || 0,
-      directPrice: info.directPrice || standard.directPrice || 0,
       homepageUrl: info.homepageUrl || standard.homepageUrl || '',
       freeDistributePlatforms: info.freeDistributePlatforms || standard.freeDistributePlatforms || '',
       authorizationScope: info.authorizationScope || standard.authorizationScope || '',
@@ -258,10 +256,22 @@ function mergeInquiryAccountInfo(standards) {
   });
   inquiry.forEach(function(info, key) {
     if (matchedKeys.has(key)) return;
-    mergedRows.push(Object.assign({
+    mergedRows.push({
       id: standardRowId(info.platform, info.accountName, 'inquiry'),
-      source: 'inquiry'
-    }, info));
+      accountName: info.accountName,
+      platform: info.platform,
+      xingtuId: info.xingtuId || '',
+      douyinId: info.douyinId || '',
+      accountId: info.accountId || '',
+      uid: info.uid || '',
+      cooperationCode: info.cooperationCode || '',
+      homepageUrl: info.homepageUrl || '',
+      freeDistributePlatforms: info.freeDistributePlatforms || '',
+      authorizationScope: info.authorizationScope || '',
+      retentionPeriod: info.retentionPeriod || '',
+      sourceInquiry: info.sourceInquiry || '',
+      source: 'inquiry-identity'
+    });
   });
   return mergedRows;
 }
@@ -369,7 +379,8 @@ function canonicalMaintenanceAccountName(value) {
 }
 
 function normalizeAccountKey(value) {
-  return normalizeText(canonicalMaintenanceAccountName(value));
+  return normalizeText(canonicalMaintenanceAccountName(value))
+    .replace(/[\s·•・丶._\-—–]+/g, '');
 }
 
 function hasMaintenanceStandard(row) {
@@ -583,6 +594,31 @@ function parseJson(value, fallback) {
   }
 }
 
+function mergePriceTablesWithDefaults(savedTables) {
+  if (!Array.isArray(savedTables) || !savedTables.length) return PRICE_TABLES;
+  const result = savedTables.map(function(table) {
+    const platform = normalizePlatform(table && table.platform);
+    const builtin = PRICE_TABLES.find(function(item) { return item.platform === platform; });
+    if (!builtin) return table;
+    const savedItems = Array.isArray(table.items) ? table.items : [];
+    const savedById = new Map(savedItems.map(function(item) { return [item && item.id, item]; }).filter(function(pair) { return pair[0]; }));
+    const mergedBuiltinItems = builtin.items.map(function(defaultItem) {
+      const savedItem = savedById.get(defaultItem.id);
+      if (!savedItem) return defaultItem;
+      return Object.assign({}, savedItem, defaultItem);
+    });
+    const builtinIds = new Set(builtin.items.map(function(item) { return item.id; }));
+    const customItems = savedItems.filter(function(item) { return item && !builtinIds.has(item.id); });
+    return Object.assign({}, table, { platform: platform, items: mergedBuiltinItems.concat(customItems) });
+  });
+  PRICE_TABLES.forEach(function(defaultTable) {
+    if (!result.some(function(table) { return normalizePlatform(table && table.platform) === defaultTable.platform; })) {
+      result.push(defaultTable);
+    }
+  });
+  return result;
+}
+
 function run(db, sql, params) {
   return new Promise(function(resolve, reject) {
     db.run(sql, params || [], function(err) {
@@ -637,7 +673,14 @@ function groupFromUser(body) {
 function normalizeGroupName(value) {
   const group = text(value);
   if (!group || group === '全部' || group === '未分组') return '';
-  return group;
+  const key = normalizeText(group).replace(/组/g, '').replace(/部/g, '');
+  const found = GROUP_ACCOUNTS.find(function(item) {
+    return normalizeText(item.groupName).replace(/组/g, '').replace(/部/g, '') === key
+      || (item.aliases || []).some(function(alias) {
+        return normalizeText(alias).replace(/组/g, '').replace(/部/g, '') === key;
+      });
+  });
+  return found ? found.groupName : group;
 }
 
 function inferGroup(name) {
@@ -652,7 +695,13 @@ function inferGroup(name) {
 function accountGroup(accountName) {
   const key = normalizeAccountKey(accountName);
   const found = GROUP_ACCOUNTS.find(function(group) {
-    return group.accounts.some(function(account) { return normalizeAccountKey(account) === key; });
+    return group.accounts.some(function(account) {
+      const rule = findAccountAliasRule(account);
+      const names = rule ? accountAliasNames(rule) : [account];
+      return names.some(function(name) {
+        return normalizeAccountKey(name) === key;
+      });
+    });
   });
   return found ? found.groupName : '';
 }
@@ -1080,6 +1129,12 @@ function enrichAccountIdentity(input, standards) {
   const accountId = preferStandard
     ? firstIdentityText('accountId', platform, standard.accountId, standard.douyinId, item.accountId, item.douyinId)
     : firstIdentityText('accountId', platform, item.accountId, item.douyinId, standard.accountId, standard.douyinId);
+  const priceTableOriginal = money(standard.originalPrice || standard.quotePrice);
+  const originalPrice = priceTableOriginal || money(item.originalPrice);
+  const discountedPrice = money(item.discountedPrice);
+  const discountRate = originalPrice && discountedPrice
+    ? money(discountedPrice / originalPrice * 100)
+    : money(item.discountRate);
   return Object.assign({}, item, {
     accountName: canonicalMaintenanceAccountName(item.accountName),
     platform: platform,
@@ -1093,7 +1148,10 @@ function enrichAccountIdentity(input, standards) {
       : firstIdentityText('uid', platform, item.uid, standard.uid),
     cooperationCode: preferStandard
       ? firstIdentityText('cooperationCode', platform, standard.cooperationCode, item.cooperationCode)
-      : firstIdentityText('cooperationCode', platform, item.cooperationCode, standard.cooperationCode)
+      : firstIdentityText('cooperationCode', platform, item.cooperationCode, standard.cooperationCode),
+    originalPrice: originalPrice,
+    discountRate: discountRate,
+    originalPriceSource: priceTableOriginal ? 'price-table' : text(item.originalPriceSource)
   });
 }
 
@@ -1488,10 +1546,20 @@ async function readLatestCrmCsv(body) {
 }
 
 function normalizeUrlToken(value) {
+  return normalizeText(extractVideoUrlText(value));
+}
+
+function extractVideoUrlText(value) {
   const raw = text(value);
   if (!raw) return '';
-  const match = raw.match(/https?:\/\/[^\s"'<>，。；;、]+/i);
-  return normalizeText(match ? match[0].replace(/[，。；;、,.!?！？]+$/g, '') : raw);
+  const start = raw.search(/https?:\/\//i);
+  if (start < 0) return raw.replace(/[，。；;、,.!?！？]+$/g, '');
+  let candidate = raw.slice(start);
+  const schemeEnd = candidate.indexOf('://') + 3;
+  const repeatedStart = candidate.slice(schemeEnd).search(/https?:\/\//i);
+  if (repeatedStart >= 0) candidate = candidate.slice(0, schemeEnd + repeatedStart);
+  const match = candidate.match(/^[^\s"'<>，。；;、]+/i);
+  return (match ? match[0] : candidate).replace(/[，。；;、,.!?！？]+$/g, '');
 }
 
 function videoIdentityToken(value) {
@@ -1628,6 +1696,47 @@ function crmDateDistanceDays(left, right) {
   return best;
 }
 
+function crmDateTimeMs(value) {
+  const raw = text(value);
+  if (!raw) return 0;
+  const match = raw.match(/(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})(?:\s+(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?)?/);
+  if (!match) return 0;
+  const ms = Date.UTC(
+    Number(match[1]),
+    Number(match[2]) - 1,
+    Number(match[3]),
+    Number(match[4] || 0),
+    Number(match[5] || 0),
+    Number(match[6] || 0)
+  );
+  return Number.isFinite(ms) ? ms : 0;
+}
+
+function crmTemporalCompatible(execution, row) {
+  const createdAtMs = Date.parse(text(execution && execution.createdAt));
+  const publishedAtMs = crmDateTimeMs(row && row.publishedAt);
+  if (!Number.isFinite(createdAtMs) || !publishedAtMs) return true;
+  // A newly-created execution should not inherit metrics from an older CRM video.
+  return publishedAtMs >= createdAtMs - 3 * 86400000;
+}
+
+function crmDateCompatible(execution, row) {
+  if (!crmTemporalCompatible(execution, row)) return false;
+  const leftParts = crmDateParts(execution.scheduleDate);
+  const rightParts = crmDateParts(row.publishedAt);
+  if (!leftParts.length || !rightParts.length) return true;
+  let bestDistance = Infinity;
+  const sameMonth = leftParts.some(function(a) {
+    return rightParts.some(function(b) {
+      const at = Date.UTC(a.year, a.month - 1, a.day);
+      const bt = Date.UTC(b.year, b.month - 1, b.day);
+      bestDistance = Math.min(bestDistance, Math.abs(at - bt) / 86400000);
+      return a.year === b.year && a.month === b.month;
+    });
+  });
+  return sameMonth || bestDistance <= 14;
+}
+
 function crmDateScore(execution, row) {
   const distance = crmDateDistanceDays(execution.scheduleDate, row.publishedAt);
   if (!Number.isFinite(distance)) return 0;
@@ -1637,19 +1746,18 @@ function crmDateScore(execution, row) {
   if (distance <= 7) return 8;
   if (distance <= 14) return 6;
   if (distance <= 21) return 4;
-  if (distance <= 45) return 3;
   return 0;
 }
 
 function canUseCrmFallbackMatch(execution, row) {
   if (normalizePlatform(execution.platform) !== normalizePlatform(row.platform)) return false;
+  if (!crmDateCompatible(execution, row)) return false;
   const accountMatched = crmAccountMatches(execution, row);
   const projectMatched = crmProjectMatches(execution, row);
   const projectScore = crmProjectOverlapScore(execution.projectName, row.marketingTarget);
   const dateScore = crmDateScore(execution, row);
-  if (accountMatched && projectMatched && dateScore >= 3) return true;
-  if (accountMatched && projectScore >= 36 && dateScore >= 3) return true;
-  if (projectScore >= 36 && dateScore >= 3) return true;
+  if (accountMatched && projectMatched && dateScore >= 4) return true;
+  if (accountMatched && projectScore >= 28 && dateScore >= 4) return true;
   if (isDouyinShortUrl(execution.videoUrl) && accountMatched && dateScore >= 20) return true;
   return false;
 }
@@ -1657,15 +1765,18 @@ function canUseCrmFallbackMatch(execution, row) {
 function crmRowScore(execution, row) {
   const linkRequired = hasExecutionLink(execution);
   const linkMatched = crmLinkMatches(execution, row);
+  const accountMatched = crmAccountMatches(execution, row);
+  if (linkMatched && text(row.accountName) && text(execution.accountName) && !accountMatched) return -1;
   const fallbackMatched = linkRequired && !linkMatched && canUseCrmFallbackMatch(execution, row);
   if (linkRequired && !linkMatched && !fallbackMatched) return -1;
+  if (!linkMatched && !crmDateCompatible(execution, row)) return -1;
   let score = 0;
   if (linkMatched) score += 120;
   if (fallbackMatched) score += 45;
   const projectKey = normalizeText(execution.projectName);
   if (crmProjectMatches(execution, row)) score += 40;
   score += crmProjectOverlapScore(execution.projectName, row.marketingTarget);
-  if (crmAccountMatches(execution, row)) score += 45;
+  if (accountMatched) score += 45;
   const titleKey = normalizeText(row.title);
   if (projectKey && titleKey && titleKey.includes(projectKey)) score += 12;
   score += crmDateScore(execution, row);
@@ -1687,7 +1798,11 @@ function crmMetricClosenessScore(execution, row) {
 
 function crmWeakRowScore(execution, row) {
   if (normalizePlatform(execution.platform) !== normalizePlatform(row.platform)) return -1;
+  if (!crmLinkMatches(execution, row) && !crmDateCompatible(execution, row)) return -1;
+  const linkMatched = crmLinkMatches(execution, row);
   const accountMatched = crmAccountMatches(execution, row);
+  if (linkMatched && text(row.accountName) && text(execution.accountName) && !accountMatched) return -1;
+  if (!linkMatched && !accountMatched) return -1;
   const projectMatched = crmProjectMatches(execution, row);
   const projectScore = crmProjectOverlapScore(execution.projectName, row.marketingTarget);
   const dateScore = crmDateScore(execution, row);
@@ -1701,12 +1816,12 @@ function crmWeakRowScore(execution, row) {
   score += projectScore;
   score += dateScore;
   score += metricScore;
-  if (crmLinkMatches(execution, row)) score += 80;
+  if (linkMatched) score += 80;
   if (!unlinkedProject && !nearMeaning) return -1;
   if (!accountMatched && !projectMatched && projectScore < 28) return -1;
-  if (!accountMatched && projectScore >= 28 && dateScore < 3 && metricScore < 16 && !crmLinkMatches(execution, row)) return -1;
+  if (!accountMatched && projectScore >= 28 && dateScore < 3 && metricScore < 16 && !linkMatched) return -1;
   if (unlinkedProject && !accountMatched) return -1;
-  if (unlinkedProject && metricScore < 16 && !crmLinkMatches(execution, row)) return -1;
+  if (unlinkedProject && metricScore < 16 && !linkMatched) return -1;
   return score;
 }
 
@@ -1998,7 +2113,7 @@ function buildReviewText(app, execution, calc, cumulativeCost) {
   const metricLine = calc.lines.map(function(line) {
     return line.service + '：' + line.quantity + line.quantityUnit;
   }).join('，') || '本期未填写维护数量';
-  const originalPrice = money(app.originalPrice || execution.originalPrice);
+  const originalPrice = money(execution.originalPrice || app.originalPrice);
   const discountedPrice = money(app.discountedPrice || execution.discountedPrice);
   const grossRate = originalPrice ? (discountedPrice - cumulativeCost) / originalPrice * 100 : 0;
   const grossProfit = discountedPrice - cumulativeCost;
@@ -2008,7 +2123,7 @@ function buildReviewText(app, execution, calc, cumulativeCost) {
     '订单类型：' + orderType,
     '平台：' + platformLabel(platform),
     '期数：' + text(app.phaseName || '一期'),
-    '视频链接：' + (text(app.videoUrl || execution.videoUrl) || '待补'),
+    '链接：' + (extractVideoUrlText(app.videoUrl || execution.videoUrl) || '待补'),
     '目标播放：' + Math.round(num(app.targetPlay || execution.targetMetrics && execution.targetMetrics.play)).toLocaleString('zh-CN'),
     '目标CPM：' + money(app.targetCpm || execution.targetCpm),
     '本期维护：' + metricLine,
@@ -2021,6 +2136,25 @@ function buildReviewText(app, execution, calc, cumulativeCost) {
     '',
     '@薛荐轩 @陈泓睿 @傅思敏 @刘登魁 @杨鸿霆 @商光涵 辛苦审核'
   ].join('\n');
+}
+
+function isTotalBudgetApplication(record) {
+  return text(record && record.applicationMode) === 'totalBudget' || text(record && record.phaseName) === '总预算';
+}
+
+function summarizeApplicationRecords(records) {
+  const scoped = (records || []).filter(Boolean);
+  const effective = scoped.some(isTotalBudgetApplication) ? scoped.filter(isTotalBudgetApplication) : scoped;
+  const metrics = effective.reduce(function(out, record) {
+    Object.keys(record.targetMetrics || {}).forEach(function(metric) {
+      out[metric] = num(out[metric]) + num(record.targetMetrics[metric]);
+    });
+    return out;
+  }, emptyMetrics());
+  const maintenanceCost = effective.reduce(function(sum, record) {
+    return sum + money(record.maintenanceCost);
+  }, 0);
+  return { metrics: metrics, maintenanceCost: maintenanceCost };
 }
 
 function aggregateProject(project, executions, records) {
@@ -2133,6 +2267,78 @@ module.exports = function createTrafficPlanV2Routes(deps) {
   const ready = initSchema();
 
   const CRM_AUTO_REFRESH_INTERVAL_MS = 60 * 60 * 1000;
+  const AUTO_ARCHIVE_AFTER_MS = Math.max(1, Number(process.env.TRAFFIC_PLAN_AUTO_ARCHIVE_DAYS || 3)) * 24 * 60 * 60 * 1000;
+
+  async function autoArchiveReachedProjects(db, key) {
+    const projectRows = await all(db, 'SELECT project_id,payload FROM traffic_v2_projects WHERE user_key=?', [key]);
+    const executionRows = await all(db, 'SELECT project_id,payload FROM traffic_v2_executions WHERE user_key=?', [key]);
+    const executionsByProject = new Map();
+    executionRows.forEach(function(row) {
+      const execution = parseJson(row.payload, null);
+      if (!execution) return;
+      const projectId = text(execution.projectId || row.project_id);
+      if (!projectId) return;
+      const items = executionsByProject.get(projectId) || [];
+      items.push(execution);
+      executionsByProject.set(projectId, items);
+    });
+
+    const now = Date.now();
+    const nowIso = new Date(now).toISOString();
+    let marked = 0;
+    let archived = 0;
+    let reset = 0;
+    for (const row of projectRows) {
+      const project = parseJson(row.payload, null);
+      if (!project || text(project.status).toLowerCase() === 'archived') continue;
+      const projectId = text(project.projectId || project.id || row.project_id);
+      const executions = executionsByProject.get(projectId) || [];
+      const targetPlay = executions.reduce(function(sum, execution) {
+        return sum + num(execution.targetMetrics && execution.targetMetrics.play);
+      }, 0);
+      const actualPlay = executions.reduce(function(sum, execution) {
+        return sum + num(execution.currentMetrics && execution.currentMetrics.play);
+      }, 0);
+      const reached = targetPlay > 0 && actualPlay >= targetPlay;
+      const reachedAtMs = Date.parse(project.targetReachedAt || '');
+      let nextProject = null;
+
+      if (!reached && project.targetReachedAt) {
+        nextProject = Object.assign({}, project, {
+          targetReachedAt: '',
+          autoArchiveAt: '',
+          updatedAt: nowIso
+        });
+        reset += 1;
+      } else if (reached && !Number.isFinite(reachedAtMs)) {
+        nextProject = Object.assign({}, project, {
+          targetReachedAt: nowIso,
+          autoArchiveAt: new Date(now + AUTO_ARCHIVE_AFTER_MS).toISOString(),
+          updatedAt: nowIso
+        });
+        marked += 1;
+      } else if (reached && now - reachedAtMs >= AUTO_ARCHIVE_AFTER_MS) {
+        nextProject = Object.assign({}, project, {
+          status: 'archived',
+          archivedAt: nowIso,
+          autoArchived: true,
+          autoArchiveReason: 'play_target_reached_3_days',
+          updatedAt: nowIso
+        });
+        archived += 1;
+      }
+
+      if (nextProject) {
+        await run(db, 'UPDATE traffic_v2_projects SET payload=?,updated_at=? WHERE user_key=? AND project_id=?', [
+          jsonValue(nextProject),
+          nowSec(),
+          key,
+          projectId
+        ]);
+      }
+    }
+    return { marked: marked, archived: archived, reset: reset };
+  }
 
   async function runCrmAutoRefresh() {
     autoRefreshState.lastRunAt = Date.now();
@@ -2197,6 +2403,7 @@ module.exports = function createTrafficPlanV2Routes(deps) {
     const db = getDb();
     try {
       const settings = await readSettings(db, key);
+      await autoArchiveReachedProjects(db, key);
       const projectRows = await all(db, 'SELECT payload FROM traffic_v2_projects WHERE user_key=? ORDER BY updated_at DESC', [key]);
       const executionRows = await all(db, 'SELECT payload FROM traffic_v2_executions WHERE user_key=? ORDER BY updated_at DESC', [key]);
       const applicationRows = await all(db, 'SELECT payload FROM traffic_v2_applications WHERE user_key=? ORDER BY updated_at DESC', [key]);
@@ -2217,16 +2424,14 @@ module.exports = function createTrafficPlanV2Routes(deps) {
       applications.forEach(function(record) {
         const id = text(record.executionId);
         if (!id) return;
-        const summary = applicationSummary.get(id) || { metrics: emptyMetrics(), maintenanceCost: 0 };
-        Object.keys(record.targetMetrics || {}).forEach(function(metric) {
-          summary.metrics[metric] = num(summary.metrics[metric]) + num(record.targetMetrics[metric]);
-        });
-        summary.maintenanceCost += money(record.maintenanceCost);
-        applicationSummary.set(id, summary);
+        const records = applicationSummary.get(id) || [];
+        records.push(record);
+        applicationSummary.set(id, records);
       });
       executions = executions.map(function(execution) {
-        const summary = applicationSummary.get(execution.executionId);
-        if (!summary) return execution;
+        const records = applicationSummary.get(execution.executionId);
+        if (!records || !records.length) return execution;
+        const summary = summarizeApplicationRecords(records);
         return Object.assign({}, execution, {
           appliedMetrics: Object.assign(emptyMetrics(), summary.metrics),
           maintenanceCost: money(summary.maintenanceCost)
@@ -2234,13 +2439,13 @@ module.exports = function createTrafficPlanV2Routes(deps) {
       });
       if (groupName) {
         const groupKey = normalizeText(groupName);
-        executions = executions.filter(function(execution) { return normalizeText(execution.accountGroup || execution.groupName) === groupKey; });
+        executions = executions.filter(function(execution) { return normalizeText(normalizeGroupName(execution.accountGroup || execution.groupName)) === groupKey; });
         const executionIds = new Set(executions.map(function(execution) { return execution.executionId; }));
         applications = applications.filter(function(record) {
-          return executionIds.has(record.executionId) || normalizeText(record.accountGroup || record.groupName) === groupKey;
+          return executionIds.has(record.executionId) || normalizeText(normalizeGroupName(record.accountGroup || record.groupName)) === groupKey;
         });
         const projectIds = new Set(executions.map(function(execution) { return execution.projectId; }));
-        projects = projects.filter(function(project) { return projectIds.has(project.projectId) || normalizeText(project.groupName) === groupKey; });
+        projects = projects.filter(function(project) { return projectIds.has(project.projectId) || normalizeText(normalizeGroupName(project.groupName)) === groupKey; });
       }
       const aggregatedProjects = projects.map(function(project) {
         return aggregateProject(project, executions, applications);
@@ -2271,7 +2476,7 @@ module.exports = function createTrafficPlanV2Routes(deps) {
       ? normalizeAccountStandardRows(savedAccountStandards)
       : readDefaultAccountStandards();
     return {
-      priceTables: parseJson(priceRow && priceRow.payload, null) || PRICE_TABLES,
+      priceTables: mergePriceTablesWithDefaults(parseJson(priceRow && priceRow.payload, null)),
       presets: parseJson(presetRow && presetRow.payload, null) || DEFAULT_PRESETS,
       accountStandards: normalizeAccountStandardRows(mergeInquiryAccountInfo(accountStandards))
     };
@@ -2301,6 +2506,10 @@ module.exports = function createTrafficPlanV2Routes(deps) {
     const db = getDb();
     const now = nowSec();
     try {
+      const settings = await readSettings(db, key);
+      normalized.executions = normalized.executions.map(function(execution) {
+        return normalizeExecution(enrichAccountIdentity(execution, settings.accountStandards));
+      });
       await run(db, `INSERT OR REPLACE INTO traffic_v2_projects
         (user_key,project_id,project_name,group_name,platform,schedule_date,target_cpm,payload,created_at,updated_at)
         VALUES (?,?,?,?,?,?,?,?,?,?)`, [
@@ -2362,18 +2571,33 @@ module.exports = function createTrafficPlanV2Routes(deps) {
     const db = getDb();
     const at = nowSec();
     try {
+      const settings = await readSettings(db, key);
       const projectRow = await get(db, 'SELECT payload FROM traffic_v2_projects WHERE user_key=? AND project_id=?', [key, id]);
       const currentProject = parseJson(projectRow && projectRow.payload, null);
       if (!currentProject) return { ok: false, error: '项目不存在' };
       const targetCpm = money(rawProject.targetCpm || currentProject.targetCpm || defaultTargetCpm(rawProject.platform || currentProject.platform));
+      const hasExplicitStatus = Object.prototype.hasOwnProperty.call(rawProject || {}, 'status')
+        || Object.prototype.hasOwnProperty.call(rawProject || {}, 'projectStatus');
+      const requestedStatus = text(rawProject.status || rawProject.projectStatus || currentProject.status) || 'active';
       const nextProject = Object.assign({}, currentProject, {
         projectName: text(rawProject.projectName || rawProject.name || currentProject.projectName),
         platform: normalizePlatform(rawProject.platform || currentProject.platform),
         scheduleDate: text(rawProject.scheduleDate || currentProject.scheduleDate),
         targetCpm: targetCpm,
-        status: text(rawProject.status || rawProject.projectStatus || currentProject.status) || 'active',
+        status: requestedStatus,
         updatedAt: new Date().toISOString()
       });
+      if (hasExplicitStatus && requestedStatus === 'active' && text(currentProject.status).toLowerCase() === 'archived') {
+        nextProject.targetReachedAt = '';
+        nextProject.autoArchiveAt = '';
+        nextProject.archivedAt = '';
+        nextProject.autoArchived = false;
+        nextProject.autoArchiveReason = '';
+      } else if (hasExplicitStatus && requestedStatus === 'archived' && text(currentProject.status).toLowerCase() !== 'archived') {
+        nextProject.archivedAt = new Date().toISOString();
+        nextProject.autoArchived = false;
+        nextProject.autoArchiveReason = '';
+      }
       const executionRows = await all(db, 'SELECT payload FROM traffic_v2_executions WHERE user_key=? AND project_id=?', [key, id]);
       const executions = executionRows.map(function(row) { return parseJson(row.payload, null); }).filter(Boolean);
       const preserveTargetMetrics = Boolean(rawProject.preserveTargetMetrics);
@@ -2398,13 +2622,13 @@ module.exports = function createTrafficPlanV2Routes(deps) {
           }
           allocatedTargetPlay += targetPlay;
         }
-        return normalizeExecution(Object.assign({}, execution, {
+        return normalizeExecution(enrichAccountIdentity(Object.assign({}, execution, {
           projectName: nextProject.projectName,
           platform: normalizePlatform(execution.platform || nextProject.platform),
           scheduleDate: text(execution.scheduleDate || nextProject.scheduleDate),
           targetCpm: targetCpm,
           targetMetrics: Object.assign(emptyMetrics(), execution.targetMetrics || {}, { play: targetPlay })
-        }));
+        }), settings.accountStandards));
       });
       nextProject.totalAmount = normalizedExecutions.reduce(function(sum, execution) {
         return sum + money(execution.discountedPrice);
@@ -2435,16 +2659,16 @@ module.exports = function createTrafficPlanV2Routes(deps) {
   async function saveExecution(key, execution) {
     const db = getDb();
     try {
+      const settings = await readSettings(db, key);
       const requestedId = text(execution && (execution.executionId || execution.id));
       const parentId = applicationParentExecutionId(requestedId);
       if (parentId) {
         const parentRow = await get(db, 'SELECT payload FROM traffic_v2_executions WHERE user_key=? AND execution_id=?', [key, parentId]);
         if (parentRow) {
-          const settings = await readSettings(db, key);
           return { ok: true, execution: normalizeExecution(enrichAccountIdentity(parseJson(parentRow.payload, null), settings.accountStandards)) };
         }
       }
-      const item = await upsertExecution(db, key, execution, nowSec());
+      const item = await upsertExecution(db, key, enrichAccountIdentity(execution, settings.accountStandards), nowSec());
       return { ok: true, execution: item };
     } finally {
       closeDb(db);
@@ -2456,6 +2680,7 @@ module.exports = function createTrafficPlanV2Routes(deps) {
     const at = nowSec();
     try {
       const app = Object.assign({}, raw || {});
+      app.videoUrl = extractVideoUrlText(app.videoUrl);
       const settings = await readSettings(db, key);
       let executionId = text(app.executionId);
       let row = executionId ? await get(db, 'SELECT payload FROM traffic_v2_executions WHERE user_key=? AND execution_id=?', [key, executionId]) : null;
@@ -2478,7 +2703,7 @@ module.exports = function createTrafficPlanV2Routes(deps) {
           targetMetrics: Object.assign(emptyMetrics(), { play: Math.round(num(app.targetPlay || 0)) }),
           currentMetrics: emptyMetrics(),
           appliedMetrics: emptyMetrics(),
-          videoUrl: text(app.videoUrl),
+          videoUrl: extractVideoUrlText(app.videoUrl),
           notes: '未关联项目'
         }, settings.accountStandards));
         await upsertExecution(db, key, execution, at);
@@ -2498,6 +2723,8 @@ module.exports = function createTrafficPlanV2Routes(deps) {
       const cumulativeCost = money(otherCost + calc.cost);
       const targetPlay = Math.round(num(calc.metrics && calc.metrics.play) || num(app.targetPlay || app.targetPlayWan && Number(app.targetPlayWan) * 10000));
       const identity = resolveApplicationIdentity(execution, app, settings.accountStandards);
+      const applicationOriginalPrice = money(execution.originalPrice || app.originalPrice);
+      const applicationDiscountedPrice = money(app.discountedPrice || execution.discountedPrice);
       const application = {
         id: sameId,
         applicationId: sameId,
@@ -2513,12 +2740,21 @@ module.exports = function createTrafficPlanV2Routes(deps) {
         uid: identity.uid,
         cooperationCode: identity.cooperationCode,
         orderType: text(app.orderType || execution.orderType || execution.dealType || 'xingtu'),
+        applicationMode: text(app.applicationMode || 'phase'),
         phaseName: phaseName,
         phaseRatio: text(app.phaseRatio || ''),
-        videoUrl: text(app.videoUrl || execution.videoUrl),
-        originalPrice: money(app.originalPrice || execution.originalPrice),
-        discountRate: money(app.discountRate || execution.discountRate),
-        discountedPrice: money(app.discountedPrice || execution.discountedPrice),
+        phaseSplits: Array.isArray(app.phaseSplits) ? app.phaseSplits.map(function(split) {
+          return {
+            name: text(split && split.name),
+            ratio: money(split && split.ratio)
+          };
+        }).filter(function(split) { return split.name && split.ratio > 0; }) : [],
+        videoUrl: extractVideoUrlText(app.videoUrl || execution.videoUrl),
+        originalPrice: applicationOriginalPrice,
+        discountRate: applicationOriginalPrice && applicationDiscountedPrice
+          ? money(applicationDiscountedPrice / applicationOriginalPrice * 100)
+          : money(app.discountRate || execution.discountRate),
+        discountedPrice: applicationDiscountedPrice,
         targetCpm: money(app.targetCpm || execution.targetCpm),
         targetPlay: targetPlay,
         selectedOptions: app.selectedOptions || {},
@@ -2547,17 +2783,11 @@ module.exports = function createTrafficPlanV2Routes(deps) {
 
       const refreshedRows = await all(db, 'SELECT payload FROM traffic_v2_applications WHERE user_key=? AND execution_id=?', [key, executionId]);
       const records = refreshedRows.map(function(record) { return parseJson(record.payload, null); }).filter(Boolean);
-      const applied = records.reduce(function(out, record) {
-        Object.keys(record.targetMetrics || {}).forEach(function(metric) {
-          out[metric] = num(out[metric]) + num(record.targetMetrics[metric]);
-        });
-        return out;
-      }, emptyMetrics());
-      const maintenanceCost = records.reduce(function(sum, record) { return sum + money(record.maintenanceCost); }, 0);
+      const summary = summarizeApplicationRecords(records);
       const nextExecution = enrichAccountIdentity(Object.assign({}, execution, identity, {
         videoUrl: application.videoUrl || execution.videoUrl,
-        appliedMetrics: applied,
-        maintenanceCost: money(maintenanceCost),
+        appliedMetrics: summary.metrics,
+        maintenanceCost: money(summary.maintenanceCost),
         updatedAt: new Date().toISOString()
       }), settings.accountStandards);
       await upsertExecution(db, key, nextExecution, at);
@@ -2578,7 +2808,7 @@ module.exports = function createTrafficPlanV2Routes(deps) {
       const scopeKey = normalizeText(scopeGroup);
       const executions = rows.map(function(row) { return parseJson(row.payload, null); }).filter(Boolean).filter(function(execution) {
         if (!scopeKey) return true;
-        return normalizeText(execution.accountGroup || execution.groupName) === scopeKey;
+        return normalizeText(normalizeGroupName(execution.accountGroup || execution.groupName)) === scopeKey;
       });
       const matched = [];
       const unmatched = [];

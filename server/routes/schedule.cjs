@@ -11,14 +11,33 @@ module.exports = function createScheduleRoutes(deps) {
   const dbPath = path.join(root, 'data', 'schedule.db');
   const uploadDir = path.join(root, 'public', 'uploads', 'schedule-docs');
   const scheduleGroups = [
-    { label: '内容一组', members: ['许树杰', '许梦婷', '刘登魁', '许国锬', '叶进生', '高明镇', '薛荐轩', '叶颖'], accounts: ['花无缺', '葵仔不想肝', '最翁Damnnn', '薛定谔的机', '跑腿的包子', '李野王SG', '游电工厂', '硬件侠', '素材'] },
-    { label: '内容二组', members: ['傅思敏', '赵良杰', '陈乐恒', '吴恒', '李扬林', '施律彬', '罗晓棋'], accounts: ['痞仔伯爵', '暴走星号键', '雷鸭Fist', '报告砖家', '沙雕101', '网瘾少女一条', '素材'] },
-    { label: '内容三组', members: ['曹媛', '陈泓睿', '林文涛', '刘佳琳', '肖子璇'], accounts: ['策划克星阿强', '中二探长', '团子好贵', '嘿小虎', '灵梦小师妹', '素材', '饭十七', '皮皮说游戏'] },
-    { label: '内容四组', members: ['姚希', '陈健伊', '宋丽佳', '林宇辰'], accounts: ['天机妹', '花蛮楼', '麦小雯', '夏天丶Cat', '有事找学姐', '小张同学', '素材'] },
-    { label: '内容五组', members: ['朱信宇', '林心语', '商光涵', '杨鸿霆', '吴楷煌'], accounts: ['游小妹', '游热娃子', '超玩教授', 'Lee小强', '木游话说', '麦冬冬', '素材'] },
-    { label: '内容六组', members: ['廖李星', '吴皓轩', '林孝添', '林语婷', '张碧珊', '叶子健'], accounts: ['不玩就分手', '游点慌', '游戏永动机', '畅玩百晓生', '夏洛', '游侠蹦蹦', '王路飞cp', '上官北丶', '情风师兄', '素材'] }
+    { label: '内容一部', aliases: ['内容一组'], leader: '薛荐轩', members: ['薛荐轩', '廖李星', '高明镇', '林孝添', '叶子健', '许国锬', '许树杰', '林语婷', '许梦婷'], accounts: ['最游话说', '薛定谔的机', '李野王SG', '游电工厂', '硬件侠', '情风师兄', '上官北丶', '王路飞CP', '素材'] },
+    { label: '内容二组', leader: '傅思敏', members: ['傅思敏', '赵良杰', '陈乐恒', '吴恒', '李扬林', '施律彬', '罗晓棋'], accounts: ['痞仔伯爵', '暴走星号键', '雷鸭Fist', '报告砖家', '沙雕101', '网瘾少女一条', '素材'] },
+    { label: '内容三组', leader: '曹媛', members: ['曹媛', '陈泓睿', '林文涛', '刘佳琳', '肖子璇'], accounts: ['策划克星阿强', '中二探长', '团子好贵', '嘿小虎', '灵梦小师妹', '跑腿的包子', '娱乐小狮酱', '甄有话说', '素材', '饭十七', '皮皮说游戏'] },
+    { label: '内容四组', leader: '陈健伊', members: ['姚希', '陈健伊', '宋丽佳', '林宇辰'], accounts: ['天机妹', '花蛮楼', '麦小雯', '夏天丶Cat', '有事找学姐', '小张同学', '素材'] },
+    { label: '内容五组', leader: '杨鸿霆', members: ['朱信宇', '林心语', '商光涵', '杨鸿霆', '吴楷煌'], accounts: ['游小妹', '游热娃子', '超玩教授', 'Lee小强', '木游话说', '麦冬冬', '素材'] },
+    { label: '内容六组', leader: '刘登魁', members: ['张莹珊', '刘思嫚', '吴皓轩', '邓姝', '叶进生', '叶颖', '刘登魁'], accounts: ['花无缺', '葵仔不想肝', '游戏永动机', '畅玩百晓生', '素材'] },
+    { label: 'MCN经纪组', aliases: ['MCN经济组', '经济组'], leader: '', members: ['张家豪', '钟文祯', '龙星羽', '吴羿玄'], accounts: ['素材'] }
   ];
-  const validGroupNames = new Set(scheduleGroups.map(group => group.label));
+  function normalizeGroupKey(value) {
+    return String(value || '').trim().replace(/内容/g, '').replace(/组/g, '').replace(/部/g, '');
+  }
+
+  function findScheduleGroupByName(value) {
+    const text = String(value || '').trim();
+    if (!text) return null;
+    const key = normalizeGroupKey(text);
+    return scheduleGroups.find(function(group) {
+      return group.label === text
+        || String(group.id || '') === text
+        || normalizeGroupKey(group.label) === key
+        || (group.aliases || []).some(function(alias) {
+          return alias === text || normalizeGroupKey(alias) === key;
+        });
+    }) || null;
+  }
+
+  const validGroupNames = new Set(scheduleGroups.flatMap(group => [group.label].concat(group.aliases || [])));
   const accountToGroups = scheduleGroups.reduce(function(map, group) {
     group.accounts.forEach(function(account) {
       if (!map[account]) map[account] = [];
@@ -45,6 +64,8 @@ module.exports = function createScheduleRoutes(deps) {
           progress TEXT DEFAULT '',
           workflow_stage TEXT DEFAULT '文案',
           participants_json TEXT DEFAULT '[]',
+          activity_json TEXT DEFAULT '[]',
+          stack_count INTEGER DEFAULT 1,
           sort_order INTEGER DEFAULT 0,
           parallel_key TEXT DEFAULT '',
           schedule_hidden INTEGER DEFAULT 0,
@@ -80,11 +101,32 @@ module.exports = function createScheduleRoutes(deps) {
           due_at TEXT DEFAULT '',
           important INTEGER DEFAULT 0,
           status TEXT DEFAULT 'open',
+          progress INTEGER DEFAULT 0,
+          assignee TEXT DEFAULT '',
           created_by TEXT DEFAULT '',
           updated_at INTEGER DEFAULT (strftime('%s', 'now')),
           created_at INTEGER DEFAULT (strftime('%s', 'now'))
         )
       `);
+      db.run(`
+        CREATE TABLE IF NOT EXISTS schedule_todo_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          original_id INTEGER DEFAULT 0,
+          group_name TEXT NOT NULL,
+          title TEXT NOT NULL,
+          detail TEXT DEFAULT '',
+          due_at TEXT DEFAULT '',
+          important INTEGER DEFAULT 0,
+          status TEXT DEFAULT 'done',
+          progress INTEGER DEFAULT 100,
+          created_by TEXT DEFAULT '',
+          original_updated_at INTEGER DEFAULT 0,
+          original_created_at INTEGER DEFAULT 0,
+          archive_week TEXT DEFAULT '',
+          archived_at INTEGER DEFAULT (strftime('%s', 'now'))
+        )
+      `);
+      ensureTodoColumns();
       db.run(`
         CREATE TABLE IF NOT EXISTS schedule_meta (
           key TEXT PRIMARY KEY,
@@ -138,6 +180,81 @@ module.exports = function createScheduleRoutes(deps) {
     });
   }
 
+  function localDateKey(date) {
+    const pad = number => String(number).padStart(2, '0');
+    return [
+      date.getFullYear(),
+      pad(date.getMonth() + 1),
+      pad(date.getDate())
+    ].join('-');
+  }
+
+  function currentWeekKey() {
+    const date = new Date();
+    const day = date.getDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() + diff);
+    return localDateKey(date);
+  }
+
+  function archiveCompletedTodosIfNeeded(database, cb) {
+    const weekKey = currentWeekKey();
+    database.serialize(function() {
+      database.run(
+        `INSERT OR IGNORE INTO schedule_meta (key, value, updated_at) VALUES ('todo_completed_archive_week', '', strftime('%s', 'now'))`
+      );
+      database.get(`SELECT value FROM schedule_meta WHERE key='todo_completed_archive_week'`, [], function(metaErr, row) {
+        if (metaErr) {
+          cb(metaErr);
+          return;
+        }
+        const archivedWeek = String(row && row.value || '');
+        if (!archivedWeek) {
+          database.run(
+            `UPDATE schedule_meta SET value=?, updated_at=strftime('%s', 'now') WHERE key='todo_completed_archive_week'`,
+            [weekKey],
+            function(initErr) {
+              cb(initErr || null);
+            }
+          );
+          return;
+        }
+        if (archivedWeek === weekKey) {
+          cb(null);
+          return;
+        }
+        database.run(
+          `INSERT INTO schedule_todo_history
+            (original_id, group_name, title, detail, due_at, important, status, progress, created_by, original_updated_at, original_created_at, archive_week)
+           SELECT id, group_name, title, detail, due_at, important, status, progress, created_by, updated_at, created_at, ?
+           FROM schedule_todos
+           WHERE status='done'`,
+          [weekKey],
+          function(insertErr) {
+            if (insertErr) {
+              cb(insertErr);
+              return;
+            }
+            database.run(`DELETE FROM schedule_todos WHERE status='done'`, [], function(deleteErr) {
+              if (deleteErr) {
+                cb(deleteErr);
+                return;
+              }
+              database.run(
+                `UPDATE schedule_meta SET value=?, updated_at=strftime('%s', 'now') WHERE key='todo_completed_archive_week'`,
+                [weekKey],
+                function(updateErr) {
+                  cb(updateErr || null);
+                }
+              );
+            });
+          }
+        );
+      });
+    });
+  }
+
   function userNames(auth) {
     const names = [];
     if (auth && auth.display_name) names.push(String(auth.display_name));
@@ -148,13 +265,22 @@ module.exports = function createScheduleRoutes(deps) {
   function ensureScheduleColumns() {
     const database = db;
     database.serialize(function() {
-      ['group_name', 'doc_title', 'doc_url', 'doc_kind', 'workflow_stage', 'participants_json'].forEach(function(column) {
+      ['group_name', 'doc_title', 'doc_url', 'doc_kind', 'workflow_stage', 'participants_json', 'activity_json'].forEach(function(column) {
         database.run("ALTER TABLE schedules ADD COLUMN " + column + " TEXT DEFAULT ''", function() {});
       });
+      database.run("ALTER TABLE schedules ADD COLUMN stack_count INTEGER DEFAULT 1", function() {});
       database.run("ALTER TABLE schedules ADD COLUMN sort_order INTEGER DEFAULT 0", function() {});
       database.run("ALTER TABLE schedules ADD COLUMN parallel_key TEXT DEFAULT ''", function() {});
       database.run("ALTER TABLE schedules ADD COLUMN schedule_hidden INTEGER DEFAULT 0", function() {});
       database.run("ALTER TABLE schedules ADD COLUMN linked_parent_id INTEGER DEFAULT NULL", function() {});
+    });
+  }
+
+  function ensureTodoColumns() {
+    const database = db;
+    database.serialize(function() {
+      database.run("ALTER TABLE schedule_todos ADD COLUMN progress INTEGER DEFAULT 0", function() {});
+      database.run("ALTER TABLE schedule_todos ADD COLUMN assignee TEXT DEFAULT ''", function() {});
     });
   }
 
@@ -175,7 +301,8 @@ module.exports = function createScheduleRoutes(deps) {
 
   function inferGroupName(task, fallbackGroup) {
     const explicit = String(task && task.group_name || '').trim();
-    if (validGroupNames.has(explicit)) return explicit;
+    const explicitGroup = findScheduleGroupByName(explicit);
+    if (explicitGroup) return explicitGroup.label;
 
     const memberGroup = groupByMember(task && task.person);
     if (memberGroup) return memberGroup.label;
@@ -185,12 +312,14 @@ module.exports = function createScheduleRoutes(deps) {
     if (accountGroups.length === 1) return accountGroups[0];
 
     const fallback = String(fallbackGroup || '').trim();
-    return validGroupNames.has(fallback) ? fallback : '';
+    const fallbackMatch = findScheduleGroupByName(fallback);
+    return fallbackMatch ? fallbackMatch.label : '';
   }
 
   function authGroupName(auth) {
     const explicit = String(auth && auth.group_name || '').trim();
-    if (validGroupNames.has(explicit)) return explicit;
+    const explicitGroup = findScheduleGroupByName(explicit);
+    if (explicitGroup) return explicitGroup.label;
 
     const names = userNames(auth);
     for (let i = 0; i < names.length; i++) {
@@ -200,21 +329,31 @@ module.exports = function createScheduleRoutes(deps) {
     return '';
   }
 
+  function groupNamesWithAliases(groupName) {
+    const group = findScheduleGroupByName(groupName);
+    if (!group) return groupName ? [groupName] : [];
+    return [group.label].concat(group.aliases || []);
+  }
+
   function allowedGroupNames(auth) {
-    if (isScheduleAdmin(auth)) return scheduleGroups.map(group => group.label);
+    if (isScheduleAdmin(auth)) return scheduleGroups.flatMap(group => [group.label].concat(group.aliases || []));
     const groupName = authGroupName(auth);
-    return groupName ? [groupName] : [];
+    return groupNamesWithAliases(groupName);
   }
 
   function normalizeTask(task, fallbackGroup) {
     const participantsJson = String(task && task.participants_json || '').trim();
+    const activityJson = String(task && task.activity_json || '').trim();
     const workflowStage = String(task && task.workflow_stage || '').trim();
+    const stackCount = normalizeStackCount(task);
     const normalized = Object.assign({}, task, {
       group_name: inferGroupName(task, fallbackGroup),
       sort_order: Number.isFinite(Number(task && task.sort_order)) ? Number(task.sort_order) : 0,
       parallel_key: String(task && task.parallel_key || ''),
       workflow_stage: workflowStage,
       participants_json: participantsJson || '[]',
+      activity_json: activityJson || '[]',
+      stack_count: stackCount,
       schedule_hidden: Number(task && task.schedule_hidden) ? 1 : 0,
       linked_parent_id: Number.isFinite(Number(task && task.linked_parent_id)) ? Number(task.linked_parent_id) : null
     });
@@ -227,6 +366,14 @@ module.exports = function createScheduleRoutes(deps) {
       }
     }
     return normalized;
+  }
+
+  function normalizeStackCount(task) {
+    const type = String(task && task.type || '');
+    if (!type.includes('星广') && type !== '素材代做') return 1;
+    const raw = Number((task && (task.stack_count || task.stackCount || task.itemCount || task.quantity)) || 1);
+    if (!Number.isFinite(raw)) return 1;
+    return Math.max(1, Math.min(99, Math.round(raw)));
   }
 
   function filterVisibleTasks(tasks, auth) {
@@ -297,15 +444,20 @@ module.exports = function createScheduleRoutes(deps) {
     const title = String(source.title || '').trim().slice(0, 160);
     const detail = String(source.detail || '').trim().slice(0, 1000);
     const groupName = String(source.group_name || source.groupName || '').trim();
+    const group = findScheduleGroupByName(groupName);
     const dueAt = String(source.due_at || source.dueAt || '').trim().slice(0, 40);
     const status = String(source.status || 'open').trim() === 'done' ? 'done' : 'open';
+    const progress = Math.max(0, Math.min(100, Math.round(Number(source.progress || 0) || 0)));
+    const assignee = String(source.assignee || source.person || '').trim().slice(0, 80);
     return {
       id: normalizeTodoId(source.id),
-      group_name: validGroupNames.has(groupName) ? groupName : authGroupName(auth),
+      group_name: group ? group.label : authGroupName(auth),
       title,
       detail,
       due_at: dueAt,
       important: Number(source.important) ? 1 : 0,
+      progress,
+      assignee,
       status
     };
   }
@@ -322,8 +474,8 @@ module.exports = function createScheduleRoutes(deps) {
     }
 
     const stmt = database.prepare(`
-      INSERT INTO schedules (id, account, person, group_name, type, content, remark, date, status, progress, workflow_stage, participants_json, sort_order, parallel_key, schedule_hidden, linked_parent_id, doc_title, doc_url, doc_kind)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO schedules (id, account, person, group_name, type, content, remark, date, status, progress, workflow_stage, participants_json, activity_json, stack_count, sort_order, parallel_key, schedule_hidden, linked_parent_id, doc_title, doc_url, doc_kind)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(id) DO UPDATE SET
         account = excluded.account,
         person = excluded.person,
@@ -336,6 +488,8 @@ module.exports = function createScheduleRoutes(deps) {
         progress = excluded.progress,
         workflow_stage = excluded.workflow_stage,
         participants_json = excluded.participants_json,
+        activity_json = excluded.activity_json,
+        stack_count = excluded.stack_count,
         sort_order = excluded.sort_order,
         parallel_key = excluded.parallel_key,
         schedule_hidden = excluded.schedule_hidden,
@@ -360,6 +514,8 @@ module.exports = function createScheduleRoutes(deps) {
         t.progress || '',
         t.workflow_stage || '文案',
         t.participants_json || '[]',
+        t.activity_json || '[]',
+        normalizeStackCount(t),
         Number.isFinite(Number(t.sort_order)) ? Number(t.sort_order) : 0,
         t.parallel_key || '',
         Number(t.schedule_hidden) ? 1 : 0,
@@ -388,6 +544,144 @@ module.exports = function createScheduleRoutes(deps) {
 
   function isAllowedDocExt(name) {
     return ['.txt', '.doc', '.docx', '.pdf'].includes(path.extname(String(name || '')).toLowerCase());
+  }
+
+  function shortText(value, fallback) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    return (text || fallback || '未命名').slice(0, 80);
+  }
+
+  function actorName(auth) {
+    return String(auth && (auth.display_name || auth.username) || '').trim() || '未知用户';
+  }
+
+  function taskLabel(task) {
+    const account = shortText(task && task.account, '');
+    const content = shortText(task && task.content, '选题待定');
+    return account ? `【${account} / ${content}】` : `【${content}】`;
+  }
+
+  function todoLabel(todo) {
+    return `【${shortText(todo && todo.title, '未命名待办')}】`;
+  }
+
+  function logScheduleOperation(body, info) {
+    if (!deps.authStore || !deps.authStore.logOperation || !body || !body._auth) return;
+    deps.authStore.logOperation(Object.assign({
+      module: 'schedule',
+      target_type: 'schedule',
+      metadata: {}
+    }, info, {
+      auth: body._auth,
+      req: body._req
+    })).catch(function() {});
+  }
+
+  function compactScheduleMetadata(task) {
+    return {
+      id: task && task.id || null,
+      account: task && task.account || '',
+      person: task && task.person || '',
+      group_name: task && task.group_name || '',
+      date: task && task.date || '',
+      type: task && task.type || '',
+      content: task && task.content || '',
+      status: task && task.status || '',
+      progress: task && task.progress || '',
+      workflow_stage: task && task.workflow_stage || '',
+      stack_count: task && task.stack_count || 1
+    };
+  }
+
+  function collectScheduleAuditEntries(oldRows, newTasks) {
+    const oldById = new Map((oldRows || []).filter(row => row && row.id).map(row => [Number(row.id), row]));
+    const newById = new Map((newTasks || []).filter(task => task && task.id).map(task => [Number(task.id), task]));
+    const entries = [];
+
+    (newTasks || []).forEach(function(task) {
+      const id = normalizeTaskId(task.id);
+      const previous = id ? oldById.get(id) : null;
+      if (!previous) {
+        entries.push({
+          action: 'schedule.task.create',
+          target_id: id || '',
+          summary: '新建排期任务：' + taskLabel(task),
+          metadata: { after: compactScheduleMetadata(task) }
+        });
+        return;
+      }
+
+      const changes = [];
+      function changed(key, label) {
+        const beforeValue = String(previous[key] || '').trim();
+        const afterValue = String(task[key] || '').trim();
+        if (beforeValue !== afterValue) changes.push({ key, label, before: beforeValue, after: afterValue });
+      }
+      changed('content', '内容');
+      changed('remark', '备注');
+      changed('status', '状态');
+      changed('progress', '进度');
+      changed('workflow_stage', '阶段');
+      changed('type', '类型');
+      if (Number(previous.stack_count || 1) !== Number(task.stack_count || 1)) {
+        changes.push({ key: 'stack_count', label: '堆叠条数', before: String(previous.stack_count || 1), after: String(task.stack_count || 1) });
+      }
+
+      if (!changes.length) return;
+      const stageChange = changes.find(change => change.key === 'workflow_stage');
+      const action = stageChange ? 'schedule.task.progress' : 'schedule.task.update';
+      const changeText = changes.slice(0, 4).map(change => `${change.label} ${change.before || '空'} -> ${change.after || '空'}`).join('，');
+      entries.push({
+        action,
+        target_id: id || '',
+        summary: (stageChange ? '推进排期任务：' : '修改排期任务：') + taskLabel(task) + '（' + changeText + '）',
+        metadata: {
+          before: compactScheduleMetadata(previous),
+          after: compactScheduleMetadata(task),
+          changes
+        }
+      });
+    });
+
+    (oldRows || []).forEach(function(row) {
+      const id = normalizeTaskId(row.id);
+      if (!id || newById.has(id)) return;
+      entries.push({
+        action: 'schedule.task.delete',
+        target_id: id,
+        summary: '删除排期任务：' + taskLabel(row),
+        metadata: { before: compactScheduleMetadata(row) }
+      });
+    });
+
+    return entries.slice(0, 30);
+  }
+
+  function logScheduleTaskDiff(body, oldRows, newTasks) {
+    const entries = collectScheduleAuditEntries(oldRows, newTasks);
+    if (!entries.length) return;
+    entries.forEach(function(entry) {
+      logScheduleOperation(body, Object.assign({
+        target_type: 'schedule_task'
+      }, entry));
+    });
+  }
+
+  function logTodoOperation(body, action, todo, summary, metadata) {
+    logScheduleOperation(body, {
+      action,
+      target_type: 'schedule_todo',
+      target_id: todo && todo.id || '',
+      summary,
+      metadata: Object.assign({
+        id: todo && todo.id || null,
+        group_name: todo && todo.group_name || '',
+        title: todo && todo.title || '',
+        due_at: todo && todo.due_at || '',
+        status: todo && todo.status || '',
+        progress: todo && todo.progress || 0
+      }, metadata || {})
+    });
   }
 
   return {
@@ -482,22 +776,29 @@ module.exports = function createScheduleRoutes(deps) {
 
         database.serialize(function() {
           const scopedDelete = buildScopedDelete(auth, groupsToReplace);
-          database.run(scopedDelete.sql, scopedDelete.params, function(err) {
-            if (err) {
-              cb({ ok: false, error: err.message });
+          database.all(scopedDelete.sql.replace(/^DELETE FROM schedules WHERE /, 'SELECT * FROM schedules WHERE '), scopedDelete.params, function(readErr, oldRows) {
+            if (readErr) {
+              cb({ ok: false, error: readErr.message });
               return;
             }
-            persistTasks(database, normalizedTasks, function(result) {
-              if (!result || result.ok === false) {
-                cb(result || { ok: false, error: 'save schedule failed' });
+            database.run(scopedDelete.sql, scopedDelete.params, function(err) {
+              if (err) {
+                cb({ ok: false, error: err.message });
                 return;
               }
-              bumpScheduleRevision(database, function(bumpErr, nextMeta) {
-                if (bumpErr) {
-                  cb({ ok: false, error: bumpErr.message });
+              persistTasks(database, normalizedTasks, function(result) {
+                if (!result || result.ok === false) {
+                  cb(result || { ok: false, error: 'save schedule failed' });
                   return;
                 }
-                cb(Object.assign({}, result, { revision: nextMeta.revision, updated_at: nextMeta.updated_at }));
+                bumpScheduleRevision(database, function(bumpErr, nextMeta) {
+                  if (bumpErr) {
+                    cb({ ok: false, error: bumpErr.message });
+                    return;
+                  }
+                  logScheduleTaskDiff(body, oldRows || [], normalizedTasks);
+                  cb(Object.assign({}, result, { revision: nextMeta.revision, updated_at: nextMeta.updated_at }));
+                });
               });
             });
           });
@@ -512,13 +813,46 @@ module.exports = function createScheduleRoutes(deps) {
         cb({ ok: true, todos: [] });
         return;
       }
+      archiveCompletedTodosIfNeeded(database, function(archiveErr) {
+        if (archiveErr) {
+          cb({ ok: false, error: archiveErr.message });
+          return;
+        }
+        const placeholders = allowed.map(() => '?').join(',');
+        database.all(
+          `SELECT id, group_name, title, detail, due_at, important, status, progress, assignee, created_by, updated_at, created_at
+           FROM schedule_todos
+           WHERE group_name IN (${placeholders})
+           ORDER BY status ASC, important DESC, due_at ASC, created_at DESC, id DESC`,
+          allowed,
+          function(err, rows) {
+            if (err) {
+              cb({ ok: false, error: err.message });
+              return;
+            }
+            cb({ ok: true, todos: rows || [] });
+          }
+        );
+      });
+    },
+
+    '/api/schedule/todos/history': function(body, cb) {
+      const database = getDb();
+      const allowed = allowedGroupNames(body._auth || {});
+      if (!allowed.length) {
+        cb({ ok: true, todos: [] });
+        return;
+      }
+      const limit = Math.max(20, Math.min(500, Number(body.limit || 200) || 200));
       const placeholders = allowed.map(() => '?').join(',');
       database.all(
-        `SELECT id, group_name, title, detail, due_at, important, status, created_by, updated_at, created_at
-         FROM schedule_todos
+        `SELECT id, original_id, group_name, title, detail, due_at, important, status, progress, created_by,
+                original_updated_at, original_created_at, archive_week, archived_at
+         FROM schedule_todo_history
          WHERE group_name IN (${placeholders})
-         ORDER BY status ASC, important DESC, due_at ASC, created_at DESC, id DESC`,
-        allowed,
+         ORDER BY archived_at DESC, id DESC
+         LIMIT ?`,
+        allowed.concat([limit]),
         function(err, rows) {
           if (err) {
             cb({ ok: false, error: err.message });
@@ -537,25 +871,63 @@ module.exports = function createScheduleRoutes(deps) {
         cb({ ok: false, error: 'todo title required' });
         return;
       }
-      if (!todo.group_name || !todoAllowed(todo, auth)) {
+      if (!todo.group_name || (!todo.id && !todoAllowed(todo, auth))) {
         cb({ ok: false, error: 'no schedule group permission' });
         return;
       }
 
       if (todo.id) {
-        const allowed = allowedGroupNames(auth);
-        const placeholders = allowed.map(() => '?').join(',');
-        database.run(
-          `UPDATE schedule_todos
-           SET group_name = ?, title = ?, detail = ?, due_at = ?, important = ?, status = ?, updated_at = strftime('%s', 'now')
-           WHERE id = ? AND group_name IN (${placeholders})`,
-          [todo.group_name, todo.title, todo.detail, todo.due_at, todo.important, todo.status, todo.id].concat(allowed),
-          function(err) {
-            if (err) {
-              cb({ ok: false, error: err.message });
+        database.get(
+          `SELECT id, group_name, title, detail, due_at, important, status, progress, assignee, created_by, updated_at, created_at
+           FROM schedule_todos
+           WHERE id = ?`,
+          [todo.id],
+          function(readErr, previous) {
+            if (readErr) {
+              cb({ ok: false, error: readErr.message });
               return;
             }
-            cb({ ok: true, id: todo.id, changes: this.changes || 0 });
+            database.run(
+              `UPDATE schedule_todos
+               SET group_name = ?, title = ?, detail = ?, due_at = ?, important = ?, status = ?, progress = ?, assignee = ?, updated_at = strftime('%s', 'now')
+               WHERE id = ?`,
+              [todo.group_name, todo.title, todo.detail, todo.due_at, todo.important, todo.status, todo.progress, todo.assignee, todo.id],
+              function(err) {
+                if (err) {
+                  cb({ ok: false, error: err.message });
+                  return;
+                }
+                if ((this.changes || 0) > 0) {
+                  const changes = [];
+                  [
+                    ['group_name', '分组'],
+                    ['title', '标题'],
+                    ['detail', '详情'],
+                    ['due_at', '时间'],
+                    ['important', '重要'],
+                    ['status', '状态'],
+                    ['progress', '进度']
+                  ].forEach(function(item) {
+                    const key = item[0];
+                    const label = item[1];
+                    const beforeValue = String(previous && previous[key] || '').trim();
+                    const afterValue = String(todo[key] || '').trim();
+                    if (beforeValue !== afterValue) changes.push({ key, label, before: beforeValue, after: afterValue });
+                  });
+                  const changeText = changes.length
+                    ? changes.slice(0, 4).map(change => `${change.label} ${change.before || '空'} -> ${change.after || '空'}`).join('，')
+                    : '保存待办';
+                  logTodoOperation(
+                    body,
+                    'schedule.todo.update',
+                    Object.assign({}, previous || {}, todo),
+                    `${actorName(auth)} 修改部门待办：${todoLabel(todo)}（${changeText}）`,
+                    { before: previous || null, after: todo, changes }
+                  );
+                }
+                cb({ ok: true, id: todo.id, changes: this.changes || 0 });
+              }
+            );
           }
         );
         return;
@@ -564,14 +936,22 @@ module.exports = function createScheduleRoutes(deps) {
       const createdBy = (auth.display_name || auth.username || '').trim();
       database.run(
         `INSERT INTO schedule_todos
-          (group_name, title, detail, due_at, important, status, created_by)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        [todo.group_name, todo.title, todo.detail, todo.due_at, todo.important, todo.status, createdBy],
+          (group_name, title, detail, due_at, important, status, progress, assignee, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [todo.group_name, todo.title, todo.detail, todo.due_at, todo.important, todo.status, todo.progress, todo.assignee, createdBy],
         function(err) {
           if (err) {
             cb({ ok: false, error: err.message });
             return;
           }
+          const savedTodo = Object.assign({}, todo, { id: this.lastID, created_by: createdBy });
+          logTodoOperation(
+            body,
+            'schedule.todo.create',
+            savedTodo,
+            `${actorName(auth)} 新建部门待办：${todoLabel(savedTodo)}（${savedTodo.group_name || '未分组'}）`,
+            { after: savedTodo }
+          );
           cb({ ok: true, id: this.lastID });
         }
       );
@@ -587,17 +967,39 @@ module.exports = function createScheduleRoutes(deps) {
         return;
       }
       const placeholders = allowed.map(() => '?').join(',');
-      database.run(
-        `UPDATE schedule_todos
-         SET status = ?, updated_at = strftime('%s', 'now')
+      database.get(
+        `SELECT id, group_name, title, detail, due_at, important, status, progress, created_by, updated_at, created_at
+         FROM schedule_todos
          WHERE id = ? AND group_name IN (${placeholders})`,
-        [status, id].concat(allowed),
-        function(err) {
-          if (err) {
-            cb({ ok: false, error: err.message });
+        [id].concat(allowed),
+        function(readErr, previous) {
+          if (readErr) {
+            cb({ ok: false, error: readErr.message });
             return;
           }
-          cb({ ok: true, count: this.changes || 0 });
+          database.run(
+            `UPDATE schedule_todos
+             SET status = ?, updated_at = strftime('%s', 'now')
+             WHERE id = ? AND group_name IN (${placeholders})`,
+            [status, id].concat(allowed),
+            function(err) {
+              if (err) {
+                cb({ ok: false, error: err.message });
+                return;
+              }
+              if ((this.changes || 0) > 0) {
+                const nextTodo = Object.assign({}, previous || {}, { id, status });
+                logTodoOperation(
+                  body,
+                  status === 'done' ? 'schedule.todo.done' : 'schedule.todo.reopen',
+                  nextTodo,
+                  `${actorName(body._auth || {})} ${status === 'done' ? '完成' : '重新打开'}部门待办：${todoLabel(nextTodo)}`,
+                  { before: previous || null, after: nextTodo }
+                );
+              }
+              cb({ ok: true, count: this.changes || 0 });
+            }
+          );
         }
       );
     },
@@ -611,16 +1013,37 @@ module.exports = function createScheduleRoutes(deps) {
         return;
       }
       const placeholders = allowed.map(() => '?').join(',');
-      database.run(
-        `DELETE FROM schedule_todos
+      database.get(
+        `SELECT id, group_name, title, detail, due_at, important, status, progress, created_by, updated_at, created_at
+         FROM schedule_todos
          WHERE id = ? AND group_name IN (${placeholders})`,
         [id].concat(allowed),
-        function(err) {
-          if (err) {
-            cb({ ok: false, error: err.message });
+        function(readErr, previous) {
+          if (readErr) {
+            cb({ ok: false, error: readErr.message });
             return;
           }
-          cb({ ok: true, count: this.changes || 0 });
+          database.run(
+            `DELETE FROM schedule_todos
+             WHERE id = ? AND group_name IN (${placeholders})`,
+            [id].concat(allowed),
+            function(err) {
+              if (err) {
+                cb({ ok: false, error: err.message });
+                return;
+              }
+              if ((this.changes || 0) > 0) {
+                logTodoOperation(
+                  body,
+                  'schedule.todo.delete',
+                  previous || { id },
+                  `${actorName(body._auth || {})} 删除部门待办：${todoLabel(previous || { id })}`,
+                  { before: previous || null }
+                );
+              }
+              cb({ ok: true, count: this.changes || 0 });
+            }
+          );
         }
       );
     },
@@ -693,6 +1116,18 @@ module.exports = function createScheduleRoutes(deps) {
             cb({ ok: false, error: err.message });
             return;
           }
+          logScheduleOperation(body, {
+            action: 'schedule.task.handoff',
+            target_type: 'schedule_task',
+            target_id: task.id || '',
+            summary: `${actorName(auth)} 交接排期任务给 ${toPerson}：${taskLabel(task)}`,
+            metadata: {
+              task: compactScheduleMetadata(task),
+              from: sender,
+              to: toPerson,
+              notification_id: this.lastID
+            }
+          });
           cb({ ok: true, id: this.lastID });
         }
       );

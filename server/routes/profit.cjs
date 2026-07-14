@@ -1,15 +1,16 @@
 const path = require('path');
+const fs = require('fs');
 const sqlite3 = require('sqlite3');
 
 const PROFIT_DB_PATH = path.join(__dirname, '..', '..', 'data', 'profit.db');
 
 const PROFIT_ACCOUNTS = [
-  '花无缺', '葵仔不想肝', '最翁Damnnn', '薛定谔的机', '跑腿的包子', '李野王SG', '游电工厂', '硬件侠',
+  '最游话说', '薛定谔的机', '李野王SG', '游电工厂', '硬件侠', '情风师兄', '上官北丶', '王路飞CP',
   '痞仔伯爵', '暴走星号键', '雷鸭Fist', '报告砖家', '沙雕101', '灵梦小师妹', '网瘾少女一条',
-  '策划克星阿强', '饭十七', '皮皮说游戏', '中二探长', '团子好贵',
+  '策划克星阿强', '跑腿的包子', '饭十七', '皮皮说游戏', '中二探长', '团子好贵',
   '天机妹', '麦小雯', '花蛮楼', '有事找学姐', '夏天丶cat',
   '游小妹', '游热娃子', '超玩教授', 'Lee小强', '木游话说', '麦冬冬',
-  '不玩就分手', '游点慌', '游戏永动机', '畅玩百晓生', '夏洛', '游侠蹦蹦', '王路飞cp', '上官北丶', '情风师兄',
+  '花无缺', '葵仔不想肝', '游戏永动机', '畅玩百晓生',
   '素材'
 ];
 
@@ -305,16 +306,18 @@ function normalizePublishFlag(value, publishDate) {
 
 function normalizePublishLink(value) {
   var text = String(value || '').trim();
-  if (!text || /^(未发|未发布|待发|延期|无|暂无|未上线)$/i.test(text)) return '';
+  if (!text || /^(未发|未发布|待发|延期|撤单|撤销|取消|无|暂无|未上线)$/i.test(text)) return '';
   return text;
 }
 
 function normalizeExecutionStatus(value, publishDate, link) {
   var text = String(value == null ? '' : value).trim();
+  if (/撤单|撤销|取消/.test(text)) return '撤单';
   if (/已完成|完成|结案|执行完成/.test(text)) return '已发布';
   if (/^(1|true|yes|y|已|是|发布|已发布|已发|上线|已上线)$/i.test(text)) return '已发布';
   if (/未发布|未发|待发|未上线|延期|取消|^(0|false|no|n|否|未)$/i.test(text)) return '未发布';
   var linkText = String(link || '').trim();
+  if (/撤单|撤销|取消/.test(linkText)) return '撤单';
   if (/未发布|未发|待发|未上线|延期|取消/.test(linkText)) return '未发布';
   if (publishDate || normalizePublishLink(linkText)) return '已发布';
   return '未发布';
@@ -375,7 +378,7 @@ function parseWorkbookRow(row, idx, fallbackMonth, fallbackProject, fallbackPlat
     lock_date: cellText(row, idx.lockDate),
     publish_date: publishDate,
     execution_status: executionStatus,
-    is_published: executionStatus === '未发布' ? 0 : 1,
+    is_published: executionStatus === '已发布' ? 1 : 0,
     product_line: cellText(row, idx.productLine),
     link: normalizePublishLink(rawLink),
     order_no: cellText(row, idx.orderNo),
@@ -521,7 +524,20 @@ function initProfitDb(db, cb) {
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_grp ON profits(grp)');
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_month ON profits(month)');
     db.run('CREATE INDEX IF NOT EXISTS idx_profits_grp_month ON profits(grp, month)');
-    db.run('CREATE INDEX IF NOT EXISTS idx_profits_created ON profits(created_at)', cb);
+    db.run('CREATE INDEX IF NOT EXISTS idx_profits_created ON profits(created_at)');
+    db.run(`CREATE TABLE IF NOT EXISTS profit_targets (
+      key TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      year INTEGER NOT NULL,
+      month TEXT NOT NULL,
+      target INTEGER DEFAULT 0,
+      revenue_target INTEGER DEFAULT 0,
+      updated_at INTEGER DEFAULT 0,
+      updated_by TEXT
+    )`);
+    db.run('ALTER TABLE profit_targets ADD COLUMN revenue_target INTEGER DEFAULT 0', function() {
+      cb();
+    });
   });
 }
 
@@ -539,8 +555,29 @@ function withProfitDb(cb) {
 
 function normalizeGroup(value) {
   var text = String(value || '').trim();
-  return text && text !== '全部' ? text : '';
+  if (!text || text === '全部') return '';
+  if (text === '内容一组') return '内容一部';
+  return text;
 }
+
+function groupQueryAliases(group) {
+  if (group === '内容一部') return ['内容一部', '内容一组'];
+  return group ? [group] : [];
+}
+
+var PROFIT_ACCOUNT_ALIASES = [
+  { canonical: '最游话说', aliases: ['最翁Damnnn', '最翁damn', '最翁说游'] },
+  { canonical: '葵仔不想肝', aliases: ['魁仔不想肝', '尼大木家族'] },
+  { canonical: '畅玩百晓生', aliases: ['畅玩白晓生'] },
+  { canonical: '王路飞CP', aliases: ['王路飞cp'] },
+  { canonical: '上官北丶', aliases: ['上官北'] },
+  { canonical: '薛定谔的机', aliases: ['薛定谔的机-'] }
+];
+
+var PROFIT_ACCOUNT_GROUPS = [
+  { group: '内容一部', accounts: ['最游话说', '薛定谔的机', '李野王SG', '游电工厂', '硬件侠', '情风师兄', '上官北丶', '王路飞CP', '素材'] },
+  { group: '内容六组', accounts: ['花无缺', '葵仔不想肝', '游戏永动机', '畅玩百晓生'] }
+];
 
 function normalizeSyncText(value) {
   return String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
@@ -551,6 +588,57 @@ function normalizeAccountKey(value) {
     .trim()
     .toLowerCase()
     .replace(/[\s·丶_\-—]+/g, '');
+}
+
+function normalizeProfitAccount(value) {
+  var raw = String(value || '').trim();
+  if (!raw) return '';
+  var key = normalizeAccountKey(raw);
+  for (var i = 0; i < PROFIT_ACCOUNT_ALIASES.length; i += 1) {
+    var rule = PROFIT_ACCOUNT_ALIASES[i];
+    if (normalizeAccountKey(rule.canonical) === key) return rule.canonical;
+    if ((rule.aliases || []).some(function(alias) { return normalizeAccountKey(alias) === key; })) {
+      return rule.canonical;
+    }
+  }
+  return raw;
+}
+
+function groupFromProfitAccount(value) {
+  var account = normalizeProfitAccount(value);
+  var key = normalizeAccountKey(account);
+  if (!key) return '';
+  for (var i = 0; i < PROFIT_ACCOUNT_GROUPS.length; i += 1) {
+    var group = PROFIT_ACCOUNT_GROUPS[i];
+    if ((group.accounts || []).some(function(item) { return normalizeAccountKey(item) === key; })) {
+      return group.group;
+    }
+  }
+  return '';
+}
+
+function effectiveProfitGroup(row) {
+  if (!row) return '';
+  return groupFromProfitAccount(row.account) || normalizeGroup(row.grp);
+}
+
+function profitRowMatchesGroup(row, group) {
+  if (!group) return true;
+  var effectiveGroup = effectiveProfitGroup(row);
+  if (group === '内容一部') {
+    return effectiveGroup === '内容一部' || effectiveGroup === '内容六组';
+  }
+  return effectiveGroup === group;
+}
+
+function normalizeProfitRowForRead(row) {
+  if (!row) return row;
+  var normalizedAccount = normalizeProfitAccount(row.account);
+  var normalizedGroup = groupFromProfitAccount(normalizedAccount) || normalizeGroup(row.grp);
+  return Object.assign({}, row, {
+    grp: normalizedGroup,
+    account: normalizedAccount
+  });
 }
 
 function isPreservedSyncRecord(record) {
@@ -590,7 +678,7 @@ function normalizeProfitMeta(record) {
     lock_date: String(record.lock_date || record.lockDate || '').trim(),
     publish_date: publishDate,
     execution_status: executionStatus,
-    is_published: executionStatus === '未发布' ? 0 : 1,
+    is_published: executionStatus === '已发布' ? 1 : 0,
     original_id: String(record.original_id || record.originalId || '').trim(),
     product_line: String(record.product_line || record.productLine || '').trim(),
     link: normalizePublishLink(rawLink),
@@ -605,9 +693,10 @@ function normalizeSyncRecord(record) {
   var grp = normalizeGroup(record.grp || record.group);
   var month = String(record.month || record.schedule || '').trim();
   var source = [record.project, record.platform, record.account, record.remark, record.note, record.category].filter(Boolean).join(' ');
-  var account = String(record.account || '').trim();
+  var account = normalizeProfitAccount(record.account);
   if (!account && /平台收益/.test(source)) account = '平台收益';
   if (!account && /代做|素材代做|素材/.test(source)) account = '素材';
+  grp = groupFromProfitAccount(account) || grp;
   var meta = normalizeProfitMeta(record);
   return {
     local_id: Math.round(Number(record.local_id ?? record.localId ?? 0) || 0),
@@ -662,12 +751,159 @@ function syncRecordKey(record) {
   ].join('|');
 }
 
+function syncIdentityValue(value) {
+  var text = normalizeSyncText(value);
+  if (!text || /^(?:暂无|无|none|null|n\/a|-)$/.test(text)) return '';
+  return text;
+}
+
+function syncStableIdentity(record) {
+  var originalId = syncIdentityValue(record.original_id || record.originalId);
+  if (originalId) return 'original:' + originalId;
+  var crmOrderNo = syncIdentityValue(record.crm_order_no || record.crmOrderNo);
+  if (crmOrderNo) return 'crm:' + crmOrderNo;
+  var orderNo = syncIdentityValue(record.order_no || record.orderNo);
+  if (orderNo) return 'order:' + orderNo;
+  var link = syncIdentityValue(normalizePublishLink(record.link || record.url));
+  if (link) return 'link:' + link;
+  return '';
+}
+
+function syncFallbackKey(record) {
+  return [
+    normalizeSyncText(record.grp),
+    normalizeSyncText(record.month),
+    normalizeSyncText(record.account),
+    normalizeSyncText(record.platform)
+  ].join('|');
+}
+
+function wecomSourceKind(record) {
+  var source = normalizeSyncText(record && record.entry_source);
+  if (!source) return '';
+  if (source === 'wecom') return 'default';
+  if (source.indexOf('wecom:') === 0) return source.slice('wecom:'.length) || 'default';
+  return '';
+}
+
+function isWecomSyncRecord(record) {
+  return Boolean(wecomSourceKind(record));
+}
+
+function backupProfitDb(reason) {
+  var stamp = new Date().toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '');
+  var backupPath = PROFIT_DB_PATH + '.bak-before-' + reason + '-' + stamp + '.db';
+  fs.copyFileSync(PROFIT_DB_PATH, backupPath);
+  return backupPath;
+}
+
 module.exports = function createProfitRoutes(deps) {
   var runPython = deps.runPython;
+  var readCache = new Map();
+  var READ_CACHE_TTL_MS = Number(process.env.PROFIT_READ_CACHE_TTL_MS || 30000);
+  var profitSnapshot = null;
+  var profitSnapshotPromise = null;
+  var wecomAutoPullTimer = null;
+  var wecomAutoPullInitialTimer = null;
+  var wecomAutoPullState = {
+    started: false,
+    running: false,
+    intervalMs: 0,
+    lastStartedAt: 0,
+    lastFinishedAt: 0,
+    lastResult: null,
+    lastError: ''
+  };
 
-  function triggerFeishuProfitSync(id) {
-    if (!id || !runPython) return;
-    runPython('feishu_profit.py', 'upsert_profit', { id: id }, 90).catch(function() {});
+  function clearReadCache() {
+    readCache.clear();
+    profitSnapshot = null;
+  }
+
+  function profitDbSignature() {
+    try {
+      var stat = fs.statSync(PROFIT_DB_PATH);
+      return [Math.round(stat.mtimeMs || 0), stat.size || 0].join(':');
+    } catch (e) {
+      return '0:0';
+    }
+  }
+
+  function stableReadBody(body) {
+    return JSON.stringify({
+      grp: normalizeGroup(body && body.grp),
+      year: Number(body && body.year || 0) || 0,
+      month: Number(body && body.month || 0) || 0
+    });
+  }
+
+  function cachedRead(name, body, producer, cb) {
+    var key = [name, profitDbSignature(), stableReadBody(body || {})].join('|');
+    var cached = readCache.get(key);
+    if (cached && Date.now() - cached.at < READ_CACHE_TTL_MS) {
+      cb(cached.value);
+      return;
+    }
+    producer(function(result) {
+      if (!result || !result.error) {
+        readCache.set(key, { at: Date.now(), value: result });
+      }
+      cb(result);
+    });
+  }
+
+  function readProfitSnapshot(cb) {
+    var signature = profitDbSignature();
+    if (profitSnapshot && profitSnapshot.signature === signature) {
+      cb(null, profitSnapshot.rows);
+      return;
+    }
+    if (profitSnapshotPromise && profitSnapshotPromise.signature === signature) {
+      profitSnapshotPromise.waiters.push(cb);
+      return;
+    }
+    var pending = { signature: signature, waiters: [cb] };
+    profitSnapshotPromise = pending;
+    withProfitDb(function(err, db) {
+      if (err) {
+        pending.waiters.forEach(function(waiter) { waiter(err); });
+        profitSnapshotPromise = null;
+        return;
+      }
+      db.all('SELECT * FROM profits ORDER BY id DESC', [], function(queryErr, rows) {
+        db.close();
+        if (!queryErr) {
+          profitSnapshot = {
+            signature: signature,
+            rows: (rows || []).map(normalizeProfitRowForRead)
+          };
+        }
+        pending.waiters.forEach(function(waiter) {
+          waiter(queryErr || null, profitSnapshot ? profitSnapshot.rows : []);
+        });
+        profitSnapshotPromise = null;
+      });
+    });
+  }
+
+  function monthMatchesPeriod(value, year, month) {
+    var text = String(value || '').trim();
+    var normalizedYear = Number(year || 0) || 0;
+    var normalizedMonth = Number(month || 0) || 0;
+    if (normalizedYear && text.indexOf(String(normalizedYear)) !== 0) return false;
+    if (!normalizedMonth) return true;
+    var monthText = String(normalizedMonth) + '\u6708';
+    var paddedMonthText = String(normalizedMonth).padStart(2, '0') + '\u6708';
+    return text.indexOf(monthText) !== -1 || text.indexOf(paddedMonthText) !== -1;
+  }
+
+  function selectProfitRows(body, rows) {
+    var grp = normalizeGroup(body && body.grp);
+    var year = Number(body && body.year || 0) || 0;
+    var month = Number(body && body.month || 0) || 0;
+    return (rows || []).filter(function(row) {
+      return monthMatchesPeriod(row.month, year, month) && profitRowMatchesGroup(row, grp);
+    });
   }
 
   function appendDateFilters(where, params, year, month) {
@@ -688,51 +924,94 @@ module.exports = function createProfitRoutes(deps) {
   }
 
   function list(body, cb) {
-    var grp = normalizeGroup(body.grp);
-    var year = Number(body.year || 0) || 0;
-    var month = Number(body.month || 0) || 0;
-    withProfitDb(function(err, db) {
-      if (err) { cb({ error: err.message }); return; }
-      var where = [];
-      var params = [];
-      if (grp) {
-        where.push('grp=?');
-        params.push(grp);
-      }
-      appendDateFilters(where, params, year, month);
-      var sql = 'SELECT * FROM profits' + (where.length ? ' WHERE ' + where.join(' AND ') : '') + ' ORDER BY id DESC';
-      db.all(sql, params, function(queryErr, rows) {
-        db.close();
-        if (queryErr) { cb({ error: queryErr.message }); return; }
-        cb({ data: rows || [] });
+    cachedRead('list', body, function(done) {
+      readProfitSnapshot(function(err, rows) {
+        if (err) { done({ error: err.message }); return; }
+        done({ data: selectProfitRows(body, rows) });
       });
-    });
+    }, cb);
   }
 
   function stats(body, cb) {
-    var grp = normalizeGroup(body.grp);
-    var year = Number(body.year || 0) || 0;
-    var month = Number(body.month || 0) || 0;
-    withProfitDb(function(err, db) {
-      if (err) { cb({ error: err.message }); return; }
-      var where = [];
-      var params = [];
-      if (grp) {
-        where.push('grp=?');
-        params.push(grp);
-      }
-      appendDateFilters(where, params, year, month);
-      var sql = 'SELECT SUM(revenue) as total_revenue, SUM(margin) as total_margin, COUNT(*) as count FROM profits'
-        + (where.length ? ' WHERE ' + where.join(' AND ') : '');
-      db.get(sql, params, function(queryErr, row) {
-        db.close();
-        if (queryErr) { cb({ error: queryErr.message }); return; }
-        cb({
-          total_revenue: (row && row.total_revenue) || 0,
-          total_margin: (row && row.total_margin) || 0,
-          count: (row && row.count) || 0
+    cachedRead('stats', body, function(done) {
+      readProfitSnapshot(function(err, rows) {
+        if (err) { done({ error: err.message }); return; }
+          var data = selectProfitRows(body, rows);
+          var accountingData = data.filter(function(row) {
+            return normalizeExecutionStatus(row.execution_status, row.publish_date, row.link) !== '撤单';
+          });
+          done({
+            total_revenue: accountingData.reduce(function(sum, row) { return sum + (Number(row.revenue) || 0); }, 0),
+            total_margin: accountingData.reduce(function(sum, row) { return sum + (Number(row.margin) || 0); }, 0),
+            count: accountingData.length,
+            cancelled_count: data.length - accountingData.length
+          });
+      });
+    }, cb);
+  }
+
+  function normalizeTargetKey(groupId, year, month) {
+    var groupText = String(groupId || '').trim();
+    var targetYear = Number(year || 0) || new Date().getFullYear();
+    var monthText = month === '' || month === null || month === undefined ? 'all' : String(month || 'all').trim();
+    if (!groupText) return '';
+    return [groupText, targetYear, monthText || 'all'].join(':');
+  }
+
+  function listTargets(body, cb) {
+    cachedRead('targets', {}, function(done) {
+      withProfitDb(function(err, db) {
+        if (err) { done({ error: err.message }); return; }
+        db.all('SELECT key, group_id, year, month, target, revenue_target, updated_at, updated_by FROM profit_targets ORDER BY key', [], function(queryErr, rows) {
+          db.close();
+          if (queryErr) { done({ error: queryErr.message }); return; }
+          var targets = {};
+          var detailTargets = {};
+          (rows || []).forEach(function(row) {
+            targets[row.key] = Number(row.target) || 0;
+            detailTargets[row.key] = {
+              target: Number(row.target) || 0,
+              marginTarget: Number(row.target) || 0,
+              revenueTarget: Number(row.revenue_target) || 0
+            };
+          });
+          done({ targets: targets, detailTargets: detailTargets, rows: rows || [] });
         });
       });
+    }, cb);
+  }
+
+  function saveTarget(body, cb) {
+    var groupId = String(body.groupId || body.group_id || body.grp || '').trim();
+    var year = Number(body.year || 0) || new Date().getFullYear();
+    var month = body.month === '' || body.month === null || body.month === undefined ? 'all' : String(body.month || 'all').trim();
+    var key = normalizeTargetKey(groupId, year, month);
+    var target = Math.max(0, Math.round(Number(body.target ?? body.marginTarget ?? body.margin_target) || 0));
+    var revenueTarget = Math.max(0, Math.round(Number(body.revenueTarget ?? body.revenue_target) || 0));
+    if (!key) { cb({ error: 'missing groupId' }); return; }
+    var user = body._auth || {};
+    var updatedBy = String(user.real_name || user.display_name || user.username || '').trim();
+    withProfitDb(function(err, db) {
+      if (err) { cb({ error: err.message }); return; }
+      db.run(
+        `INSERT INTO profit_targets (key, group_id, year, month, target, revenue_target, updated_at, updated_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           group_id=excluded.group_id,
+           year=excluded.year,
+           month=excluded.month,
+           target=excluded.target,
+           revenue_target=excluded.revenue_target,
+           updated_at=excluded.updated_at,
+           updated_by=excluded.updated_by`,
+        [key, groupId, year, month || 'all', target, revenueTarget, Math.floor(Date.now() / 1000), updatedBy],
+        function(writeErr) {
+          db.close();
+          if (writeErr) { cb({ error: writeErr.message }); return; }
+          clearReadCache();
+          cb({ ok: true, key: key, target: target, marginTarget: target, revenueTarget: revenueTarget });
+        }
+      );
     });
   }
 
@@ -788,7 +1067,7 @@ module.exports = function createProfitRoutes(deps) {
           var insertedId = this && this.lastID;
           db.close();
           if (insertErr) { cb({ error: insertErr.message }); return; }
-          triggerFeishuProfitSync(insertedId);
+          clearReadCache();
           cb({ id: insertedId });
         }
       );
@@ -848,7 +1127,7 @@ module.exports = function createProfitRoutes(deps) {
         function(updateErr) {
           db.close();
           if (updateErr) { cb({ error: updateErr.message }); return; }
-          triggerFeishuProfitSync(id);
+          clearReadCache();
           cb({ success: true });
         }
       );
@@ -863,6 +1142,7 @@ module.exports = function createProfitRoutes(deps) {
       db.run('DELETE FROM profits WHERE id=?', [id], function(deleteErr) {
         db.close();
         if (deleteErr) { cb({ error: deleteErr.message }); return; }
+        clearReadCache();
         cb({ success: true });
       });
     });
@@ -880,6 +1160,7 @@ module.exports = function createProfitRoutes(deps) {
     var syncMode = String(body.mode || 'sync').toLowerCase();
     var incrementalMode = syncMode === 'incremental' || syncMode === 'append';
     var mergeMode = syncMode === 'merge' || syncMode === 'pull';
+    var authoritativeWecomMode = Boolean(body.authoritativeWecom || body.authoritative_wecom);
     var sourceRecords = Array.isArray(body.records) ? body.records : [];
     var normalized = sourceRecords
       .map(normalizeSyncRecord)
@@ -971,6 +1252,8 @@ module.exports = function createProfitRoutes(deps) {
         var grouped = new Map();
         var stats = { inserted: 0, updated: 0, deleted: 0, preserved: 0, skipped: 0 };
         var directIdRecords = [];
+        var matchedExistingIds = new Set();
+        var backupPath = '';
 
         function updateStoredRecord(record, id) {
           return run(
@@ -1084,6 +1367,29 @@ module.exports = function createProfitRoutes(deps) {
 
         await run('BEGIN IMMEDIATE');
         try {
+          var globalWecomByIdentity = new Map();
+          if (authoritativeWecomMode) {
+            var globalWecomRows = await all("SELECT * FROM profits WHERE entry_source='wecom' OR entry_source LIKE 'wecom:%'", []);
+            globalWecomRows.forEach(function(row) {
+              var identity = syncStableIdentity(row);
+              if (!identity) return;
+              if (!globalWecomByIdentity.has(identity)) globalWecomByIdentity.set(identity, []);
+              globalWecomByIdentity.get(identity).push(row);
+            });
+          }
+
+          function takeCandidate(candidates, requireUnique) {
+            var available = (candidates || []).filter(function(row) { return !matchedExistingIds.has(row.id); });
+            if (!available.length || (requireUnique && available.length !== 1)) return null;
+            var candidate = available[0];
+            matchedExistingIds.add(candidate.id);
+            return candidate;
+          }
+
+          function ensureBackup() {
+            if (!backupPath) backupPath = backupProfitDb('wecom-authoritative-sync');
+          }
+
           for (var directIndex = 0; directIndex < directIdRecords.length; directIndex += 1) {
             var directRecord = directIdRecords[directIndex];
             var directRows = await all('SELECT id FROM profits WHERE id=? LIMIT 1', [directRecord.local_id]);
@@ -1105,23 +1411,44 @@ module.exports = function createProfitRoutes(deps) {
               return record.__genericSourceProject;
             });
             var existingRows = await all('SELECT * FROM profits WHERE grp=? AND month=?', [grp, month]);
-            var incomingByKey = new Map();
-            var reusableExistingByKey = new Map();
+            var exactCandidates = new Map();
+            var fallbackCandidates = new Map();
+            var sourceKinds = new Set(scopeRecords.map(wecomSourceKind).filter(Boolean));
+            var matchableRows = authoritativeWecomMode
+              ? existingRows.filter(isWecomSyncRecord)
+              : existingRows;
+
+            matchableRows.forEach(function(row) {
+              var exactKey = syncRecordKey(row);
+              if (!exactCandidates.has(exactKey)) exactCandidates.set(exactKey, []);
+              exactCandidates.get(exactKey).push(row);
+              var fallbackKey = syncFallbackKey(row);
+              if (!fallbackCandidates.has(fallbackKey)) fallbackCandidates.set(fallbackKey, []);
+              fallbackCandidates.get(fallbackKey).push(row);
+            });
 
             scopeRecords.forEach(function(record) {
-              var key = syncRecordKey(record);
-              if (!incomingByKey.has(key)) incomingByKey.set(key, []);
-              incomingByKey.get(key).push(record);
+              var matched = null;
+              var identity = syncStableIdentity(record);
+              if (identity && authoritativeWecomMode) {
+                matched = takeCandidate(globalWecomByIdentity.get(identity), true);
+              }
+              if (!matched) matched = takeCandidate(exactCandidates.get(syncRecordKey(record)), false);
+              // Project names may move from a placeholder such as "保密项目" to a final name.
+              // Only use the loose account/month/platform key when it identifies one row uniquely.
+              if (!matched && authoritativeWecomMode) {
+                matched = takeCandidate(fallbackCandidates.get(syncFallbackKey(record)), true);
+              }
+              record.__matchedExistingId = matched ? matched.id : 0;
             });
 
             for (var i = 0; i < existingRows.length; i += 1) {
               var existing = existingRows[i];
-              var existingKey = syncRecordKey(existing);
-              var incomingBucket = incomingByKey.get(existingKey);
-              if (incomingBucket && incomingBucket.length) {
-                incomingBucket.shift();
-                if (!reusableExistingByKey.has(existingKey)) reusableExistingByKey.set(existingKey, []);
-                reusableExistingByKey.get(existingKey).push(existing);
+              if (matchedExistingIds.has(existing.id)) continue;
+              if (authoritativeWecomMode && isWecomSyncRecord(existing) && sourceKinds.has(wecomSourceKind(existing))) {
+                ensureBackup();
+                await run('DELETE FROM profits WHERE id=?', [existing.id]);
+                stats.deleted += 1;
                 continue;
               }
               if (incrementalMode || mergeMode) {
@@ -1142,15 +1469,12 @@ module.exports = function createProfitRoutes(deps) {
 
             for (var j = 0; j < scopeRecords.length; j += 1) {
               var record = scopeRecords[j];
-              var key = syncRecordKey(record);
-              var existingBucket = reusableExistingByKey.get(key);
-              var matched = existingBucket && existingBucket.length ? existingBucket.shift() : null;
-              if (matched) {
+              if (record.__matchedExistingId) {
                 if (incrementalMode) {
                   stats.skipped += 1;
                   continue;
                 }
-                await updateStoredRecord(record, matched.id);
+                await updateStoredRecord(record, record.__matchedExistingId);
                 stats.updated += 1;
                 continue;
               }
@@ -1160,6 +1484,7 @@ module.exports = function createProfitRoutes(deps) {
           }
 
           await run('COMMIT');
+          clearReadCache();
           cb({
             success: true,
             inserted: stats.inserted,
@@ -1167,10 +1492,12 @@ module.exports = function createProfitRoutes(deps) {
             deleted: stats.deleted,
             preserved: stats.preserved,
             skipped: stats.skipped,
+            backup_path: backupPath,
             total: normalizedTotal
           });
         } catch (syncErr) {
           await run('ROLLBACK').catch(function() {});
+          clearReadCache();
           cb({ error: syncErr.message || String(syncErr) });
         } finally {
           db.close();
@@ -1196,24 +1523,24 @@ module.exports = function createProfitRoutes(deps) {
     cb({ error: 'method not allowed' });
   }
 
-  function syncFeishu(body, cb) {
+  function pullWecomSpreadsheet(body, cb) {
     if (!runPython) { cb({ error: 'python runtime not available' }); return; }
-    runPython('feishu_profit.py', 'sync_all_profit', {
-      limit: Number(body.limit) || 0,
-      force: body.force !== false
-    }, 10 * 60).then(cb).catch(function(err) {
-      cb({ error: err && err.message || String(err) });
-    });
-  }
-
-  function pullFeishuSpreadsheet(body, cb) {
-    if (!runPython) { cb({ error: 'python runtime not available' }); return; }
-    runPython('feishu_profit.py', 'read_profit_spreadsheet', {
-      year: Number(body.year) || 0,
-      month: Number(body.month) || 0
+    var targetYear = Number(body.year) || 0;
+    if (targetYear && targetYear < 2026) {
+      cb({
+        error: '2025 及更早历史流水不从企微表同步，请继续使用本地历史数据表。',
+        preserved: true,
+        source: 'local-history'
+      });
+      return;
+    }
+    runPython('wecom_profit.py', 'read_profit_spreadsheet', {
+      year: targetYear,
+      month: Number(body.month) || 0,
+      mode: body.sourceMode || body.priceMode || body.wecomMode || 'all'
     }, 10 * 60).then(function(result) {
       if (result.error || (result.code && !Array.isArray(result.records))) {
-        cb({ error: result.error || result.msg || '飞书读取失败', feishu: result });
+        cb({ error: result.error || result.msg || '企微表读取失败', source: result });
         return;
       }
       var records = Array.isArray(result.records) ? result.records : [];
@@ -1226,22 +1553,31 @@ module.exports = function createProfitRoutes(deps) {
           preserved: 0,
           skipped: 0,
           total: 0,
-          feishu_total: 0,
+          source_total: 0,
           sheets: result.sheets || [],
-          errors: result.errors || []
+          errors: result.errors || [],
+          sources: result.sources || []
         });
         return;
       }
-      sync({ records: records, mode: body.mode || 'merge' }, function(syncResult) {
+      sync({
+        records: records,
+        mode: body.mode || 'merge',
+        // The WeCom table is the source of truth for its own imported rows.
+        authoritativeWecom: true
+      }, function(syncResult) {
         if (syncResult && syncResult.error) {
-          cb(Object.assign({ feishu_total: records.length, sheets: result.sheets || [], errors: result.errors || [] }, syncResult));
+          cb(Object.assign({ source_total: records.length, sheets: result.sheets || [], errors: result.errors || [] }, syncResult));
           return;
         }
         cb(Object.assign({}, syncResult || {}, {
-          feishu_total: records.length,
+          source_total: records.length,
           sheets: result.sheets || [],
           errors: result.errors || [],
-          url: result.url || ''
+          url: result.url || '',
+          urls: result.urls || {},
+          sources: result.sources || [],
+          source: result.source || 'wecom'
         }));
       });
     }).catch(function(err) {
@@ -1249,10 +1585,95 @@ module.exports = function createProfitRoutes(deps) {
     });
   }
 
+  function currentAutoPullPeriod() {
+    var now = new Date();
+    return {
+      year: now.getFullYear(),
+      month: now.getMonth() + 1
+    };
+  }
+
+  function autoPullWecomSpreadsheet(trigger) {
+    if (wecomAutoPullState.running) return;
+    var period = currentAutoPullPeriod();
+    if (period.year < 2026) return;
+    wecomAutoPullState.running = true;
+    wecomAutoPullState.lastStartedAt = Date.now();
+    wecomAutoPullState.lastError = '';
+    pullWecomSpreadsheet({
+      year: period.year,
+      month: period.month,
+      mode: 'merge',
+      sourceMode: 'all',
+      trigger: trigger || 'auto'
+    }, function(result) {
+      wecomAutoPullState.running = false;
+      wecomAutoPullState.lastFinishedAt = Date.now();
+      wecomAutoPullState.lastResult = Object.assign({
+        year: period.year,
+        month: period.month,
+        trigger: trigger || 'auto'
+      }, result || {});
+      if (result && result.error) {
+        wecomAutoPullState.lastError = result.error;
+        console.warn('[profit] auto wecom pull failed:', result.error);
+        return;
+      }
+      console.log('[profit] auto wecom pull done:', JSON.stringify({
+        year: period.year,
+        month: period.month,
+        source_total: Number(result && (result.source_total || result.total)) || 0,
+        inserted: Number(result && result.inserted) || 0,
+        updated: Number(result && result.updated) || 0
+      }));
+    });
+  }
+
+  function startWecomAutoPullScheduler(intervalMs) {
+    if (wecomAutoPullState.started) return wecomAutoPullState;
+    var disabled = String(process.env.PROFIT_WECOM_AUTO_PULL_DISABLED || '').toLowerCase() === 'true';
+    if (disabled) return wecomAutoPullState;
+    var normalizedInterval = Math.max(60 * 60 * 1000, Number(intervalMs) || 4 * 60 * 60 * 1000);
+    var initialDelay = Math.max(30 * 1000, Number(process.env.PROFIT_WECOM_AUTO_PULL_INITIAL_DELAY_MS) || 2 * 60 * 1000);
+    wecomAutoPullState.started = true;
+    wecomAutoPullState.intervalMs = normalizedInterval;
+    wecomAutoPullInitialTimer = setTimeout(function() {
+      autoPullWecomSpreadsheet('startup');
+    }, initialDelay);
+    wecomAutoPullTimer = setInterval(function() {
+      autoPullWecomSpreadsheet('interval');
+    }, normalizedInterval);
+    if (wecomAutoPullInitialTimer && typeof wecomAutoPullInitialTimer.unref === 'function') wecomAutoPullInitialTimer.unref();
+    if (wecomAutoPullTimer && typeof wecomAutoPullTimer.unref === 'function') wecomAutoPullTimer.unref();
+    return wecomAutoPullState;
+  }
+
+  function wecomAutoPullStatus(body, cb) {
+    cb({
+      ok: true,
+      started: wecomAutoPullState.started,
+      running: wecomAutoPullState.running,
+      intervalMs: wecomAutoPullState.intervalMs,
+      lastStartedAt: wecomAutoPullState.lastStartedAt,
+      lastFinishedAt: wecomAutoPullState.lastFinishedAt,
+      lastError: wecomAutoPullState.lastError,
+      lastResult: wecomAutoPullState.lastResult
+    });
+  }
+
+  // Keep the normalised rows warm in the API process so the first board visit
+  // does not wait for separate year/group SQLite reads.
+  var profitSnapshotPrewarmTimer = setTimeout(function() {
+    readProfitSnapshot(function(err) {
+      if (err) console.warn('[profit] snapshot prewarm failed:', err.message || err);
+    });
+  }, Math.max(0, Number(process.env.PROFIT_SNAPSHOT_PREWARM_DELAY_MS) || 1500));
+  if (profitSnapshotPrewarmTimer && typeof profitSnapshotPrewarmTimer.unref === 'function') {
+    profitSnapshotPrewarmTimer.unref();
+  }
+
   return {
-    '/api/feishu/profit': function(body, cb) {
-      runPython('feishu_profit.py', 'read', {}, 60).then(cb);
-    },
+    _startWecomAutoPullScheduler: startWecomAutoPullScheduler,
 
     // Legacy endpoints kept for current screens and compatibility.
     '/api/profit/list': list,
@@ -1265,11 +1686,13 @@ module.exports = function createProfitRoutes(deps) {
 
     // Preferred endpoints for new UI code.
     '/api/profits': collection,
+    '/api/profits/targets': listTargets,
+    '/api/profits/targets/save': saveTarget,
     '/api/profits/:id': item,
     '/api/profits/stats': stats,
     '/api/profits/parse': parse,
     '/api/profits/sync': sync,
-    '/api/profits/sync-feishu': syncFeishu,
-    '/api/profits/pull-feishu': pullFeishuSpreadsheet
+    '/api/profits/pull-wecom': pullWecomSpreadsheet,
+    '/api/profits/pull-wecom/status': wecomAutoPullStatus
   };
 };

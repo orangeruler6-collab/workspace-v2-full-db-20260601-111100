@@ -160,6 +160,10 @@ module.exports = function createSqliteAdapter(options) {
             });
             return this;
           },
+          serialize(callback) {
+            db.serialize(callback);
+            return this;
+          },
           close() {
             db.close();
           }

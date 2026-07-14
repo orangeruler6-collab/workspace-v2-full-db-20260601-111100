@@ -140,7 +140,7 @@ import { useToast } from '../composables/useToast'
 const { showToast } = useToast()
 const memberModules = MEMBER_MODULES
 const restrictedModules = MEMBER_MODULES.filter(module => RESTRICTED_MEMBER_MODULES.includes(module.id))
-const groups = ['内容一组', '内容二组', '内容三组', '内容四组', '内容五组', '内容六组']
+const groups = ['内容一部', '内容二组', '内容三组', '内容四组', '内容五组', '内容六组', 'MCN经纪组']
 
 const users = ref([])
 const currentUser = ref(getCurrentAuthUser())

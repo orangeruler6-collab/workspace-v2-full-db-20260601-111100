@@ -11,6 +11,7 @@ import urllib.request
 import uuid
 
 from env import load_env
+from volcengine_asr import transcribe_audio_file as transcribe_audio_file_with_volcengine
 from bilibili_cli_bridge import (
     error_message,
     extract_bvid,
@@ -162,6 +163,16 @@ def _transcribe_audio(file_path):
     return '', '硅基流动未返回转写文本：' + raw[:240]
 
 
+def _transcribe_audio_preferred(file_path):
+    text, error = transcribe_audio_file_with_volcengine(file_path)
+    if text:
+        return text, '', 'volcengine'
+    fallback_text, fallback_error = _transcribe_audio(file_path)
+    if fallback_text:
+        return fallback_text, '', 'siliconflow'
+    return '', '火山转写失败：' + str(error) + '；硅基流动兜底失败：' + str(fallback_error), ''
+
+
 def _download_audio(bvid):
     tmp_dir = tempfile.mkdtemp(prefix='usagi_bili_audio_')
     result = run_bili(['audio', bvid, '--no-split', '-o', tmp_dir], timeout=240)
@@ -184,18 +195,18 @@ def _transcribe_audio_fallback(bvid, meta, subtitle_error=''):
             if subtitle_error:
                 detail += '；字幕读取失败原因：' + subtitle_error[:200]
             return {'error': detail, 'title': meta.get('title') or '', 'bvid': bvid, 'source': 'bilibili-cli:audio'}
-        text, asr_err = _transcribe_audio(audio_path)
+        text, asr_err, asr_source = _transcribe_audio_preferred(audio_path)
         if asr_err:
             detail = asr_err
             if subtitle_error:
                 detail += '；字幕读取失败原因：' + subtitle_error[:200]
-            return {'error': detail, 'title': meta.get('title') or '', 'bvid': bvid, 'source': 'siliconflow'}
+            return {'error': detail, 'title': meta.get('title') or '', 'bvid': bvid, 'source': 'volcengine'}
         return {
             'text': text,
             'title': meta.get('title') or '',
             'bvid': bvid,
             'author': meta.get('author') or '',
-            'source': 'siliconflow',
+            'source': asr_source or 'volcengine',
             'subtitle_error': subtitle_error or '',
         }
     finally:

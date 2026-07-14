@@ -317,6 +317,8 @@
           </div>
         </div>
 
+        <PlayCountPanel />
+
       </section>
       <section class="tools-right-column">
         <CommentGeneratorPanel ref="commentPanelRef" />
@@ -333,6 +335,7 @@ import { useDouyinTool } from './tools/useDouyinTool'
 import { useBilibiliTranscription } from './tools/useBilibiliTranscription'
 import { useAudioTranscription } from './tools/useAudioTranscription'
 import CommentGeneratorPanel from './tools/CommentGeneratorPanel.vue'
+import PlayCountPanel from './tools/PlayCountPanel.vue'
 
 const { showToast } = useToast()
 const { handleCopy } = useClipboard(showToast)

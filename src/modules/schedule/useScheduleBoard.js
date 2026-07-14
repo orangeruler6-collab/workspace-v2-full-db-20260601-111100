@@ -3,6 +3,7 @@ import {
   deleteScheduleTodo,
   loadSchedule,
   loadScheduleRevision,
+  loadScheduleTodoHistory,
   loadScheduleTodos,
   notifyScheduleHandoff,
   saveSchedule,
@@ -14,7 +15,10 @@ import { ALL_ACCOUNTS, GROUPS, MEMBERS, STATUS_MAP, TYPE_TAG, WORKFLOW_STAGES } 
 import { getCurrentAuthUser } from '../../api/client'
 
 const DEPARTMENT_TODO_TAB = 'department-todos'
-const SCHEDULE_SYNC_INTERVAL_MS = 5000
+const DEPARTMENT_TODO_ACCOUNT = '部门待办'
+const SCHEDULE_SYNC_INTERVAL_MS = 15000
+const SCHEDULE_IDLE_SYNC_DELAY_MS = 8000
+const DEFAULT_TODO_DUE_TIME = '23:00'
 
 const PRODUCTION_WORKFLOW_STAGES = ['文案', '后期', '待发布', '已发布']
 
@@ -34,8 +38,11 @@ function createEmptyForm() {
     type: '日常',
     status: 'pending',
     workflow_stage: '文案',
+    stack_count: 1,
+    cooperation: false,
     participants: [],
     parallel_person: '',
+    activity_log: [],
     doc_title: '',
     doc_url: '',
     doc_kind: '',
@@ -46,6 +53,7 @@ function createEmptyForm() {
 function createEmptyTodoDraft() {
   return {
     title: '',
+    detail: '',
     dueDate: '',
     dueTime: '',
     important: false
@@ -60,6 +68,19 @@ export function useScheduleBoard(showToast, options = {}) {
       .trim()
       .replace(/\u5185\u5bb9/g, '')
       .replace(/\u7ec4/g, '')
+      .replace(/\u90e8/g, '')
+  }
+
+  function groupKeys(group) {
+    return [group?.label, ...(group?.aliases || [])]
+      .map(normalizeGroupKey)
+      .filter(Boolean)
+  }
+
+  function canonicalGroupLabel(value) {
+    const key = normalizeGroupKey(value)
+    const group = GROUPS.find(item => groupKeys(item).includes(key))
+    return group?.label || String(value || '').trim()
   }
 
   function findGroupByUser(user) {
@@ -70,7 +91,7 @@ export function useScheduleBoard(showToast, options = {}) {
       const matchedByGroup = GROUPS.find(group => {
         return group.label === groupText
           || String(group.id) === groupText
-          || normalizeGroupKey(group.label) === groupKey
+          || groupKeys(group).includes(groupKey)
       })
       if (matchedByGroup) return matchedByGroup
     }
@@ -127,8 +148,14 @@ export function useScheduleBoard(showToast, options = {}) {
 
   const form = reactive(createEmptyForm())
   const scheduleTodos = ref([])
+  const scheduleTodoHistory = ref([])
+  const scheduleTodoHistoryLoading = ref(false)
   const todoDrafts = reactive({})
   let scheduleSyncTimer = 0
+  let scheduleSaving = false
+  let scheduleLoading = false
+  let scheduleSyncing = false
+  let lastLocalScheduleChangeAt = 0
 
   watch(currentUser, () => {
     activeGroup.value = getDefaultGroupId()
@@ -137,6 +164,11 @@ export function useScheduleBoard(showToast, options = {}) {
   function pushHistory() {
     history.value.push(JSON.stringify(allItems.value))
     if (history.value.length > maxHistory) history.value.shift()
+    markLocalScheduleChanged()
+  }
+
+  function markLocalScheduleChanged() {
+    lastLocalScheduleChangeAt = Date.now()
   }
 
   function undo() {
@@ -202,8 +234,23 @@ export function useScheduleBoard(showToast, options = {}) {
   })
 
   const currentGroup = computed(() => GROUPS.find(group => group.id === activeGroup.value) || GROUPS[0])
-  const currentGroupMembers = computed(() => currentGroup.value?.members || [])
+  const currentGroupMembers = computed(() => {
+    const members = [...(currentGroup.value?.members || [])]
+    const name = currentUserName()
+    if (!name) return members
+    const index = members.indexOf(name)
+    if (index <= 0) return members
+    const [self] = members.splice(index, 1)
+    members.unshift(self)
+    return members
+  })
   const currentGroupAccounts = computed(() => currentGroup.value?.accounts || [])
+  const currentGroupWeekAccounts = computed(() => {
+    const accounts = currentGroupAccounts.value || []
+    return getGroupTodos(currentGroup.value).some(todo => todo.status !== 'done')
+      ? [DEPARTMENT_TODO_ACCOUNT, ...accounts]
+      : accounts
+  })
   const visibleTodoGroups = computed(() => canViewAllGroups.value ? GROUPS : [currentGroup.value].filter(Boolean))
 
   function todoDraftFor(group) {
@@ -213,7 +260,7 @@ export function useScheduleBoard(showToast, options = {}) {
   }
 
   function groupLeaderName(group) {
-    return group?.leader || group?.members?.[0] || '未设置'
+    return group?.leader || '未设置'
   }
 
   function pad2(value) {
@@ -282,7 +329,11 @@ export function useScheduleBoard(showToast, options = {}) {
 
   function combineTodoDueAt(dateValue, timeValue) {
     if (!dateValue) return ''
-    return `${dateValue}T${timeValue || '10:00'}`
+    return `${dateValue}T${timeValue || DEFAULT_TODO_DUE_TIME}`
+  }
+
+  function toTodoDateTimeValue(date) {
+    return `${toDateValue(date)}T${pad2(date.getHours())}:${pad2(date.getMinutes())}`
   }
 
   function parseTodoDueDate(todo) {
@@ -290,6 +341,37 @@ export function useScheduleBoard(showToast, options = {}) {
     if (!value) return null
     const date = new Date(value)
     return Number.isNaN(date.getTime()) ? null : date
+  }
+
+  function startOfCurrentWeek(date = new Date()) {
+    const result = new Date(date)
+    const day = result.getDay()
+    const diff = day === 0 ? -6 : 1 - day
+    result.setHours(0, 0, 0, 0)
+    result.setDate(result.getDate() + diff)
+    return result
+  }
+
+  function unixSecondsToDate(value) {
+    const number = Number(value)
+    if (!Number.isFinite(number) || number <= 0) return null
+    const date = new Date(number * 1000)
+    return Number.isNaN(date.getTime()) ? null : date
+  }
+
+  function shouldShowTodoOnBoard(todo) {
+    const weekStart = startOfCurrentWeek()
+    const dueDate = parseTodoDueDate(todo)
+    if (dueDate && dueDate < weekStart) return false
+
+    if (todo?.status === 'done') {
+      const doneDate = unixSecondsToDate(todo.updated_at)
+        || unixSecondsToDate(todo.created_at)
+        || dueDate
+      if (doneDate && doneDate < weekStart) return false
+    }
+
+    return true
   }
 
   function todoAlarmLevel(todo) {
@@ -321,6 +403,61 @@ export function useScheduleBoard(showToast, options = {}) {
     return `${date.getMonth() + 1}/${date.getDate()} ${weeks[date.getDay()]} ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
   }
 
+  function formatTodoDuration(ms) {
+    const minutes = Math.max(1, Math.ceil(Math.abs(ms) / 60000))
+    if (minutes < 60) return `${minutes}分钟`
+    const hours = Math.ceil(minutes / 60)
+    if (hours < 24) return `${hours}小时`
+    const days = Math.ceil(hours / 24)
+    return `${days}天`
+  }
+
+  function todoCountdownLabel(todo) {
+    if (todo?.status === 'done') return '已完成'
+    const date = parseTodoDueDate(todo)
+    if (!date) return '未设 DDL'
+    const now = new Date()
+    const diff = date.getTime() - now.getTime()
+    if (diff < 0) return `超时 ${formatTodoDuration(diff)}`
+    if (toDateValue(date) === toDateValue(now)) return `今天 ${pad2(date.getHours())}:${pad2(date.getMinutes())}`
+    return `剩 ${formatTodoDuration(diff)}`
+  }
+
+  function todoQuestRank(todo) {
+    const level = todoAlarmLevel(todo)
+    if (level === 'done') return 'OK'
+    if (level === 'overdue') return 'S'
+    if (level === 'today' || level === 'soon') return 'A'
+    if (level === 'important') return 'B'
+    return parseTodoDueDate(todo) ? 'C' : 'N'
+  }
+
+  function todoDeadlinePressure(todo) {
+    if (todo?.status === 'done') return 0
+    const level = todoAlarmLevel(todo)
+    if (level === 'overdue') return 100
+    const dueDate = parseTodoDueDate(todo)
+    if (!dueDate) return Number(todo?.important) ? 42 : 18
+    const diff = dueDate.getTime() - Date.now()
+    const day = 24 * 60 * 60 * 1000
+    if (diff <= 6 * 60 * 60 * 1000) return 88
+    if (level === 'today') return 78
+    if (level === 'soon') return 62
+    if (diff <= 3 * day) return 46
+    if (Number(todo?.important)) return 38
+    return 18
+  }
+
+  function todoDeadlinePressureLabel(todo) {
+    const level = todoAlarmLevel(todo)
+    if (todo?.status === 'done') return '已拆弹'
+    if (level === 'overdue') return '已越过斩杀线'
+    if (level === 'today') return '斩杀线贴脸'
+    if (level === 'soon') return '斩杀线逼近'
+    if (Number(todo?.important)) return '重点盯防'
+    return parseTodoDueDate(todo) ? '斩杀线稳定' : '未设斩杀线'
+  }
+
   function compareTodos(a, b) {
     if ((a.status === 'done') !== (b.status === 'done')) return a.status === 'done' ? 1 : -1
     if (Number(a.important) !== Number(b.important)) return Number(b.important) - Number(a.important)
@@ -331,23 +468,160 @@ export function useScheduleBoard(showToast, options = {}) {
   }
 
   function getGroupTodos(group) {
-    const label = String(group?.label || '')
+    const keys = groupKeys(group)
     return scheduleTodos.value
-      .filter(todo => String(todo.group_name || '') === label)
+      .filter(todo => keys.includes(normalizeGroupKey(todo.group_name)))
+      .filter(shouldShowTodoOnBoard)
       .slice()
       .sort(compareTodos)
+  }
+
+  function todoScheduleDate(todo) {
+    const dueDate = parseTodoDueDate(todo)
+    return formatDate(dueDate || today)
+  }
+
+  function todoSchedulePerson(todo, group = currentGroup.value) {
+    const assignee = String(todo?.assignee || '').trim()
+    if (assignee) return assignee
+    const leader = String(group?.leader || '').trim()
+    if (leader) return leader
+    return currentGroupMembers.value[0] || MEMBERS[0] || ''
+  }
+
+  function todoScheduleStatus(todo) {
+    if (todo?.status === 'done') return 'done'
+    return todoAlarmLevel(todo) === 'overdue' ? 'delayed' : 'pending'
+  }
+
+  function todoScheduleTone(todo) {
+    const level = todoAlarmLevel(todo)
+    if (level === 'done') return 'done'
+    if (level === 'overdue') return 'delayed'
+    return 'pending'
+  }
+
+  function buildTodoScheduleItem(todo, group = currentGroup.value) {
+    const status = todoScheduleStatus(todo)
+    const person = todoSchedulePerson(todo, group)
+    const title = String(todo?.title || '').trim() || '部门待办'
+    const detail = String(todo?.detail || '').trim()
+    return {
+      id: `todo-${todo?.id || title}`,
+      _todo_mapped: true,
+      todo,
+      account: DEPARTMENT_TODO_ACCOUNT,
+      person,
+      view_person: person,
+      group_name: group?.label || todo?.group_name || '',
+      content: title,
+      remark: detail,
+      type: DEPARTMENT_TODO_ACCOUNT,
+      status,
+      date: todoScheduleDate(todo),
+      date_label: todoCountdownLabel(todo),
+      latest_activity_text: detail,
+      workflow_stage: DEPARTMENT_TODO_ACCOUNT,
+      workflow_stage_label: todoReminderLabel(todo) || DEPARTMENT_TODO_ACCOUNT,
+      workflow_stage_tone: todoScheduleTone(todo),
+      workflow_stage_short_label: todo?.status === 'done' ? 'OK' : '办',
+      workflow_stage_step_label: DEPARTMENT_TODO_ACCOUNT,
+      workflow_stage_action_label: todo?.status === 'done' ? '标记未完成' : '标记完成',
+      workflow_stage_progress_angle: todoDeadlinePressure(todo) * 3.6,
+      _week_key: `todo-week-${todo?.id || title}`
+    }
+  }
+
+  function currentGroupTodoScheduleItems() {
+    return getGroupTodos(currentGroup.value)
+      .filter(todo => todo.status !== 'done')
+      .map(todo => buildTodoScheduleItem(todo, currentGroup.value))
+  }
+
+  function personScheduleItems(person) {
+    const normalItems = (itemsByPerson[person] || []).filter(item => item.status !== 'done')
+    const todoItems = currentGroupTodoScheduleItems().filter(item => item.person === person)
+    return [...todoItems, ...normalItems].sort(compareTaskOrder)
   }
 
   function getGroupOpenTodoCount(group) {
     return getGroupTodos(group).filter(todo => todo.status !== 'done').length
   }
 
+  function summarizeTodoList(todos) {
+    const list = Array.isArray(todos) ? todos : []
+    const total = list.length
+    const done = list.filter(todo => todo.status === 'done').length
+    const open = total - done
+    const overdue = list.filter(todo => todoAlarmLevel(todo) === 'overdue').length
+    const todayCount = list.filter(todo => todoAlarmLevel(todo) === 'today').length
+    const soon = list.filter(todo => todoAlarmLevel(todo) === 'soon').length
+    const important = list.filter(todo => Number(todo?.important) && todo.status !== 'done').length
+    return {
+      total,
+      open,
+      done,
+      overdue,
+      today: todayCount,
+      soon,
+      important,
+      progress: total ? Math.round((done / total) * 100) : 0
+    }
+  }
+
+  function getGroupTodoStats(group) {
+    return summarizeTodoList(getGroupTodos(group))
+  }
+
+  const departmentTodoStats = computed(() => {
+    return summarizeTodoList(visibleTodoGroups.value.flatMap(group => getGroupTodos(group)))
+  })
+
+  function getGroupNextDeadline(group) {
+    const next = getGroupTodos(group).find(todo => todo.status !== 'done' && parseTodoDueDate(todo))
+    return next ? todoCountdownLabel(next) : '暂无 DDL'
+  }
+
+  function getGroupQuestLevel(group) {
+    const stats = getGroupTodoStats(group)
+    if (stats.overdue) return 'S'
+    if (stats.today || stats.soon) return 'A'
+    if (stats.important) return 'B'
+    return stats.open ? 'C' : 'OK'
+  }
+
+  function todoGroupTone(group) {
+    const stats = getGroupTodoStats(group)
+    if (stats.overdue) return 'danger'
+    if (stats.today || stats.soon) return 'urgent'
+    if (stats.important) return 'focus'
+    if (!stats.open && stats.total) return 'clear'
+    return ''
+  }
+
   async function loadScheduleTodosData() {
     try {
       const data = await loadScheduleTodos()
-      scheduleTodos.value = Array.isArray(data.todos) ? data.todos : []
+      scheduleTodos.value = Array.isArray(data.todos)
+        ? data.todos.map(todo => ({
+          ...todo,
+          group_name: canonicalGroupLabel(todo.group_name)
+        }))
+        : []
     } catch (err) {
       showToast('待办加载失败: ' + err.message, 'error')
+    }
+  }
+
+  async function loadScheduleTodoHistoryData() {
+    scheduleTodoHistoryLoading.value = true
+    try {
+      const data = await loadScheduleTodoHistory(300)
+      scheduleTodoHistory.value = Array.isArray(data.todos) ? data.todos : []
+    } catch (err) {
+      showToast('待办历史加载失败: ' + err.message, 'error')
+    } finally {
+      scheduleTodoHistoryLoading.value = false
     }
   }
 
@@ -360,13 +634,15 @@ export function useScheduleBoard(showToast, options = {}) {
       return
     }
     const dueDate = draft.dueDate || parsed.date
-    const dueTime = draft.dueTime || parsed.time || (dueDate ? '10:00' : '')
+    const dueTime = draft.dueTime || parsed.time || (dueDate ? DEFAULT_TODO_DUE_TIME : '')
     try {
       await saveScheduleTodo({
         group_name: group?.label || '',
         title,
+        detail: String(draft.detail || '').trim(),
         due_at: combineTodoDueAt(dueDate, dueTime),
         important: draft.important || parsed.important ? 1 : 0,
+        progress: 0,
         status: 'open'
       })
       Object.assign(draft, createEmptyTodoDraft())
@@ -385,6 +661,59 @@ export function useScheduleBoard(showToast, options = {}) {
       await loadScheduleTodosData()
     } catch (err) {
       showToast('待办状态更新失败: ' + err.message, 'error')
+    }
+  }
+
+  async function assignTodoToPerson(todo, person) {
+    const assignee = String(person || '').trim()
+    if (!todo || !todo.id || !assignee) return
+    try {
+      await saveScheduleTodo({
+        id: todo.id,
+        group_name: canonicalGroupLabel(todo.group_name),
+        title: todo.title,
+        detail: todo.detail || '',
+        due_at: todo.due_at || '',
+        important: todo.important,
+        progress: todo.progress || 0,
+        status: todo.status || 'open',
+        assignee
+      })
+      todo.assignee = assignee
+      await loadScheduleTodosData()
+      showToast('待办已安排给 ' + assignee, 'success')
+    } catch (err) {
+      showToast('待办安排失败: ' + err.message, 'error')
+    }
+  }
+
+  async function pleadDelayTodo(todo) {
+    if (!todo || todo.status === 'done') return
+    const now = new Date()
+    const dueDate = parseTodoDueDate(todo)
+    const nextDue = dueDate && dueDate > now ? new Date(dueDate) : new Date(now)
+    if (!dueDate) {
+      nextDue.setHours(23, 0, 0, 0)
+    }
+    nextDue.setDate(nextDue.getDate() + 1)
+    try {
+      await saveScheduleTodo({
+        id: todo.id,
+        group_name: canonicalGroupLabel(todo.group_name),
+        title: todo.title,
+        detail: todo.detail || '',
+        due_at: toTodoDateTimeValue(nextDue),
+        important: todo.important,
+        progress: 0,
+        status: 'open',
+        assignee: todo.assignee || ''
+      })
+      todo.due_at = toTodoDateTimeValue(nextDue)
+      todo.status = 'open'
+      await loadScheduleTodosData()
+      showToast('老大同意了，DDL 顺延 1 天', 'success', { big: true, timeout: 2600 })
+    } catch (err) {
+      showToast('求延期失败: ' + err.message, 'error')
     }
   }
 
@@ -513,10 +842,89 @@ export function useScheduleBoard(showToast, options = {}) {
     )
   }
 
+  function normalizeActivityLog(rawLog) {
+    let rows = rawLog
+    if (typeof rows === 'string') {
+      const text = rows.trim()
+      if (!text) return []
+      try {
+        rows = JSON.parse(text)
+      } catch {
+        rows = []
+      }
+    }
+    if (!Array.isArray(rows)) return []
+    return rows
+      .map(row => ({
+        id: String(row?.id || '').trim() || `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        at: String(row?.at || '').trim(),
+        actor: String(row?.actor || '').trim(),
+        action: String(row?.action || 'stage_advance').trim(),
+        from: String(row?.from || '').trim(),
+        to: String(row?.to || '').trim(),
+        text: String(row?.text || '').trim()
+      }))
+      .filter(row => row.at || row.text || row.to)
+      .slice(-30)
+  }
+
+  function activityLogToJson(log) {
+    return JSON.stringify(normalizeActivityLog(log).slice(-30))
+  }
+
+  function currentUserName() {
+    const user = currentUser.value || {}
+    return String(user.real_name || user.display_name || user.username || '').trim() || '系统'
+  }
+
+  function formatActivityTime(value) {
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return ''
+    const pad = number => String(number).padStart(2, '0')
+    return `${date.getMonth() + 1}/${date.getDate()} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+  }
+
+  function activityText(row) {
+    if (!row) return ''
+    if (row.text) return row.text
+    if (row.action === 'stage_advance') {
+      const actor = row.actor || '有人'
+      return `${actor} 推进到${row.to || '下一步'}`
+    }
+    return row.to ? `推进到${row.to}` : ''
+  }
+
+  function latestActivityText(item) {
+    const log = normalizeActivityLog(item?.activity_json || item?.activity_log || [])
+    const latest = log[log.length - 1]
+    if (!latest) return ''
+    const time = formatActivityTime(latest.at)
+    return [time, activityText(latest)].filter(Boolean).join(' ')
+  }
+
+  function appendStageActivity(item, fromStage, toStage) {
+    if (!item || !toStage) return
+    const log = normalizeActivityLog(item.activity_json || item.activity_log || [])
+    const actor = currentUserName()
+    log.push({
+      id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+      at: new Date().toISOString(),
+      actor,
+      action: 'stage_advance',
+      from: fromStage || '',
+      to: toStage,
+      text: `${actor} 将${item.account || '账号'}${item.type || ''}推进到${toStage}`
+    })
+    item.activity_log = log.slice(-30)
+    item.activity_json = activityLogToJson(item.activity_log)
+  }
+
   function normalizeScheduleItem(item, fallbackGroup = currentGroup.value) {
     const workflowStage = normalizeWorkflowStage(item?.workflow_stage, item)
     const participants = normalizeParticipants(item?.participants_json || item?.participants || '', item?.person, workflowStage)
+    const activityLog = normalizeActivityLog(item?.activity_json || item?.activity_log || [])
     const primaryPerson = participants[0]?.person || String(item?.person || '').trim()
+    const stackCount = normalizeStackCount(item)
     const normalized = {
       ...item,
       group_name: inferItemGroupName(item, fallbackGroup),
@@ -527,6 +935,10 @@ export function useScheduleBoard(showToast, options = {}) {
       workflow_stage: workflowStage,
       participants,
       participants_json: participantsToJson(participants),
+      activity_log: activityLog,
+      activity_json: activityLogToJson(activityLog),
+      stack_count: stackCount,
+      stack_label: stackCount > 1 ? `x${stackCount}` : '',
       person: primaryPerson
     }
     return syncStatusFromWorkflowStage(normalized)
@@ -542,6 +954,8 @@ export function useScheduleBoard(showToast, options = {}) {
       participant_role_label: roles.join(' / '),
       participants_text: (task.participants || []).map(row => row.person).filter(Boolean).join(' / '),
       participant_count: Array.isArray(task.participants) ? task.participants.length : 0,
+      stack_label: task.stack_label || '',
+      latest_activity_text: latestActivityText(task),
       is_shared: Array.isArray(task.participants) && task.participants.length > 1,
       is_primary_person: person === task.person,
       workflow_stage_label: normalizeWorkflowStage(task.workflow_stage, task),
@@ -561,6 +975,18 @@ export function useScheduleBoard(showToast, options = {}) {
     if (value === '待发布') return 'pending'
     if (value === '已发布') return 'done'
     return 'delayed'
+  }
+
+  function isStackableTask(task) {
+    const type = String(task?.type || '')
+    return type.includes('星广') || type === '素材代做'
+  }
+
+  function normalizeStackCount(task) {
+    if (!isStackableTask(task)) return 1
+    const raw = Number(task?.stack_count || task?.stackCount || task?.itemCount || task?.quantity || 1)
+    if (!Number.isFinite(raw)) return 1
+    return Math.max(1, Math.min(99, Math.round(raw)))
   }
 
   function workflowStageIndex(stage) {
@@ -611,6 +1037,12 @@ export function useScheduleBoard(showToast, options = {}) {
     const index = PRODUCTION_WORKFLOW_STAGES.indexOf(value)
     if (index < 0 || index >= PRODUCTION_WORKFLOW_STAGES.length - 1) return value
     return PRODUCTION_WORKFLOW_STAGES[index + 1]
+  }
+
+  function isUntouchedDailyTopic(item) {
+    if (String(item?.type || '').trim() !== '日常') return false
+    const content = String(item?.content || '').replace(/\s+/g, '').trim()
+    return !content || content === '选题待定' || content === '待定'
   }
 
   function syncStatusFromWorkflowStage(item) {
@@ -665,26 +1097,40 @@ export function useScheduleBoard(showToast, options = {}) {
       .map(item => ({
         ...item,
         participants: normalizeParticipants(item.participants_json || item.participants || '', item.person, item.workflow_stage),
-        participants_json: participantsToJson(normalizeParticipants(item.participants_json || item.participants || '', item.person, item.workflow_stage))
+        participants_json: participantsToJson(normalizeParticipants(item.participants_json || item.participants || '', item.person, item.workflow_stage)),
+        activity_log: normalizeActivityLog(item.activity_json || item.activity_log || []),
+        activity_json: activityLogToJson(item.activity_json || item.activity_log || [])
       }))
   }
 
   function persistSchedule(refreshAfterSave = false) {
-    return saveSchedule(currentTasks(), MEMBERS, { revision: scheduleRevision.value })
+    const localSnapshot = currentTasks()
+    scheduleSaving = true
+    return saveSchedule(localSnapshot, MEMBERS, { revision: scheduleRevision.value })
       .then(result => {
         const nextRevision = Number(result?.revision || 0)
         scheduleRevision.value = nextRevision
-        if (!refreshAfterSave) return result
-        return loadScheduleData().then(() => result)
+        markLocalScheduleChanged()
+        return result
       })
       .catch(err => {
         if (err?.data?.code === 'schedule_conflict') {
           const nextRevision = Number(err.data.revision || 0)
           scheduleRevision.value = nextRevision
-          showToast('排期已被其他人更新，正在同步最新版本，请重新操作', 'info')
-          return loadScheduleData().then(() => null)
+          try {
+            localStorage.setItem('usagi_schedule_unsaved_backup', JSON.stringify({
+              at: Date.now(),
+              revision: nextRevision,
+              tasks: localSnapshot
+            }))
+          } catch (backupErr) {}
+          showToast('排期已被其他人更新，本地修改已保留，先同步后再保存', 'info')
+          return null
         }
         showToast('排期保存失败: ' + err.message, 'error')
+      })
+      .finally(() => {
+        scheduleSaving = false
       })
   }
 
@@ -781,6 +1227,26 @@ export function useScheduleBoard(showToast, options = {}) {
       }
     }
     return deduped
+  }
+
+  function transferTaskToPerson(source, toPerson) {
+    const master = source?.task || allItems.value.find(item => item.id === source?.id)
+    const targetPerson = String(toPerson || '').trim()
+    if (!master || !targetPerson) return
+    const fromPerson = source?.view_person || master.person
+    if (fromPerson === targetPerson) return
+    pushHistory()
+    const nextParticipants = reassignParticipant(master, fromPerson, targetPerson)
+    master.participants = nextParticipants
+    master.participants_json = participantsToJson(nextParticipants)
+    master.person = master.person === fromPerson || !nextParticipants.some(row => row.person === master.person)
+      ? (nextParticipants[0]?.person || targetPerson)
+      : master.person
+    master.group_name = inferItemGroupName(master)
+    rebuildItemsByPerson(allItems.value)
+    sendHandoffNotification(fromPerson, targetPerson, master)
+    persistSchedule(true)
+    showToast(`已转交给 ${targetPerson}`, 'success')
   }
 
   function moveDraggedTaskToPerson(person, targetTask = null, afterTarget = false) {
@@ -905,6 +1371,67 @@ export function useScheduleBoard(showToast, options = {}) {
     return merged.sort(compareTaskOrder)
   }
 
+  function normalizedMergeText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim()
+  }
+
+  function mergeNeedsUserConfirm(items) {
+    const list = (items || []).filter(Boolean)
+    const contents = new Set(list.map(item => normalizedMergeText(item.content)).filter(Boolean))
+    return contents.size > 1
+  }
+
+  function mergedRemarkForItems(primary, items) {
+    const existing = String(primary?.remark || '').trim()
+    const lines = (items || [])
+      .filter(item => item && item.id !== primary.id)
+      .map(item => {
+        const person = normalizedMergeText(item.person)
+        const content = normalizedMergeText(item.content)
+        if (!content || content === normalizedMergeText(primary.content)) return ''
+        return `${person || '合作人'}：${content}`
+      })
+      .filter(Boolean)
+    if (!lines.length) return existing
+    const sourceText = ['合并来源：', ...lines.map(line => `- ${line}`)].join('\n')
+    return existing ? `${existing}\n${sourceText}` : sourceText
+  }
+
+  function uniqueParticipantsForItems(items, fallbackStage = '文案') {
+    const rows = []
+    ;(items || []).forEach(item => {
+      normalizeParticipants(item.participants_json || item.participants || '', item.person, item.workflow_stage || fallbackStage)
+        .forEach(row => {
+          if (!row.person || rows.some(existing => existing.person === row.person)) return
+          rows.push(createParticipant(row.person, row.roles || item.workflow_stage || fallbackStage))
+        })
+    })
+    return rows
+  }
+
+  function materializeMergedItems(items, options = {}) {
+    const list = Array.from(new Map((items || []).filter(Boolean).map(item => [item.id, item])).values())
+    if (list.length < 2) return list[0] || null
+    const primary = options.primary || list[0]
+    if (!primary) return null
+    if (!options.skipConfirm && mergeNeedsUserConfirm(list)) {
+      const ok = window.confirm('这些任务内容不完全一致，仍然合并为同一个合作任务吗？\n\n合并后会以当前卡片内容为主，其他内容会写入备注。')
+      if (!ok) return null
+    }
+    const participants = uniqueParticipantsForItems(list, primary.workflow_stage)
+    primary.participants = participants.length ? participants : normalizeParticipants(primary.participants_json || primary.participants || '', primary.person, primary.workflow_stage)
+    primary.participants_json = participantsToJson(primary.participants)
+    primary.person = primary.participants[0]?.person || primary.person
+    primary.parallel_key = primary.parallel_key || `collab-${Date.now()}-${primary.id}`
+    primary.remark = mergedRemarkForItems(primary, list)
+    const statuses = list.map(item => getAutoStatus(item))
+    primary.status = statuses.includes('delayed')
+      ? 'delayed'
+      : (statuses.every(value => value === 'done') ? 'done' : 'pending')
+    allItems.value = allItems.value.filter(item => item.id === primary.id || !list.some(source => source.id === item.id))
+    return primary
+  }
+
   function isSameDay(dateStr, day) {
     if (!dateStr) return false
     const d = parseLocalDate(dateStr)
@@ -913,6 +1440,9 @@ export function useScheduleBoard(showToast, options = {}) {
   }
 
   function getItemsForCell(acc, day) {
+    if (acc === DEPARTMENT_TODO_ACCOUNT) {
+      return currentGroupTodoScheduleItems().filter(item => isSameDay(item.date, day))
+    }
     const groupName = currentGroup.value?.label || ''
     const items = allItems.value.filter(item =>
       item.account === acc
@@ -925,6 +1455,61 @@ export function useScheduleBoard(showToast, options = {}) {
   function weekCardTitle(item) {
     const people = item?._parallel_items?.map(task => task.person).filter(Boolean) || [item?.person].filter(Boolean)
     return [people.join(' / '), item?.account, item?.content].filter(Boolean).join(' | ')
+  }
+
+  function editWeekItem(item) {
+    if (item?._parallel_items?.length > 1) {
+      pushHistory()
+      const merged = materializeMergedItems(item._parallel_items, { primary: item._parallel_items[0], skipConfirm: true })
+      if (!merged) {
+        history.value.pop()
+        return
+      }
+      renumberSortOrders()
+      rebuildItemsByPerson(allItems.value)
+      persistSchedule(true)
+      editItem(merged)
+      showToast('已合并为合作任务，可在弹窗里调整合作人', 'success')
+      return
+    }
+    editItem(item)
+  }
+
+  function handleWeekCardDrop(event, targetItem) {
+    event.preventDefault()
+    event.stopPropagation()
+    if (!dragItem.value) return
+    const movingSource = dragItem.value.task || dragItem.value
+    const movingItems = dragItem.value.parallelItems?.length
+      ? dragItem.value.parallelItems
+      : [allItems.value.find(item => item.id === movingSource?.id) || movingSource]
+    const targetItems = targetItem?._parallel_items?.length
+      ? targetItem._parallel_items
+      : [allItems.value.find(item => item.id === (targetItem?.task || targetItem)?.id) || targetItem?.task || targetItem]
+    const target = targetItems[0]
+    const mergeItems = Array.from(new Map([...targetItems, ...movingItems].filter(Boolean).map(item => [item.id, item])).values())
+    if (!target || mergeItems.length < 2 || mergeItems.every(item => item.id === target.id)) {
+      dragItem.value = null
+      return
+    }
+    pushHistory()
+    movingItems.forEach(item => {
+      item.account = target.account
+      item.group_name = target.group_name || currentGroup.value?.label || inferItemGroupName(target)
+      item.date = target.date
+      if (item.status !== 'done') item.status = getAutoStatus(item)
+    })
+    const merged = materializeMergedItems(mergeItems, { primary: target })
+    if (!merged) {
+      history.value.pop()
+      dragItem.value = null
+      return
+    }
+    renumberSortOrders()
+    rebuildItemsByPerson(allItems.value)
+    persistSchedule(true)
+    showToast('已合并为合作任务', 'success')
+    dragItem.value = null
   }
 
   function statusLabel(item) {
@@ -1015,8 +1600,13 @@ export function useScheduleBoard(showToast, options = {}) {
     const currentStage = normalizeProductionWorkflowStage(master.workflow_stage, master)
     const nextStage = nextWorkflowStage(currentStage, master)
     if (nextStage === currentStage) return
+    if (currentStage === '文案' && nextStage === '后期' && isUntouchedDailyTopic(master)) {
+      showToast('我嘞个豆！你选题都没填，怎么推进后期勒！', 'error', { big: true })
+      return
+    }
     pushHistory()
     master.workflow_stage = nextStage
+    appendStageActivity(master, currentStage, nextStage)
     if (nextStage === '已发布') {
       master.status = 'done'
       const copy = buildCelebrationCopy(master)
@@ -1027,6 +1617,7 @@ export function useScheduleBoard(showToast, options = {}) {
       showToast(`已推进到${workflowStageToastLabel(currentStage, master)}`, 'success')
     }
     master.participants_json = participantsToJson(master.participants || [])
+    master.activity_json = activityLogToJson(master.activity_log || [])
     rebuildItemsByPerson(allItems.value)
     persistSchedule(true)
   }
@@ -1103,12 +1694,15 @@ export function useScheduleBoard(showToast, options = {}) {
       remark: task.remark || '',
       date: task.date || formatToday(),
       type: task.type || '日常',
+      stack_count: normalizeStackCount(task),
       status: task.status === 'done' ? 'pending' : (task.status || 'pending'),
       workflow_stage: stage,
       participants: normalizeParticipants(task.participants_json || task.participants || '', task.person, stage),
       doc_title: task.doc_title || '',
       doc_url: task.doc_url || '',
-      doc_kind: task.doc_kind || ''
+      doc_kind: task.doc_kind || '',
+      activity_log: normalizeActivityLog(task.activity_json || task.activity_log || []),
+      activity_json: activityLogToJson(task.activity_json || task.activity_log || [])
     }
     const collab = applyScheduleCollaborativePreset(template, GROUPS)
     if (!collab) return template
@@ -1141,10 +1735,13 @@ export function useScheduleBoard(showToast, options = {}) {
     form.remark = source.remark || ''
     form.date = source.date || ''
     form.type = source.type || '日常'
+    form.stack_count = normalizeStackCount(source)
     form.status = source.status || 'pending'
     form.workflow_stage = normalizeWorkflowStage(source.workflow_stage, source)
     form.participants = normalizeParticipants(source.participants_json || source.participants || '', source.person, form.workflow_stage)
+    form.cooperation = form.participants.length > 1
     form.parallel_person = ''
+    form.activity_log = normalizeActivityLog(source.activity_json || source.activity_log || [])
     form.doc_title = source.doc_title || ''
     form.doc_url = source.doc_url || ''
     form.doc_kind = source.doc_kind || ''
@@ -1193,6 +1790,7 @@ export function useScheduleBoard(showToast, options = {}) {
       remark: template.remark || '',
       date: target.date || template.date || formatToday(),
       type: template.type || '日常',
+      stack_count: normalizeStackCount(template),
       status: template.status === 'done' ? 'pending' : (template.status || 'pending'),
       workflow_stage: stage,
       participants,
@@ -1201,7 +1799,9 @@ export function useScheduleBoard(showToast, options = {}) {
       parallel_key: '',
       doc_title: template.doc_title || '',
       doc_url: template.doc_url || '',
-      doc_kind: template.doc_kind || ''
+      doc_kind: template.doc_kind || '',
+      activity_log: normalizeActivityLog(template.activity_json || template.activity_log || []),
+      activity_json: activityLogToJson(template.activity_json || template.activity_log || [])
     }
     syncStatusFromWorkflowStage(task)
     const collab = applyScheduleCollaborativePreset(task, GROUPS)
@@ -1252,10 +1852,13 @@ export function useScheduleBoard(showToast, options = {}) {
     form.remark = source.remark || ''
     form.date = source.date || formatToday()
     form.type = source.type || '日常'
+    form.stack_count = normalizeStackCount(source)
     form.status = source.status === 'done' ? 'pending' : (source.status || 'pending')
     form.workflow_stage = stage
     form.participants = participants
+    form.cooperation = participants.length > 1
     form.parallel_person = ''
+    form.activity_log = normalizeActivityLog(source.activity_json || source.activity_log || [])
     form.doc_title = source.doc_title || ''
     form.doc_url = source.doc_url || ''
     form.doc_kind = source.doc_kind || ''
@@ -1269,7 +1872,9 @@ export function useScheduleBoard(showToast, options = {}) {
   }
 
   function buildTaskFromForm(personOverride) {
-    const participantRows = normalizeFormParticipants(form.participants, personOverride || form.person, form.workflow_stage)
+    const participantRows = form.cooperation
+      ? normalizeFormParticipants(form.participants, personOverride || form.person, form.workflow_stage)
+      : [createParticipant(personOverride || form.person, form.workflow_stage)]
     const participants = participantRows.length
       ? participantRows
       : [createParticipant(personOverride || form.person, form.workflow_stage)]
@@ -1282,6 +1887,7 @@ export function useScheduleBoard(showToast, options = {}) {
       remark: form.remark,
       date: form.date,
       type: form.type,
+      stack_count: normalizeStackCount(form),
       status: form.status,
       workflow_stage: form.workflow_stage || '文案',
       participants,
@@ -1290,7 +1896,9 @@ export function useScheduleBoard(showToast, options = {}) {
       parallel_key: '',
       doc_title: form.doc_title,
       doc_url: form.doc_url,
-      doc_kind: form.doc_kind
+      doc_kind: form.doc_kind,
+      activity_log: normalizeActivityLog(form.activity_log || []),
+      activity_json: activityLogToJson(form.activity_log || [])
     }
     syncStatusFromWorkflowStage(task)
     const collab = applyScheduleCollaborativePreset(task, GROUPS)
@@ -1314,7 +1922,9 @@ export function useScheduleBoard(showToast, options = {}) {
       showToast('请选择日期', 'error')
       return
     }
-    const participants = normalizeFormParticipants(form.participants, form.person, form.workflow_stage)
+    const participants = form.cooperation
+      ? normalizeFormParticipants(form.participants, form.person, form.workflow_stage)
+      : (form.person ? [createParticipant(form.person, form.workflow_stage)] : [])
     if (!participants.length) {
       showToast('至少选择一个参与人', 'error')
       return
@@ -1494,6 +2104,51 @@ export function useScheduleBoard(showToast, options = {}) {
     dragItem.value = null
   }
 
+  function splitEditingItem() {
+    if (!editing.value || !form.id) return
+    const item = allItems.value.find(x => x.id === form.id)
+    if (!item) {
+      showToast('未找到要分离的任务', 'error')
+      return
+    }
+    const participants = normalizeParticipants(form.participants, form.person, form.workflow_stage)
+    if (participants.length < 2) {
+      showToast('只有一个合作人，不需要分离', 'info')
+      return
+    }
+    const ok = window.confirm(`确定把这个合作任务分离成 ${participants.length} 条单人任务吗？`)
+    if (!ok) return
+    pushHistory()
+    const base = buildTaskFromForm(participants[0]?.person || form.person)
+    const maxId = Math.max(0, ...allItems.value.map(row => Number(row.id) || 0))
+    Object.assign(item, base, {
+      id: item.id,
+      person: participants[0].person,
+      participants: [participants[0]],
+      participants_json: participantsToJson([participants[0]]),
+      parallel_key: ''
+    })
+    participants.slice(1).forEach((participant, index) => {
+      const clone = {
+        ...base,
+        id: maxId + index + 1,
+        person: participant.person,
+        participants: [participant],
+        participants_json: participantsToJson([participant]),
+        sort_order: Number(item.sort_order || 0) + index + 1,
+        parallel_key: ''
+      }
+      allItems.value.push(clone)
+    })
+    renumberSortOrders()
+    rebuildItemsByPerson(allItems.value)
+    formShow.value = false
+    editing.value = false
+    activeTask.value = null
+    persistSchedule(true)
+    showToast('已分离为单人任务', 'success')
+  }
+
   function moveDraggedItemToAdjacentWeek(direction, event) {
     event?.preventDefault?.()
     event?.stopPropagation?.()
@@ -1597,13 +2252,12 @@ export function useScheduleBoard(showToast, options = {}) {
   function buildTaskOrderForLoad(tasks) {
     const normalized = (tasks || []).map(item => normalizeScheduleItem(item))
     normalized.sort(compareTaskOrder)
-    normalized.forEach((item, index) => {
-      item.sort_order = (index + 1) * 10
-    })
     return normalized
   }
 
   async function loadScheduleData(options = {}) {
+    if (scheduleLoading) return
+    scheduleLoading = true
     try {
       const data = await loadSchedule()
       const nextRevision = Number(data.revision || 0)
@@ -1613,19 +2267,28 @@ export function useScheduleBoard(showToast, options = {}) {
       if (options.synced) showToast('排期已同步最新变更', 'info')
     } catch (err) {
       showToast('排期加载失败: ' + err.message, 'error')
+    } finally {
+      scheduleLoading = false
     }
   }
 
   async function syncScheduleIfChanged() {
     if (formShow.value || dragItem.value) return
+    if (scheduleSaving) return
+    if (scheduleLoading || scheduleSyncing) return
+    if (Date.now() - lastLocalScheduleChangeAt < SCHEDULE_IDLE_SYNC_DELAY_MS) return
     if (typeof document !== 'undefined' && document.hidden) return
+    scheduleSyncing = true
     try {
       const data = await loadScheduleRevision()
       const nextRevision = Number(data.revision || 0)
       if (nextRevision !== scheduleRevision.value) {
         await loadScheduleData({ synced: true })
       }
-    } catch (err) {}
+    } catch (err) {
+    } finally {
+      scheduleSyncing = false
+    }
   }
 
   onMounted(() => {
@@ -1660,6 +2323,7 @@ export function useScheduleBoard(showToast, options = {}) {
     activeTask,
     addGroupTodo,
     allItems,
+    assignTodoToPerson,
     boardRef,
     canDeleteTasks,
     canViewAllGroups,
@@ -1670,13 +2334,16 @@ export function useScheduleBoard(showToast, options = {}) {
     currentGroup,
     currentGroupAccounts,
     currentGroupMembers,
+    currentGroupWeekAccounts,
     currentTasks,
     currentUser,
     deleteEditingItem,
     delItem,
+    departmentTodoStats,
     doPan,
     dragItem,
     editItem,
+    editWeekItem,
     editing,
     endPan,
     form,
@@ -1685,8 +2352,11 @@ export function useScheduleBoard(showToast, options = {}) {
     formatPersonTaskDate,
     fmtMd,
     getAutoStatus,
+    getGroupNextDeadline,
     getGroupOpenTodoCount,
+    getGroupQuestLevel,
     getGroupTodos,
+    getGroupTodoStats,
     getItemsForCell,
     groupLeaderName,
     handleAgentAction,
@@ -1698,6 +2368,7 @@ export function useScheduleBoard(showToast, options = {}) {
     handleScheduleDocFile,
     handleScheduleDocPaste,
     handleTaskDrop,
+    handleWeekCardDrop,
     handleWeekDrop,
     hasScheduleDoc,
     inferItemGroupName,
@@ -1706,6 +2377,7 @@ export function useScheduleBoard(showToast, options = {}) {
     isToday,
     itemsByPerson,
     loadScheduleData,
+    loadScheduleTodoHistoryData,
     loadScheduleTodosData,
     moveDraggedItemToAdjacentWeek,
     moveItemByWeeks,
@@ -1713,6 +2385,8 @@ export function useScheduleBoard(showToast, options = {}) {
     openScheduleDoc,
     persistSchedule,
     pasteCopiedTask,
+    personScheduleItems,
+    pleadDelayTodo,
     promoteParticipant,
     rebuildItemsByPerson,
     saveItem,
@@ -1720,13 +2394,22 @@ export function useScheduleBoard(showToast, options = {}) {
     setPasteTarget,
     setScheduleDocLink,
     setWeekPasteTarget,
+    splitEditingItem,
+    scheduleTodoHistory,
+    scheduleTodoHistoryLoading,
     scheduleTodos,
     statusLabel,
     startPan,
     todoAlarmLevel,
+    todoCountdownLabel,
+    todoDeadlinePressure,
+    todoDeadlinePressureLabel,
     todoDraftFor,
     todoDueLabel,
+    todoGroupTone,
+    todoQuestRank,
     todoReminderLabel,
+    transferTaskToPerson,
     summarizePersonWeekTodos,
     toggleDone,
     toggleTodoDone,

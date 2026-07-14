@@ -20,6 +20,17 @@ export function getProfitStats(grp, options = {}) {
   })
 }
 
+export function listProfitTargets() {
+  return request('/api/profits/targets')
+}
+
+export function saveProfitTarget(payload) {
+  return request('/api/profits/targets/save', {
+    method: 'POST',
+    body: payload
+  })
+}
+
 export function parseProfitText(text) {
   return request('/api/profits/parse', {
     method: 'POST',
@@ -49,23 +60,14 @@ export function syncProfitRecords(records, options = {}) {
   })
 }
 
-export function syncProfitsToFeishu(options = {}) {
-  return request('/api/profits/sync-feishu', {
-    method: 'POST',
-    body: {
-      limit: options.limit || 0,
-      force: options.force !== false
-    }
-  })
-}
-
-export function pullProfitsFromFeishu(options = {}) {
-  return request('/api/profits/pull-feishu', {
+export function pullProfitsFromWecom(options = {}) {
+  return request('/api/profits/pull-wecom', {
     method: 'POST',
     body: {
       year: options.year || 0,
       month: options.month || 0,
-      mode: options.mode || 'merge'
+      mode: options.mode || 'merge',
+      sourceMode: options.sourceMode || options.priceMode || options.wecomMode || 'all'
     }
   })
 }
@@ -88,8 +90,4 @@ export function deleteProfit(id) {
   return request('/api/profits/' + encodeURIComponent(id), {
     method: 'DELETE'
   })
-}
-
-export function importFeishuProfits() {
-  return request('/api/feishu/profit')
 }

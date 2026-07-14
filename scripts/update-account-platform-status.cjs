@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { publishAccountCatalog } = require('../server/lib/accountCatalog.cjs');
+const { publishAccountCatalog, dashboardProfileMeta } = require('../server/lib/accountCatalog.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const args = parseArgs(process.argv.slice(2));
@@ -9,6 +9,8 @@ const outputFile = path.resolve(ROOT, args.output || path.join('data', 'account-
 const sessionPrefix = String(args.sessionPrefix || '').trim();
 const platforms = splitArg(args.platforms || 'douyin,kuaishou,bilibili');
 const platformSet = new Set(platforms);
+const preserveOnGlobalFailure = args.preserveOnGlobalFailure !== 'false';
+const profileMeta = dashboardProfileMeta();
 
 function parseArgs(argv) {
   const parsed = {};
@@ -57,11 +59,45 @@ function configuredPlatformsByProfile() {
       const alias = String(platform.profile_alias || platform.profile || '').trim();
       const platformId = String(platform.id || '').trim();
       if (!alias || !platformId || !platformSet.has(platformId)) continue;
+      if (platform.collect_status === 'not_applicable' || platform.status === 'not_applicable') continue;
       if (!map.has(alias)) map.set(alias, new Set());
       map.get(alias).add(platformId);
     }
   }
   return map;
+}
+
+function actualProfileKey(summary) {
+  return String(summary && (summary.resolvedProfile || (summary.profileState && summary.profileState.resolvedProfile) || summary.profile) || '').trim();
+}
+
+function platformFromSummaryName(name) {
+  const match = String(name || '').match(/-(douyin|kuaishou|bilibili)-\d{14}\.json$/i);
+  return match ? match[1].toLowerCase() : '';
+}
+
+function summaryPlatformIds(summary, fileName, configuredForProfile) {
+  const ids = new Set();
+  for (const item of Array.isArray(summary && summary.platforms) ? summary.platforms : []) {
+    const id = String(item && (item.platform || item.id || item.platformId) || '').trim();
+    if (id) ids.add(id);
+  }
+  for (const dataset of Array.isArray(summary && summary.datasets) ? summary.datasets : []) {
+    const id = String(dataset && dataset.platform || '').trim();
+    if (id) ids.add(id);
+  }
+  const fromName = platformFromSummaryName(fileName);
+  if (fromName) ids.add(fromName);
+  return Array.from(ids).filter(id => platformSet.has(id) && configuredForProfile.has(id));
+}
+
+function sameLogicalProfile(left, right) {
+  const a = String(left || '').trim();
+  const b = String(right || '').trim();
+  if (!a || !b || a === b) return true;
+  const leftMeta = profileMeta[a];
+  const rightMeta = profileMeta[b];
+  return Boolean(leftMeta && rightMeta && leftMeta.accountId && leftMeta.accountId === rightMeta.accountId);
 }
 
 function classifyError(error) {
@@ -82,6 +118,26 @@ function setPlatform(profiles, profile, platform, patch) {
   if (!profile || !platform || !platformSet.has(platform)) return;
   if (!profiles[profile]) profiles[profile] = { platforms: {} };
   const previous = profiles[profile].platforms[platform] || {};
+  if (
+    previous.status === 'ready'
+    && patch.status === 'verify'
+    && /collected 0 rows/i.test(String(patch.reason || ''))
+  ) {
+    profiles[profile].platforms[platform] = Object.assign({}, previous, {
+      zeroRowDatasets: Array.from(new Set([].concat(previous.zeroRowDatasets || [], patch.dataset || []).filter(Boolean))),
+      lastCheckedAt: patch.lastCheckedAt || previous.lastCheckedAt || new Date().toISOString()
+    });
+    return;
+  }
+  if (
+    previous.sourceSummary
+    && patch.sourceSummary
+    && previous.sourceSummary === patch.sourceSummary
+    && previous.status === 'needs_login'
+    && patch.status !== 'ready'
+  ) {
+    return;
+  }
   profiles[profile].platforms[platform] = Object.assign({}, previous, patch, {
     lastCheckedAt: patch.lastCheckedAt || previous.lastCheckedAt || new Date().toISOString()
   });
@@ -95,14 +151,19 @@ function buildStatus() {
     const summary = safeReadJson(item.full);
     if (!summary) continue;
     const profile = String(summary.requestedProfile || summary.profile || '').trim();
+    if (!configured.has(profile)) continue;
+    const actualProfile = actualProfileKey(summary);
+    const hasDatasets = Array.isArray(summary.datasets) && summary.datasets.length > 0;
+    if (!hasDatasets && !sameLogicalProfile(profile, actualProfile)) continue;
     const checkedAt = summary.finishedAt || summary.startedAt || new Date(item.mtimeMs).toISOString();
-    const configuredForProfile = configured.get(profile) || new Set(platforms);
+    const configuredForProfile = configured.get(profile);
     const profileError = summary.profileState && summary.profileState.ok === false
       ? summary.profileState.error
       : (summary.skipped ? summary.skipReason || 'profile skipped' : '');
-    if (profile && (summary.skipped || profileError) && !(summary.datasets || []).length) {
+    if (profile && (summary.skipped || profileError) && !hasDatasets) {
       const classified = classifyError(profileError || 'profile not connected');
-      for (const platform of configuredForProfile) {
+      const targetPlatforms = summaryPlatformIds(summary, item.name, configuredForProfile);
+      for (const platform of (targetPlatforms.length ? targetPlatforms : Array.from(configuredForProfile))) {
         setPlatform(profiles, profile, platform, {
           status: classified.status === 'needs_login' ? 'profile_not_connected' : classified.status,
           reason: classified.reason,
@@ -114,10 +175,12 @@ function buildStatus() {
     for (const dataset of summary.datasets || []) {
       const platform = String(dataset.platform || '').trim();
       if (!platformSet.has(platform)) continue;
+      if (!configuredForProfile.has(platform)) continue;
       if (dataset.ok !== false && !dataset.skipped) {
         setPlatform(profiles, profile, platform, {
           status: Number(dataset.rows) === 0 ? 'verify' : 'ready',
           reason: Number(dataset.rows) === 0 ? 'collected 0 rows, needs verify' : '',
+          dataset: dataset.dataset,
           rows: dataset.rows,
           sourceSummary: item.full,
           lastCheckedAt: checkedAt
@@ -148,10 +211,50 @@ function buildStatus() {
 }
 
 const status = buildStatus();
+const counts = countStatuses(status);
+if (preserveOnGlobalFailure && looksLikeGlobalFailure(status, counts)) {
+  const diagnosticFile = outputFile.replace(/\.json$/i, '') + `.failed-${Date.now()}.json`;
+  safeWriteJson(diagnosticFile, status);
+  console.log(JSON.stringify({
+    ok: true,
+    preserved: true,
+    reason: 'global collection failure; kept existing platform status',
+    diagnosticFile,
+    sourceSummaryCount: status.sourceSummaryCount,
+    counts
+  }, null, 2));
+  process.exit(0);
+}
 safeWriteJson(outputFile, status);
 console.log(JSON.stringify({
   ok: true,
   outputFile,
   sourceSummaryCount: status.sourceSummaryCount,
-  profileCount: Object.keys(status.profiles).length
+  profileCount: Object.keys(status.profiles).length,
+  counts
 }, null, 2));
+
+function countStatuses(status) {
+  const counts = {};
+  for (const row of Object.values(status.profiles || {})) {
+    for (const platform of Object.values(row.platforms || {})) {
+      const key = platform.status || 'unknown';
+      counts[key] = (counts[key] || 0) + 1;
+    }
+  }
+  return counts;
+}
+
+function looksLikeGlobalFailure(status, counts) {
+  const total = Object.values(counts || {}).reduce((sum, value) => sum + value, 0);
+  if (total < 10) return false;
+  if ((counts.ready || 0) > 0) return false;
+  const reasons = [];
+  for (const row of Object.values(status.profiles || {})) {
+    for (const platform of Object.values(row.platforms || {})) {
+      reasons.push(String(platform.reason || ''));
+    }
+  }
+  const systemic = reasons.filter(reason => /chrome-error:\/\/chromewebdata|ERR_|Failed to fetch|Fatal process out of memory/i.test(reason)).length;
+  return systemic / Math.max(1, reasons.length) >= 0.5;
+}

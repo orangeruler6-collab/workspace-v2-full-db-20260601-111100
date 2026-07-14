@@ -10,6 +10,37 @@
 
 ---
 
+## 2026-07-14
+
+### 新增
+- 侧栏导航统一使用 Lucide 线性图标，并补齐按钮语义、键盘焦点和展开状态。
+- 模块切换写入 `?module=`，支持刷新恢复、深链接和浏览器前进/后退。
+
+### 修改
+- Vue 迁移工作台改为消费宿主主题语义变量，紫夜、银白、乌萨奇三套主题不再各自套用固定亮色内页。
+- 缩小右下角乌萨奇助手关闭态，并为主内容预留固定安全区。
+- 收紧抖音热榜无内容时的空态高度。
+
+### 修复
+- 修复 1024px 宽度下数据维护结果区被固定工作区高度压缩、无法正常访问的问题。
+- 修复侧栏滚轮被劫持为模块切换、无法正常滚动的问题。
+- 修复账号库把中文账号名当作 UID 采集、最终显示“的抖音”并覆盖同名目录的问题；采集现在先解析真实账号，再从作品数据回填名称和头像。
+- 修复迁移工作台重复铺灰色底板和字体混用问题，统一继承乌萨奇工作台字体并恢复正常正文字重。
+
+## 2026-06-22
+
+### 新增
+- 文案工作台迁移为 Vue 原生模块，新增账号库、项目工作台、写作台、评论资产、数据维护、抖音热榜和文案工具原生入口。
+- 主 API 新增文案工作台路由组，覆盖 `/api/library`、`/api/accounts`、`/api/projects`、`/api/write`、`/api/gross-margin`、`/api/douyin-hotlist` 等接口。
+- 新增 `check:library` 脚本，用于检查 `STYLE_LIBRARY_DIR` 数据一致性。
+
+### 修改
+- 文案工作台后端能力并入 `server/routes` 与 `server/style-workbench/lib`，复用大工作台登录、权限、健康检查和 Vite 开发服务。
+- `.env.example` 合并文案工作台所需的 `STYLE_LIBRARY_DIR`、OpenCLI、FFmpeg、火山 ASR、模型、飞书和毛利刷新配置。
+
+### 删除
+- 删除旧 `apps/account-style-library` Next 子应用、`StyleWorkbenchFrame.vue`、`/style-workbench` proxy、Next dev 脚本和 iframe/postMessage 专用样式。
+
 ## 2026-05-25
 
 ### 新增

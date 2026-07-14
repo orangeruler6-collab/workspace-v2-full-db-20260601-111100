@@ -114,7 +114,7 @@
             </button>
           </div>
 
-          <section class="copy-source-card">
+          <section v-if="publishForm.commerceEnabled" class="copy-source-card">
             <div class="copy-source-head">
               <strong>批量发布文案</strong>
               <span>当前视频按上传顺序发布，手动文案也按 #1、#2 依次匹配。</span>
@@ -456,9 +456,9 @@ const props = defineProps({
 const chiselCommerceDefaults = {
   id: 'chisel',
   name: '逆水寒凿子',
-  tags: '#逆水寒手游 #欧气 #逆水寒全民制作人 #逆水寒童话版本 #逆水寒凿子',
+  tags: '#逆水寒新版本 #欧气 #逆水寒新世界 #逆的新世界搭子 #逆水寒凿子',
   productText: '欧气凿子来辣',
-  productUrl: 'https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html?id=3822421447960297861&origin_type=pc_buyin_selection_decision',
+  productUrl: 'https://haohuo.jinritemai.com/ecommerce/trade/detail/index.html?id=3827620323235332187&origin_type=pc_buyin_selection_decision',
   descriptionPool: [
     '10块试试欧气',
     '凿子开抽实测',
@@ -1037,7 +1037,7 @@ function manualCopyTitle(block) {
 }
 
 function applyManualCopiesToVideos(items, startIndex = 0) {
-  if (publishForm.copyMode !== 'manual') return items
+  if (!publishForm.commerceEnabled || publishForm.copyMode !== 'manual') return items
   const blocks = manualCopyBlocks.value
   const nextItems = items.map((item, index) => {
     const block = blocks[startIndex + index]
@@ -1057,7 +1057,7 @@ function applyManualCopiesToVideos(items, startIndex = 0) {
 }
 
 function validateManualCopyForm() {
-  if (publishForm.copyMode !== 'manual') return true
+  if (!publishForm.commerceEnabled || publishForm.copyMode !== 'manual') return true
   const count = manualCopyBlocks.value.length
   const required = publishForm.queueEnabled ? effectiveQueueBatchSize.value : videoItems.value.length
   if (!count) {
@@ -1186,6 +1186,7 @@ function ensureCommerceAccount() {
 
 function handleCommerceToggle() {
   if (!publishForm.commerceEnabled) {
+    publishForm.copyMode = 'auto'
     ensureSelectedAccountVisible()
     return
   }
@@ -1197,9 +1198,12 @@ function handleCommerceToggle() {
 }
 
 function commerceOptionsForJob() {
+  if (!publishForm.commerceEnabled) {
+    return { enabled: false }
+  }
   return {
-    enabled: Boolean(publishForm.commerceEnabled),
-    mode: publishForm.commerceEnabled ? `nishuihan-${activeCommercePreset.value.id}` : '',
+    enabled: true,
+    mode: `nishuihan-${activeCommercePreset.value.id}`,
     preset: activeCommercePreset.value.id,
     productUrl: publishForm.commerceProductUrl,
     productText: publishForm.commerceProductText,
@@ -1624,7 +1628,7 @@ function removeQueuedVideosByIds(ids) {
 }
 
 function consumeManualCopyBlocks(count) {
-  if (publishForm.copyMode !== 'manual' || !count) return
+  if (!publishForm.commerceEnabled || publishForm.copyMode !== 'manual' || !count) return
   const rest = manualCopyBlocks.value.slice(count)
   publishForm.manualCopyText = rest.join('\n\n')
 }
@@ -1681,7 +1685,12 @@ async function prepareVideosForJobs(items = videoItems.value, options = {}) {
       prepared.push(ready)
       videoItems.value = videoItems.value.map(row => queueId(row) === queueId(item) ? ready : row)
     } catch (err) {
-      const message = err?.message || '上传失败'
+      const rawMessage = err?.message || '上传失败'
+      const message = /missing uploaded file|uploaded temp file missing/i.test(rawMessage)
+        ? '上传临时文件没有完整写入，请重新上传这条视频'
+        : /file too large|upload interrupted/i.test(rawMessage)
+          ? '文件过大或上传被中断，请重新拖入视频'
+          : rawMessage
       pushPublishEvent(`素材准备失败，已跳过：${materialTitle(item)}｜${message}`, 'error')
       if (!options.continueOnError) throw err
     }
@@ -2124,7 +2133,7 @@ async function publishNow() {
   setPublishActivity(queueMode ? '准备入队' : '准备发布', '正在整理视频、账号和平台信息', 10, 'active')
   pushPublishEvent(`${queueMode ? '开始入队' : '开始发布'}：${selectedPlatforms.value.map(item => item.name).join(' / ')}`)
   try {
-    if (publishForm.copyMode !== 'manual' && !publishForm.title && !publishForm.description && !publishForm.tags) {
+    if ((!publishForm.commerceEnabled || publishForm.copyMode !== 'manual') && !publishForm.title && !publishForm.description && !publishForm.tags) {
       await recommendPublishCopy()
     }
     if (!queueMode) {
@@ -2156,6 +2165,7 @@ async function publishNow() {
           },
           project_delivery: projectTaskContext.value || null
         })
+        notifyTitleAdjustments(data)
         const jobs = Array.isArray(data.jobs) ? data.jobs : []
         const ids = jobs.map(job => job.id).filter(Boolean)
         if (!ids.length) throw new Error('没有生成可执行的发布记录')
@@ -2222,6 +2232,7 @@ async function publishNow() {
       },
       project_delivery: projectTaskContext.value || null
     })
+    notifyTitleAdjustments(data)
     const jobs = Array.isArray(data.jobs) ? data.jobs : []
     const ids = jobs.map(job => job.id).filter(Boolean)
     if (!ids.length) throw new Error('没有生成可执行的发布记录')
@@ -2329,6 +2340,17 @@ async function publishNow() {
     }
     publishingText.value = '发布中'
   }
+}
+
+function notifyTitleAdjustments(data) {
+  const adjustments = Array.isArray(data?.title_adjustments) ? data.title_adjustments : []
+  if (!adjustments.length) return
+  const first = adjustments[0]
+  const detail = first?.original && first?.title
+    ? `：${first.original} → ${first.title}`
+    : ''
+  showToast(`已避开 ${adjustments.length} 条重复标题${detail}`, 'warning')
+  pushPublishEvent(`逆水寒标题查重：已自动替换 ${adjustments.length} 条高重复标题${detail}`, 'warning')
 }
 
 onMounted(() => {

@@ -1,13 +1,15 @@
 <template>
-  <div class="usagi-chat" :class="petMoodClass">
+  <div ref="chatRootRef" class="usagi-chat" :class="[petMoodClass, { dragging: dragState.dragging }]" :style="chatPositionStyle">
     <button
       v-if="!open"
       type="button"
       class="pet-button"
       aria-label="打开乌萨奇 AI 助手"
-      title="乌萨奇 AI 助手"
+      title="按住拖动我换位置"
       @mouseenter="wakePet"
       @focus="wakePet"
+      @pointerdown="startDrag"
+      @keydown="nudgeChat"
       @click="openChat">
       <span class="pet-glow"></span>
       <img class="pet-image" :src="petImage" alt="乌萨奇 AI 助手" />
@@ -16,10 +18,11 @@
       <span class="pet-dream-dot pet-dream-one"></span>
       <span class="pet-dream-dot pet-dream-two"></span>
       <span class="pet-chip">AI</span>
+      <span class="pet-drag-hint">拖我</span>
     </button>
 
     <section v-else class="chat-panel" aria-label="乌萨奇 AI 助手">
-      <header class="chat-head">
+      <header class="chat-head" @pointerdown="startDrag">
         <div class="mini-pet" aria-hidden="true">
           <img :src="petImage" alt="" />
         </div>
@@ -78,6 +81,29 @@ const input = ref('')
 const loading = ref(false)
 const petMood = ref('idle')
 const msgsRef = ref(null)
+const chatRootRef = ref(null)
+const chatPositions = ref({ pet: null, panel: null })
+const chatPosition = computed({
+  get: () => chatPositions.value[open.value ? 'panel' : 'pet'],
+  set: value => {
+    const mode = open.value ? 'panel' : 'pet'
+    chatPositions.value = { ...chatPositions.value, [mode]: value }
+  }
+})
+const dragState = ref({
+  dragging: false,
+  pointerId: null,
+  startX: 0,
+  startY: 0,
+  startLeft: 0,
+  startTop: 0,
+  moved: false
+})
+const CHAT_POSITION_KEY = 'usagi_chat_positions_v3'
+const LEGACY_CHAT_POSITION_KEYS = ['usagi_chat_position_v2', 'usagi_chat_position_v1']
+const CHAT_MARGIN = 8
+let suppressNextClick = false
+let suppressClickTimer = null
 let sleepTimer = null
 let napTimer = null
 let feedbackTimer = null
@@ -109,6 +135,7 @@ const moduleAliases = {
   imagegen: 'AI 生图',
   posttools: '后期工具',
   videopublish: '视频发布',
+  commentReply: '评论回复',
   material: '素材库',
   smartcollect: '智能采集',
   vector: '向量库',
@@ -119,6 +146,7 @@ const moduleAliases = {
 const moduleHints = [
   { id: 'accountmonitor', words: ['账号热榜', '账号监控', '账号榜', '爆款账号'] },
   { id: 'dailyhot', words: ['热点', '热榜', '每日热点', '选题'] },
+  { id: 'commentReply', words: ['评论回复', '自动回复', '评论维护', '互动管理', '未回复评论'] },
   { id: 'tools', words: ['工具', '转写', '抖音', 'b站', '评论'] },
   { id: 'copygen', words: ['文案工具', '发布文案', '封面标题', '简介'] },
   { id: 'workflow', words: ['工作流', '流程', '拆解', '分析', '转写', '炸创意', '生成文案'] },
@@ -143,6 +171,7 @@ const moduleHints = [
 const moduleAgentRoutes = [
   { id: 'accountmonitor', label: '账号热榜', words: ['账号热榜', '账号监控', '爆款账号'], next: '看账号表现、爆款标签和重点关注账号；点中账号后可以继续送进文案工作流拆解。' },
   { id: 'dailyhot', label: '每日热点', words: ['热点', '热榜', '每日热点', '今日热点', '今天热点', '选题池'], next: '浏览热点列表；点中具体热点后我可以继续拆切入点、框架和选题角度。' },
+  { id: 'commentReply', label: '评论回复', words: ['评论回复', '自动回复', '评论维护', '互动管理', '未回复评论'], next: '查看抖音账号登录状态，先抓取未回复评论，再批量处理规则判定为安全的回复。' },
   { id: 'tools', label: '文案工具', words: ['文案工具', '转写工具', '评论工具', '抖音转写', 'b站转写'], next: '处理单条转写、评论和基础文案工具；复杂多步骤写作建议进文案工作流。' },
   { id: 'copygen', label: '文案工具', words: ['发布文案', '封面标题', '视频简介', '发布推荐'], next: '生成发布文案、封面标题和视频简介。' },
   { id: 'workflow', label: '文案工作流', words: ['文案工作流', '工作流', '拆解', '炸创意', '生成文案', '信息采集'], next: '按信息采集、汇总、分析、确认创意、生成文案推进。' },
@@ -171,6 +200,13 @@ const activeModuleLabel = computed(() => {
 
 const modelLabel = computed(() => '模型 ' + DEFAULT_MODEL)
 const petMoodClass = computed(() => 'pet-' + petMood.value)
+const chatPositionStyle = computed(() => {
+  if (!chatPosition.value) return null
+  return {
+    left: `${Math.round(chatPosition.value.left)}px`,
+    top: `${Math.round(chatPosition.value.top)}px`
+  }
+})
 const petImage = computed(() => {
   const moodImages = {
     idle: usagiIdleImage,
@@ -240,14 +276,22 @@ function wakePet() {
 }
 
 function openChat() {
+  if (suppressNextClick) {
+    suppressNextClick = false
+    return
+  }
+  saveChatPosition()
   wakePet()
   open.value = true
+  nextTick(() => ensureChatPosition())
 }
 
 function closeChat() {
+  saveChatPosition()
   open.value = false
   petMood.value = 'idle'
   schedulePetSleep()
+  nextTick(() => ensureChatPosition())
 }
 
 function pulsePet(mood = 'awake', duration = 2200) {
@@ -280,13 +324,217 @@ function useQuickAction(text) {
 
 onMounted(() => {
   schedulePetSleep()
+  restoreChatPosition()
+  clearLegacyChatPositions()
+  nextTick(() => ensureChatPosition())
   window.addEventListener('usagi:feedback', handleFeedback)
+  window.addEventListener('resize', clampCurrentPosition)
 })
 
 onUnmounted(() => {
   clearPetTimers()
+  if (suppressClickTimer) window.clearTimeout(suppressClickTimer)
   window.removeEventListener('usagi:feedback', handleFeedback)
+  window.removeEventListener('resize', clampCurrentPosition)
+  detachDragListeners()
 })
+
+function getViewportSize() {
+  return {
+    width: window.innerWidth || document.documentElement.clientWidth || 0,
+    height: window.innerHeight || document.documentElement.clientHeight || 0
+  }
+}
+
+function getSafeBounds(width, height) {
+  const viewport = getViewportSize()
+  const maxLeft = Math.max(CHAT_MARGIN, viewport.width - width - CHAT_MARGIN)
+  const maxTop = Math.max(CHAT_MARGIN, viewport.height - height - CHAT_MARGIN)
+  return {
+    minLeft: CHAT_MARGIN,
+    minTop: CHAT_MARGIN,
+    maxLeft,
+    maxTop
+  }
+}
+
+function clampPosition(left, top, width, height) {
+  const bounds = getSafeBounds(width, height)
+  return {
+    left: Math.min(Math.max(bounds.minLeft, left), bounds.maxLeft),
+    top: Math.min(Math.max(bounds.minTop, top), bounds.maxTop)
+  }
+}
+
+function getChatRect() {
+  return chatRootRef.value?.getBoundingClientRect()
+}
+
+function defaultChatPosition(rect) {
+  const viewport = getViewportSize()
+  const petPosition = chatPositions.value.pet
+  if (open.value && petPosition) {
+    return clampPosition(
+      petPosition.left + 72 - rect.width,
+      petPosition.top + 82 - rect.height,
+      rect.width,
+      rect.height
+    )
+  }
+  return clampPosition(
+    viewport.width - rect.width - 18,
+    viewport.height - rect.height - 18,
+    rect.width,
+    rect.height
+  )
+}
+
+function restoreChatPosition() {
+  try {
+    const currentRaw = window.localStorage.getItem(CHAT_POSITION_KEY)
+    const legacyRaw = LEGACY_CHAT_POSITION_KEYS
+      .map(key => window.localStorage.getItem(key))
+      .find(Boolean)
+    const saved = JSON.parse(currentRaw || legacyRaw || 'null')
+    if (Number.isFinite(saved?.pet?.left) && Number.isFinite(saved?.pet?.top)) {
+      chatPositions.value.pet = { left: saved.pet.left, top: saved.pet.top }
+    }
+    if (Number.isFinite(saved?.panel?.left) && Number.isFinite(saved?.panel?.top)) {
+      chatPositions.value.panel = { left: saved.panel.left, top: saved.panel.top }
+    }
+    if (Number.isFinite(saved?.left) && Number.isFinite(saved?.top)) {
+      chatPositions.value.pet = { left: saved.left, top: saved.top }
+    }
+  } catch {
+    chatPositions.value = { pet: null, panel: null }
+  }
+}
+
+function clearLegacyChatPositions() {
+  try {
+    LEGACY_CHAT_POSITION_KEYS.forEach(key => window.localStorage.removeItem(key))
+  } catch {
+    // localStorage may be unavailable in privacy modes.
+  }
+}
+
+function saveChatPosition() {
+  try {
+    window.localStorage.setItem(CHAT_POSITION_KEY, JSON.stringify(chatPositions.value))
+  } catch {
+    // localStorage may be unavailable in privacy modes.
+  }
+}
+
+function ensureChatPosition() {
+  const rect = getChatRect()
+  if (!rect) return
+  if (chatPosition.value) {
+    chatPosition.value = clampPosition(chatPosition.value.left, chatPosition.value.top, rect.width, rect.height)
+  } else {
+    chatPosition.value = defaultChatPosition(rect)
+  }
+  saveChatPosition()
+}
+
+function clampCurrentPosition() {
+  const rect = getChatRect()
+  if (!rect) return
+  if (!chatPosition.value) {
+    ensureChatPosition()
+    return
+  }
+  chatPosition.value = clampPosition(chatPosition.value.left, chatPosition.value.top, rect.width, rect.height)
+  saveChatPosition()
+}
+
+function startDrag(event) {
+  if (event.button !== undefined && event.button !== 0) return
+  const target = event.target
+  if (open.value && target?.closest?.('button, input, textarea, select, a')) return
+
+  const rect = getChatRect()
+  if (!rect) return
+  detachDragListeners()
+  ensureChatPosition()
+  dragState.value = {
+    dragging: true,
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    startLeft: rect.left,
+    startTop: rect.top,
+    moved: false
+  }
+  document.addEventListener('pointermove', handleDragMove, { passive: false })
+  document.addEventListener('pointerup', stopDrag)
+  document.addEventListener('pointercancel', stopDrag)
+  window.addEventListener('blur', stopDrag)
+}
+
+function handleDragMove(event) {
+  if (!dragState.value.dragging || event.pointerId !== dragState.value.pointerId) return
+  const rect = getChatRect()
+  if (!rect) return
+  const dx = event.clientX - dragState.value.startX
+  const dy = event.clientY - dragState.value.startY
+  if (Math.hypot(dx, dy) > 4) dragState.value.moved = true
+  chatPosition.value = clampPosition(dragState.value.startLeft + dx, dragState.value.startTop + dy, rect.width, rect.height)
+  event.preventDefault()
+}
+
+function stopDrag(event) {
+  if (event?.pointerId !== undefined && event.pointerId !== dragState.value.pointerId) return
+  if (dragState.value.moved) {
+    suppressNextClick = true
+    if (suppressClickTimer) window.clearTimeout(suppressClickTimer)
+    suppressClickTimer = window.setTimeout(() => {
+      suppressNextClick = false
+      suppressClickTimer = null
+    }, 180)
+  }
+  dragState.value = {
+    dragging: false,
+    pointerId: null,
+    startX: 0,
+    startY: 0,
+    startLeft: 0,
+    startTop: 0,
+    moved: false
+  }
+  detachDragListeners()
+  saveChatPosition()
+}
+
+function nudgeChat(event) {
+  const moves = {
+    ArrowLeft: [-1, 0],
+    ArrowRight: [1, 0],
+    ArrowUp: [0, -1],
+    ArrowDown: [0, 1]
+  }
+  const move = moves[event.key]
+  if (!move) return
+  event.preventDefault()
+  const rect = getChatRect()
+  if (!rect) return
+  ensureChatPosition()
+  const step = event.shiftKey ? 32 : 12
+  chatPosition.value = clampPosition(
+    chatPosition.value.left + move[0] * step,
+    chatPosition.value.top + move[1] * step,
+    rect.width,
+    rect.height
+  )
+  saveChatPosition()
+}
+
+function detachDragListeners() {
+  document.removeEventListener('pointermove', handleDragMove)
+  document.removeEventListener('pointerup', stopDrag)
+  document.removeEventListener('pointercancel', stopDrag)
+  window.removeEventListener('blur', stopDrag)
+}
 
 function scrollBottom() {
   nextTick(() => {
@@ -333,12 +581,13 @@ function wantsUnfinishedOnly(text) {
 }
 
 const agentGroups = [
-  { id: 1, label: '内容一组', words: ['一组', '内容一组'] },
+  { id: 1, label: '内容一部', words: ['一部', '内容一部', '一组', '内容一组'] },
   { id: 2, label: '内容二组', words: ['二组', '内容二组'] },
   { id: 3, label: '内容三组', words: ['三组', '内容三组'] },
   { id: 4, label: '内容四组', words: ['四组', '内容四组'] },
   { id: 5, label: '内容五组', words: ['五组', '内容五组'] },
-  { id: 6, label: '内容六组', words: ['六组', '内容六组'] }
+  { id: 6, label: '内容六组', words: ['六组', '内容六组'] },
+  { id: 7, label: 'MCN经纪组', words: ['MCN经纪组', 'MCN经纪组', '经济组', '经纪组'] }
 ]
 
 function detectContentGroup(text) {
@@ -651,21 +900,63 @@ async function send() {
 <style scoped>
 .usagi-chat {
   position: fixed;
-  right: 24px;
-  bottom: 24px;
+  right: 14px;
+  bottom: 14px;
   z-index: 10050;
   font-family: inherit;
 }
 
+.usagi-chat[style] {
+  right: auto;
+  bottom: auto;
+}
+
+.usagi-chat.dragging {
+  user-select: none;
+}
+
 .pet-button {
   position: relative;
-  width: 92px;
-  height: 104px;
+  width: 72px;
+  height: 82px;
   border: 0;
   background: transparent;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   filter: drop-shadow(0 16px 26px rgba(61, 43, 96, 0.28));
   animation: pet-bob 3.4s ease-in-out infinite;
+}
+
+.pet-drag-hint {
+  position: absolute;
+  left: 50%;
+  bottom: -7px;
+  z-index: 2;
+  padding: 2px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-bg-hover);
+  color: var(--text-dim);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.35;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 4px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  white-space: nowrap;
+}
+
+.pet-button:hover .pet-drag-hint,
+.pet-button:focus-visible .pet-drag-hint,
+.usagi-chat.dragging .pet-drag-hint {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
+.usagi-chat.dragging .pet-button,
+.usagi-chat.dragging .chat-head {
+  cursor: grabbing;
 }
 
 .pet-glow {
@@ -836,6 +1127,8 @@ async function send() {
   background:
     radial-gradient(circle at 18% 0%, var(--accent-soft), transparent 44%),
     linear-gradient(135deg, var(--surface), var(--surface2));
+  cursor: grab;
+  touch-action: none;
   user-select: none;
 }
 
@@ -1093,9 +1386,14 @@ async function send() {
     bottom: calc(72px + env(safe-area-inset-bottom));
   }
 
+  .usagi-chat[style] {
+    right: auto;
+    bottom: auto;
+  }
+
   .pet-button {
-    width: 54px;
-    height: 62px;
+    width: 58px;
+    height: 66px;
     filter: drop-shadow(0 10px 16px rgba(61, 43, 96, 0.2));
   }
 

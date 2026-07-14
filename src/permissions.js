@@ -1,4 +1,4 @@
-﻿export const MODULE_DEFINITIONS = [
+export const MODULE_DEFINITIONS = [
   { id: 'accountmonitor', label: '账号热榜', icon: '↗' },
   { id: 'trafficPlan', label: '投流计划', icon: '◆' },
   { id: 'dailyhot', label: '每日热点', icon: '🔥' },
@@ -22,7 +22,8 @@
       { id: 'styleWriter', label: '对话写作', icon: '💬' },
       { id: 'styleAssets', label: '评论生成', icon: '💬' },
       { id: 'tools', label: '文案工具', icon: '🧰' },
-      { id: 'styleGrossMargin', label: '数据维护', icon: '🧮' }
+      { id: 'styleGrossMargin', label: '数据维护', icon: '🧮' },
+      { id: 'styleDouyinHotlist', label: '抖音热榜', icon: '榜' }
     ]
   },
   { id: 'projectAgent', label: '项目助手', icon: '◈' },
@@ -31,9 +32,9 @@
   { id: 'imagegen', label: 'AI 生图', icon: '🎨' },
   { id: 'posttools', label: '后期工具', icon: '🎬' },
   { id: 'videopublish', label: '视频发布', icon: '📡' },
+  { id: 'commentReply', label: '评论回复', icon: '💬' },
   { id: 'material', label: '素材库', icon: '🗃️' },
   { id: 'smartcollect', label: '智能采片', icon: '🎞️' },
-  { id: 'feedback', label: '意见收集', icon: '✦' },
   { id: 'vector', label: '向量库', icon: '🧠' },
   { id: 'adminUsers', label: '成员管理', icon: '👥', adminOnly: true },
   { id: 'operationLogs', label: '操作日志', icon: '📜', adminOnly: true },
@@ -49,13 +50,6 @@ if (copyWorkbenchChildren && !copyWorkbenchChildren.some(item => item.id === 'wo
     icon: '流'
   })
 }
-if (copyWorkbenchChildren) {
-  const assetsIndex = copyWorkbenchChildren.findIndex(item => item.id === 'styleAssets')
-  if (assetsIndex >= 0) copyWorkbenchChildren.splice(assetsIndex, 1)
-  const grossMarginIndex = copyWorkbenchChildren.findIndex(item => item.id === 'styleGrossMargin')
-  if (grossMarginIndex >= 0) copyWorkbenchChildren.splice(grossMarginIndex, 1)
-}
-
 export const HIDDEN_MODULE_DEFINITIONS = [
   { id: 'trafficApply', label: '投流申请', icon: '◆', hidden: true },
   { id: 'copygen', label: '文案生成器', icon: '✍️', hidden: true },
@@ -77,7 +71,7 @@ export const ALL_MODULE_DEFINITIONS = LEAF_MODULE_DEFINITIONS.concat(
   HIDDEN_MODULE_DEFINITIONS.filter(item => item.id !== 'workflow')
 )
 export const MEMBER_MODULES = LEAF_MODULE_DEFINITIONS.filter(item => !item.adminOnly)
-export const RESTRICTED_MEMBER_MODULES = ['ops', 'adminUsers', 'operationLogs', 'systemHealth']
+export const RESTRICTED_MEMBER_MODULES = ['ops', 'commentReply', 'adminUsers', 'operationLogs', 'systemHealth']
 
 export function isAdminLike(user) {
   if (!user) return false
@@ -109,5 +103,3 @@ export function canAccessModule(user, moduleId) {
   if (user.role === 'member') return true
   return Array.isArray(user.permissions) && user.permissions.includes(moduleId)
 }
-
-

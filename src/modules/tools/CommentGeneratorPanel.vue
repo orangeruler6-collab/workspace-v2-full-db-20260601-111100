@@ -4,7 +4,7 @@
       <span class="tool-icon">评</span>
       <div class="card-title-group">
         <span class="card-title">{{ title }}</span>
-        <span class="card-caption">{{ caption }}</span>
+        <span v-if="caption" class="card-caption">{{ caption }}</span>
       </div>
       <button
         v-if="hasContext"
@@ -132,7 +132,7 @@ const props = defineProps({
   },
   caption: {
     type: String,
-    default: '可直接粘贴文案，也可填视频链接自动转写'
+    default: ''
   },
   context: {
     type: Object,

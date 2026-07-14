@@ -74,6 +74,10 @@
                 <span>当周计划补充</span>
                 <textarea v-model="weeklyForm.nextPlansText" class="inp" rows="3" placeholder="可空，不填就从排期看板取后续任务。"></textarea>
               </label>
+              <label class="weekly-field">
+                <span>AI工作台开发</span>
+                <textarea v-model="weeklyForm.workbenchText" class="inp" rows="3" placeholder="一行一条，会写入新版周会材料的 AI工作台开发 区块。"></textarea>
+              </label>
             </details>
             <div v-if="weeklyJob?.status === 'failed'" class="weekly-inline-error">
               {{ weeklyJob.error || weeklyJob.message || '周报生成失败' }}
@@ -128,7 +132,7 @@
                   <small v-if="item.error">{{ item.error }}</small>
                 </div>
               </div>
-              <pre v-if="weeklyJob.report?.text" class="weekly-preview">{{ weeklyJob.report.text }}</pre>
+              <pre v-if="weeklyJob.report?.text" class="weekly-preview">{{ displayAgentContent(weeklyJob.report.text) }}</pre>
             </div>
           </div>
         </section>
@@ -159,7 +163,7 @@
                 <span></span><span></span><span></span>
                 <em>{{ runningLabel }}</em>
               </div>
-              <div v-else class="agent-markdown">{{ message.content }}</div>
+              <div v-else class="agent-markdown">{{ displayAgentContent(message.content) }}</div>
               <div v-if="!message.pending && message.images?.length" class="agent-image-list">
                 <figure
                   v-for="image in message.images"
@@ -258,6 +262,10 @@
             <strong>任务状态</strong>
             <span>{{ currentTaskLabel }}</span>
           </div>
+          <label class="agent-site-context-toggle" title="开启时会读取流水、排期、账号数据、素材库、站内知识库等内部信息；关闭时只使用本次输入、附件和外部链接。">
+            <input v-model="useSiteContext" type="checkbox" />
+            <span>使用站内信息</span>
+          </label>
           <div v-if="!toolSteps.length" class="agent-empty">还没有调用工具</div>
           <div v-else class="tool-list">
             <div v-for="tool in toolSteps" :key="tool.id + tool.label" class="tool-row" :class="tool.status">
@@ -371,6 +379,7 @@ const lastDraft = ref(null)
 const lastReply = ref('')
 const feishuUrl = ref('')
 const currentTask = ref('')
+const useSiteContext = ref(true)
 const renamingDraft = ref(false)
 const sessionTitle = ref('')
 const chatBodyRef = ref(null)
@@ -393,22 +402,24 @@ const streamController = ref(null)
 const deletingDraftIds = ref(new Set())
 const preparingSend = ref(false)
 const previewImageUrl = ref('')
-const weeklyGroups = ['内容一组', '内容二组', '内容三组', '内容四组', '内容五组', '内容六组']
+const weeklyGroups = ['内容一部', '内容二组', '内容三组', '内容四组', '内容五组', '内容六组', 'MCN经纪组']
 const weeklyGroupMembers = {
-  '内容一组': ['许树杰', '许梦婷', '刘登魁', '许国锬', '叶进生', '高明镇', '薛荐轩', '叶颖'],
+  '内容一部': ['薛荐轩', '廖李星', '高明镇', '林孝添', '叶子健', '许国锬', '许树杰', '林语婷', '许梦婷'],
   '内容二组': ['傅思敏', '赵良杰', '陈乐恒', '吴恒', '李扬林', '施律彬', '罗晓棋'],
   '内容三组': ['曹媛', '陈泓睿', '陈鸿睿', '林文涛', '刘佳琳', '肖子璇'],
   '内容四组': ['姚希', '陈健伊', '宋丽佳', '林宇辰'],
   '内容五组': ['朱信宇', '林心语', '商光涵', '杨鸿霆', '吴楷煌'],
-  '内容六组': ['廖李星', '吴皓轩', '林孝添', '林语婷', '张碧珊', '叶子健']
+  '内容六组': ['张莹珊', '刘思嫚', '吴皓轩', '邓姝', '叶进生', '叶颖', '刘登魁'],
+  'MCN经纪组': ['张家豪', '钟文祯', '龙星羽', '吴羿玄']
 }
 const weeklyGroupIds = {
-  '内容一组': 1,
+  '内容一部': 1,
   '内容二组': 2,
   '内容三组': 3,
   '内容四组': 4,
   '内容五组': 5,
-  '内容六组': 6
+  '内容六组': 6,
+  'MCN经纪组': 7
 }
 const weeklyGroupTargets = {
   4: 100200
@@ -423,7 +434,8 @@ const weeklyForm = ref({
   strategyText: '',
   strategyStatusText: '',
   summaryText: '',
-  nextPlansText: ''
+  nextPlansText: '',
+  workbenchText: ''
 })
 function currentAuthSignature() {
   const user = getCurrentAuthUser() || {}
@@ -483,6 +495,34 @@ const weeklyRangeText = computed(() => {
 function wantsFeishuOutput(text) {
   const source = String(text || '').toLowerCase()
   return /(飞书|feishu|lark)/i.test(source) && /(写入|同步|保存|导出|发我|发给我|给我|链接|文档|doc|docx)/i.test(source)
+}
+
+function looksLikeDailyReportText(text) {
+  const source = String(text || '').replace(/\s+/g, ' ').trim()
+  if (!source) return false
+  const head = source.slice(0, 500)
+  return /(?:\u65e5\u62a5|\u5f53\u65e5\u4ea7\u51fa|\u6b21\u65e5\u5de5\u4f5c\u8ba1\u5212)/.test(head)
+    && /(?:\u5f53\u65e5\u4ea7\u51fa|\u8d26\u53f7\u6570\u636e|\u9879\u76ee\u6267\u884c|\u8425\u6536\u60c5\u51b5|\u6b21\u65e5\u5de5\u4f5c\u8ba1\u5212|AI\u5c0f\u7ed3)/.test(source)
+}
+
+function formatDailyReportText(text) {
+  let source = String(text || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/^\s*```(?:markdown|text)?\s*/i, '')
+    .replace(/```\s*$/i, '')
+    .trim()
+  if (!source || !looksLikeDailyReportText(source)) return source
+  return source
+    .replace(/^\s*-\s*$/gm, '')
+    .replace(/^\s*-\s+(?=(?:\u65e5\u5e38|\u5546\u5355|\u7d20\u6750\u4ee3\u505a|\u4ee3\u505a)-)/gm, '')
+    .replace(/-\s*\n(?:\s*\n)*\s*(\u65e5\u5e38|\u5546\u5355|\u7d20\u6750\u4ee3\u505a)-/g, '- $1-')
+    .replace(/([^\s\n-]+-[^\s\n-]+)-\s*(\u65e5\u5e38|\u5546\u5355|\u7d20\u6750\u4ee3\u505a)-/g, '$1- $2-')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+}
+
+function displayAgentContent(text) {
+  return formatDailyReportText(text)
 }
 
 function draftSessionMeta(draft, visibleCount) {
@@ -942,18 +982,33 @@ function resolveWeeklyGroup() {
 }
 
 function weeklyProfitTarget(groupName, range) {
+  return weeklyProfitTargets(groupName, range).marginTarget
+}
+
+function weeklyProfitTargets(groupName, range) {
   const groupId = weeklyGroupIds[groupName] || 0
   const month = Number(String(range?.start || '').slice(5, 7)) || ''
   const year = Number(String(range?.start || '').slice(0, 4)) || new Date().getFullYear()
   try {
     const raw = localStorage.getItem('usagi_profit_targets')
     const targets = raw ? JSON.parse(raw) : {}
+    const normalize = value => {
+      if (value && typeof value === 'object') {
+        return {
+          marginTarget: Number(value.marginTarget ?? value.target ?? 0) || 0,
+          revenueTarget: Number(value.revenueTarget ?? 0) || 0
+        }
+      }
+      return { marginTarget: Number(value) || 0, revenueTarget: 0 }
+    }
     const exact = targets[`${groupId}:${year}:${month || 'all'}`]
-    if (exact !== undefined && exact !== null && exact !== '') return Number(exact) || 0
+    if (exact !== undefined && exact !== null && exact !== '') return normalize(exact)
     const allMonth = targets[`${groupId}:${year}:all`]
-    if (allMonth !== undefined && allMonth !== null && allMonth !== '') return Number(allMonth) || 0
+    if (allMonth !== undefined && allMonth !== null && allMonth !== '') return normalize(allMonth)
+    const departmentExact = targets[`department:${year}:${month || 'all'}`]
+    if (departmentExact !== undefined && departmentExact !== null && departmentExact !== '') return normalize(departmentExact)
   } catch (e) {}
-  return Number(weeklyGroupTargets[groupId] || 0)
+  return { marginTarget: Number(weeklyGroupTargets[groupId] || 0), revenueTarget: 0 }
 }
 
 function defaultWeeklyStrategyText(groupName, range) {
@@ -1043,17 +1098,20 @@ async function startWeekly() {
     account_results: []
   }
   try {
+    const profitTargets = weeklyProfitTargets(weeklyForm.value.group || resolveWeeklyGroup(), range)
     const data = await startWeeklyReport({
       group: weeklyForm.value.group || resolveWeeklyGroup(),
       range,
-      targetMargin: weeklyProfitTarget(weeklyForm.value.group || resolveWeeklyGroup(), range),
+      targetMargin: profitTargets.marginTarget,
+      targetRevenue: profitTargets.revenueTarget,
       accountsText: weeklyForm.value.accountsText,
       performanceText: weeklyForm.value.performanceText,
       landingText: weeklyForm.value.landingText,
       strategyText: weeklyForm.value.strategyText,
       strategyStatusText: weeklyForm.value.strategyStatusText,
       summaryText: weeklyForm.value.summaryText,
-      nextPlansText: weeklyForm.value.nextPlansText
+      nextPlansText: weeklyForm.value.nextPlansText,
+      workbenchText: weeklyForm.value.workbenchText
     })
     weeklyJob.value = data.job || data
     if (!weeklyJob.value?.id) throw new Error('后端没有返回周报任务编号')
@@ -1375,7 +1433,7 @@ async function openWeeklyRecord(record) {
 }
 
 function sendWeeklyToChat() {
-  const text = weeklyJob.value?.report?.text
+  const text = formatDailyReportText(weeklyJob.value?.report?.text)
   if (!text) return
   messages.value.push({
     id: Date.now() + '-weekly',
@@ -1467,6 +1525,7 @@ async function sendMessage() {
       message: text,
       task_type: currentTask.value,
       agent_mode: 'auto',
+      use_site_context: useSiteContext.value,
       draft_id: draftId,
       history: messages.value
         .filter(item => item.id !== assistantMessage.id)
@@ -1512,7 +1571,7 @@ async function sendMessage() {
 
     if (finalData) {
       const isWeeklyReportResult = finalData.task_type === 'weekly_report' || Boolean(finalData.report?.word_url)
-      const finalText = finalData.reply || finalData.output || assistantMessage.content || ''
+      const finalText = formatDailyReportText(finalData.reply || finalData.output || assistantMessage.content || '')
       const finalImages = extractAgentImages(finalData, finalText)
       const finalFiles = extractAgentFiles(finalData)
       const isImageResult = Boolean(finalImages.length || finalData.image_url || finalData.imageUrl || finalData.result_url || finalData.image?.url)
@@ -1710,7 +1769,7 @@ async function deleteDraft(draft) {
 
 async function copyLastReply() {
   if (!lastReply.value) return
-  await navigator.clipboard?.writeText(lastReply.value).catch(() => {})
+  await navigator.clipboard?.writeText(formatDailyReportText(lastReply.value)).catch(() => {})
 }
 
 function formatTime(ts) {
@@ -2596,6 +2655,33 @@ onBeforeUnmount(() => {
   color: var(--text);
   padding: 12px;
   line-height: 1.6;
+}
+
+.agent-site-context-toggle {
+  width: 100%;
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: -2px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--chip-border);
+  border-radius: 12px;
+  background: var(--row-bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+
+.agent-site-context-toggle input {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin: 0;
+  accent-color: var(--primary);
 }
 
 .agent-composer-actions {

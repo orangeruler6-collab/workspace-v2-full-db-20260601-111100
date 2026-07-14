@@ -18,6 +18,8 @@ APP_TOKEN = 'WKOmbG4ubaqYqUsH5ErcvwqSnMh'
 TABLE_ID = 'tblOZXJZyQ9LCx6k'
 PROFIT_SPREADSHEET_TOKEN = 'Eha8sWY5GhDmVQtBHg5cthtenZb'
 PROFIT_SPREADSHEET_URL = 'https://tcnnt6cxkcat.feishu.cn/sheets/Eha8sWY5GhDmVQtBHg5cthtenZb'
+NON_ONE_PRICE_SPREADSHEET_TOKEN = os.environ.get('FEISHU_NON_ONE_PRICE_PROFIT_SPREADSHEET_TOKEN') or 'V9HGsvCHfhXBKkta3oPcrwIunmY'
+NON_ONE_PRICE_SPREADSHEET_URL = os.environ.get('FEISHU_NON_ONE_PRICE_PROFIT_SPREADSHEET_URL') or 'https://tcnnt6cxkcat.feishu.cn/sheets/V9HGsvCHfhXBKkta3oPcrwIunmY'
 PROFIT_DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'profit.db')
 DEFAULT_ACTIVE_PROFIT_YEAR = 2026
 
@@ -210,6 +212,25 @@ def row_execution_status(row):
     if status:
         return status
     return '已发布' if int(row.get('is_published') or 0) else '未发布'
+
+def is_one_price_profit(row):
+    business_type = str(row.get('business_type') or row.get('category') or '').strip()
+    if business_type:
+        return '一口价' in business_type and '非一口价' not in business_type
+    platform = str(row.get('platform') or '').strip()
+    if '非一口价' in platform:
+        return False
+    return True
+
+def split_profit_rows_by_price_mode(rows):
+    one_price = []
+    non_one_price = []
+    for row in rows:
+        if is_one_price_profit(row):
+            one_price.append(row)
+        else:
+            non_one_price.append(row)
+    return one_price, non_one_price
 
 def profit_to_feishu_fields(row, available):
     fields = {}
@@ -499,28 +520,28 @@ def spreadsheet_row(row=None, summary=None):
     extension_values = spreadsheet_extension_values(row) if row else ['' for _ in SPREADSHEET_EXTENSION_HEADERS]
     return main_values + summary_values + extension_values
 
-def spreadsheet_meta(token):
-    return api_get(f'/sheets/v2/spreadsheets/{PROFIT_SPREADSHEET_TOKEN}/metainfo', token)
+def spreadsheet_meta(token, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
+    return api_get(f'/sheets/v2/spreadsheets/{spreadsheet_token}/metainfo', token)
 
-def spreadsheet_sheet_map(token):
-    result = spreadsheet_meta(token)
+def spreadsheet_sheet_map(token, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
+    result = spreadsheet_meta(token, spreadsheet_token)
     if result.get('code') != 0:
         raise RuntimeError(result.get('msg') or json.dumps(result, ensure_ascii=False))
     sheets = result.get('data', {}).get('sheets') or []
     return {item.get('title'): item.get('sheetId') for item in sheets if item.get('title') and item.get('sheetId')}
 
-def ensure_spreadsheet_sheets(token, titles):
-    sheet_map = spreadsheet_sheet_map(token)
+def ensure_spreadsheet_sheets(token, titles, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
+    sheet_map = spreadsheet_sheet_map(token, spreadsheet_token)
     missing = [title for title in titles if title not in sheet_map]
     for title in missing:
         result = api_post(
-            f'/sheets/v2/spreadsheets/{PROFIT_SPREADSHEET_TOKEN}/sheets_batch_update',
+            f'/sheets/v2/spreadsheets/{spreadsheet_token}/sheets_batch_update',
             {'requests': [{'addSheet': {'properties': {'title': title}}}]},
             token
         )
         if result.get('code') != 0:
             raise RuntimeError(result.get('msg') or json.dumps(result, ensure_ascii=False))
-    return spreadsheet_sheet_map(token)
+    return spreadsheet_sheet_map(token, spreadsheet_token)
 
 def column_name(index):
     name = ''
@@ -530,13 +551,13 @@ def column_name(index):
         name = chr(65 + remainder) + name
     return name
 
-def write_sheet_values(token, sheet_id, rows):
+def write_sheet_values(token, sheet_id, rows, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
     max_rows = max(len(rows), 500)
     max_cols = len(SPREADSHEET_HEADERS)
     values = rows + [['' for _ in range(max_cols)] for _ in range(max_rows - len(rows))]
     end_col = column_name(max_cols - 1)
     result = api_put(
-        f'/sheets/v2/spreadsheets/{PROFIT_SPREADSHEET_TOKEN}/values',
+        f'/sheets/v2/spreadsheets/{spreadsheet_token}/values',
         {'valueRange': {'range': f'{sheet_id}!A1:{end_col}{max_rows}', 'values': values}},
         token
     )
@@ -544,23 +565,23 @@ def write_sheet_values(token, sheet_id, rows):
         raise RuntimeError(result.get('msg') or json.dumps(result, ensure_ascii=False))
     return result
 
-def set_sheet_style(token, sheet_id, cell_range, style):
+def set_sheet_style(token, sheet_id, cell_range, style, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
     return api_put(
-        f'/sheets/v2/spreadsheets/{PROFIT_SPREADSHEET_TOKEN}/style',
+        f'/sheets/v2/spreadsheets/{spreadsheet_token}/style',
         {'appendStyle': {'range': f'{sheet_id}!{cell_range}', 'style': style}},
         token
     )
 
-def update_sheet_properties(token, sheet_id):
+def update_sheet_properties(token, sheet_id, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
     return api_post(
-        f'/sheets/v2/spreadsheets/{PROFIT_SPREADSHEET_TOKEN}/sheets_batch_update?user_id_type=open_id',
+        f'/sheets/v2/spreadsheets/{spreadsheet_token}/sheets_batch_update?user_id_type=open_id',
         {'requests': [{'updateSheet': {'properties': {'sheetId': sheet_id, 'frozenRowCount': 1}}}]},
         token
     )
 
-def update_dimension(token, sheet_id, major_dimension, start_index, end_index, size):
+def update_dimension(token, sheet_id, major_dimension, start_index, end_index, size, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
     return api_put(
-        f'/sheets/v2/spreadsheets/{PROFIT_SPREADSHEET_TOKEN}/dimension_range',
+        f'/sheets/v2/spreadsheets/{spreadsheet_token}/dimension_range',
         {
             'dimension': {
                 'sheetId': sheet_id,
@@ -576,7 +597,7 @@ def update_dimension(token, sheet_id, major_dimension, start_index, end_index, s
         token
     )
 
-def apply_spreadsheet_style(token, sheet_id, row_count):
+def apply_spreadsheet_style(token, sheet_id, row_count, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
     errors = []
 
     def remember(result, label):
@@ -590,7 +611,7 @@ def apply_spreadsheet_style(token, sheet_id, row_count):
     money_cols = ['M', 'N', 'O', 'T', 'AA', 'AB', 'AC', 'AD', 'AE', 'AF', 'AG', 'AH']
     populated_rows = max(2, int(row_count or 0))
 
-    remember(update_sheet_properties(token, sheet_id), 'freeze_header')
+    remember(update_sheet_properties(token, sheet_id, spreadsheet_token), 'freeze_header')
     remember(set_sheet_style(token, sheet_id, f'A1:{last_col}1', {
         'font': {'bold': True, 'fontSize': '10pt/1.5', 'clean': False},
         'hAlign': 1,
@@ -600,7 +621,7 @@ def apply_spreadsheet_style(token, sheet_id, row_count):
         'borderType': 'FULL_BORDER',
         'borderColor': '#93C5FD',
         'clean': False,
-    }), 'header_base')
+    }, spreadsheet_token), 'header_base')
     remember(set_sheet_style(token, sheet_id, 'C1:C1', {
         'font': {'bold': True, 'fontSize': '10pt/1.5', 'clean': False},
         'hAlign': 1,
@@ -610,7 +631,7 @@ def apply_spreadsheet_style(token, sheet_id, row_count):
         'borderType': 'FULL_BORDER',
         'borderColor': '#F59E0B',
         'clean': False,
-    }), 'publish_header')
+    }, spreadsheet_token), 'publish_header')
     remember(set_sheet_style(token, sheet_id, 'O1:O1', {
         'font': {'bold': True, 'fontSize': '10pt/1.5', 'clean': False},
         'hAlign': 1,
@@ -620,7 +641,7 @@ def apply_spreadsheet_style(token, sheet_id, row_count):
         'borderType': 'FULL_BORDER',
         'borderColor': '#F59E0B',
         'clean': False,
-    }), 'final_amount_header')
+    }, spreadsheet_token), 'final_amount_header')
     remember(set_sheet_style(token, sheet_id, f'{summary_start_col}1:{summary_end_col}1', {
         'font': {'bold': True, 'fontSize': '10pt/1.5', 'clean': False},
         'hAlign': 1,
@@ -630,7 +651,7 @@ def apply_spreadsheet_style(token, sheet_id, row_count):
         'borderType': 'FULL_BORDER',
         'borderColor': '#86EFAC',
         'clean': False,
-    }), 'summary_header')
+    }, spreadsheet_token), 'summary_header')
     remember(set_sheet_style(token, sheet_id, f'{extension_start_col}1:{last_col}1', {
         'font': {'bold': True, 'fontSize': '10pt/1.5', 'clean': False},
         'hAlign': 1,
@@ -640,7 +661,7 @@ def apply_spreadsheet_style(token, sheet_id, row_count):
         'borderType': 'FULL_BORDER',
         'borderColor': '#CBD5E1',
         'clean': False,
-    }), 'extension_header')
+    }, spreadsheet_token), 'extension_header')
     remember(set_sheet_style(token, sheet_id, f'A2:{last_col}{populated_rows}', {
         'font': {'fontSize': '10pt/1.5', 'clean': False},
         'vAlign': 1,
@@ -649,42 +670,42 @@ def apply_spreadsheet_style(token, sheet_id, row_count):
         'borderType': 'FULL_BORDER',
         'borderColor': '#E5E7EB',
         'clean': False,
-    }), 'body_border')
+    }, spreadsheet_token), 'body_border')
     remember(set_sheet_style(token, sheet_id, f'C2:C{populated_rows}', {
         'backColor': '#FFFBEB',
         'foreColor': '#78350F',
         'borderType': 'FULL_BORDER',
         'borderColor': '#FDE68A',
         'clean': False,
-    }), 'publish_body')
+    }, spreadsheet_token), 'publish_body')
     remember(set_sheet_style(token, sheet_id, f'O2:O{populated_rows}', {
         'backColor': '#FFFBEB',
         'foreColor': '#78350F',
         'borderType': 'FULL_BORDER',
         'borderColor': '#FDE68A',
         'clean': False,
-    }), 'final_amount_body')
+    }, spreadsheet_token), 'final_amount_body')
     remember(set_sheet_style(token, sheet_id, f'{summary_start_col}2:{summary_end_col}{populated_rows}', {
         'foreColor': '#064E3B',
         'backColor': '#F0FDF4',
         'borderType': 'FULL_BORDER',
         'borderColor': '#DCFCE7',
         'clean': False,
-    }), 'summary_body')
+    }, spreadsheet_token), 'summary_body')
     remember(set_sheet_style(token, sheet_id, f'{extension_start_col}2:{last_col}{populated_rows}', {
         'foreColor': '#475569',
         'backColor': '#F8FAFC',
         'borderType': 'FULL_BORDER',
         'borderColor': '#E2E8F0',
         'clean': False,
-    }), 'extension_body')
+    }, spreadsheet_token), 'extension_body')
     for col in money_cols:
         remember(set_sheet_style(token, sheet_id, f'{col}2:{col}{populated_rows}', {
             'formatter': '#,##0.00',
             'hAlign': 2,
             'vAlign': 1,
             'clean': False,
-        }), f'money_{col}')
+        }, spreadsheet_token), f'money_{col}')
 
     width_ranges = [
         (1, 3, 112),
@@ -702,25 +723,25 @@ def apply_spreadsheet_style(token, sheet_id, row_count):
         (22, len(SPREADSHEET_HEADERS), 118),
     ]
     for start, end, size in width_ranges:
-        remember(update_dimension(token, sheet_id, 'COLUMNS', start, end, size), f'width_{start}_{end}')
-    remember(update_dimension(token, sheet_id, 'ROWS', 1, 1, 34), 'header_height')
+        remember(update_dimension(token, sheet_id, 'COLUMNS', start, end, size, spreadsheet_token), f'width_{start}_{end}')
+    remember(update_dimension(token, sheet_id, 'ROWS', 1, 1, 34, spreadsheet_token), 'header_height')
     return {'ok': not errors, 'errors': errors}
 
-def apply_spreadsheet_style_with_retry(token, sheet_id, row_count):
-    result = apply_spreadsheet_style(token, sheet_id, row_count)
+def apply_spreadsheet_style_with_retry(token, sheet_id, row_count, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
+    result = apply_spreadsheet_style(token, sheet_id, row_count, spreadsheet_token)
     grid_pending = any('range exceeds grid limits' in str(err.get('error') or '') for err in result.get('errors', []))
     if not grid_pending:
         return result
     time.sleep(1)
-    return apply_spreadsheet_style(token, sheet_id, row_count)
+    return apply_spreadsheet_style(token, sheet_id, row_count, spreadsheet_token)
 
-def read_sheet_values(token, sheet_id, max_rows=5000):
+def read_sheet_values(token, sheet_id, max_rows=5000, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
     import urllib.parse
     max_cols = len(SPREADSHEET_HEADERS)
     end_col = column_name(max_cols - 1)
     range_text = f'{sheet_id}!A1:{end_col}{max_rows}'
     encoded_range = urllib.parse.quote(range_text, safe='')
-    result = api_get(f'/sheets/v2/spreadsheets/{PROFIT_SPREADSHEET_TOKEN}/values/{encoded_range}', token)
+    result = api_get(f'/sheets/v2/spreadsheets/{spreadsheet_token}/values/{encoded_range}', token)
     if result.get('code') != 0:
         raise RuntimeError(result.get('msg') or json.dumps(result, ensure_ascii=False))
     data = result.get('data') or {}
@@ -868,14 +889,14 @@ def group_rows_by_sheet(rows):
         grouped.setdefault(title, []).append(row)
     return grouped, skipped
 
-def hide_historical_spreadsheet_sheets(token, sheet_map):
+def hide_historical_spreadsheet_sheets(token, sheet_map, spreadsheet_token=PROFIT_SPREADSHEET_TOKEN):
     errors = []
     hidden = 0
     for title, sheet_id in sheet_map.items():
         if not is_historical_sheet_title(title):
             continue
         result = api_post(
-            f'/sheets/v2/spreadsheets/{PROFIT_SPREADSHEET_TOKEN}/sheets_batch_update?user_id_type=open_id',
+            f'/sheets/v2/spreadsheets/{spreadsheet_token}/sheets_batch_update?user_id_type=open_id',
             {'requests': [{'updateSheet': {'properties': {'sheetId': sheet_id, 'hidden': True}}}]},
             token
         )
@@ -897,25 +918,20 @@ def mark_rows_sheet_synced(rows, status='synced', error=''):
     conn.commit()
     conn.close()
 
-def sync_profit_spreadsheet(limit=0, only_row_id=None):
-    token = get_token()
-    if not token:
-        return {'code': 1, 'msg': '获取飞书 token 失败，请检查 appId/appSecret 和应用权限'}
-    active_year = active_profit_year()
-    source_rows = list_profit_rows(limit)
+def sync_profit_spreadsheet_target(token, source_rows, spreadsheet_token, spreadsheet_url, target_name, active_year, only_row_id=None):
     grouped, skipped_historical = group_rows_by_sheet(source_rows)
     if only_row_id:
         target = next((row for row in source_rows if int(row.get('id') or 0) == int(only_row_id)), None)
         if not target:
-            return {'code': 2, 'msg': '本地流水记录不存在'}
+            return {'code': 0, 'total': 0, 'created': 0, 'updated': 0, 'failed': 0, 'skipped_historical': 0, 'active_year': active_year, 'url': spreadsheet_url, 'target': target_name}
         target_year, target_month = row_year_month(target)
         if int(target_year) != int(active_year):
-            return {'code': 0, 'total': 0, 'created': 0, 'updated': 0, 'failed': 0, 'skipped_historical': 1, 'active_year': active_year, 'url': PROFIT_SPREADSHEET_URL}
+            return {'code': 0, 'total': 0, 'created': 0, 'updated': 0, 'failed': 0, 'skipped_historical': 1, 'active_year': active_year, 'url': spreadsheet_url, 'target': target_name}
         target_title = sheet_title(target_year, target_month)
         grouped = {target_title: grouped.get(target_title, [])}
     titles = list(grouped.keys())
-    sheet_map = ensure_spreadsheet_sheets(token, titles)
-    archive_result = hide_historical_spreadsheet_sheets(token, sheet_map)
+    sheet_map = ensure_spreadsheet_sheets(token, titles, spreadsheet_token)
+    archive_result = hide_historical_spreadsheet_sheets(token, sheet_map, spreadsheet_token)
     stats = {
         'code': 0,
         'total': 0,
@@ -926,7 +942,8 @@ def sync_profit_spreadsheet(limit=0, only_row_id=None):
         'active_year': active_year,
         'skipped_historical': skipped_historical,
         'hidden_historical_sheets': archive_result.get('hidden', 0),
-        'url': PROFIT_SPREADSHEET_URL,
+        'url': spreadsheet_url,
+        'target': target_name,
         'errors': [],
         'style_errors': [],
         'archive_errors': archive_result.get('errors', []),
@@ -943,8 +960,8 @@ def sync_profit_spreadsheet(limit=0, only_row_id=None):
                 summary_rows[index] if index < summary_count else None
             ))
         try:
-            write_sheet_values(token, sheet_map[title], values)
-            style_result = apply_spreadsheet_style_with_retry(token, sheet_map[title], len(values))
+            write_sheet_values(token, sheet_map[title], values, spreadsheet_token)
+            style_result = apply_spreadsheet_style_with_retry(token, sheet_map[title], len(values), spreadsheet_token)
             for err in style_result.get('errors', []):
                 if len(stats['style_errors']) < 10:
                     stats['style_errors'].append({'sheet': title, **err})
@@ -958,6 +975,81 @@ def sync_profit_spreadsheet(limit=0, only_row_id=None):
             if len(stats['errors']) < 5:
                 stats['errors'].append({'sheet': title, 'error': message})
     return stats
+
+def merge_profit_spreadsheet_stats(results, active_year):
+    merged = {
+        'code': 0,
+        'total': 0,
+        'created': 0,
+        'updated': 0,
+        'failed': 0,
+        'sheets': 0,
+        'active_year': active_year,
+        'skipped_historical': 0,
+        'hidden_historical_sheets': 0,
+        'url': PROFIT_SPREADSHEET_URL,
+        'urls': {
+            'one_price': PROFIT_SPREADSHEET_URL,
+            'non_one_price': NON_ONE_PRICE_SPREADSHEET_URL,
+        },
+        'targets': [],
+        'errors': [],
+        'style_errors': [],
+        'archive_errors': [],
+    }
+    for result in results:
+        if result.get('code'):
+            merged['code'] = result.get('code')
+        for key in ['total', 'created', 'updated', 'failed', 'sheets', 'skipped_historical', 'hidden_historical_sheets']:
+            merged[key] += int(result.get(key) or 0)
+        merged['targets'].append({
+            'name': result.get('target') or '',
+            'total': int(result.get('total') or 0),
+            'failed': int(result.get('failed') or 0),
+            'url': result.get('url') or '',
+        })
+        for key in ['errors', 'style_errors', 'archive_errors']:
+            merged[key].extend(result.get(key) or [])
+    merged['errors'] = merged['errors'][:10]
+    merged['style_errors'] = merged['style_errors'][:10]
+    merged['archive_errors'] = merged['archive_errors'][:10]
+    return merged
+
+def sync_profit_spreadsheet(limit=0, only_row_id=None):
+    token = get_token()
+    if not token:
+        return {'code': 1, 'msg': '获取飞书 token 失败，请检查 appId/appSecret 和应用权限'}
+    active_year = active_profit_year()
+    source_rows = list_profit_rows(limit)
+    if only_row_id:
+        target = next((row for row in source_rows if int(row.get('id') or 0) == int(only_row_id)), None)
+        if not target:
+            return {'code': 2, 'msg': '本地流水记录不存在'}
+        source_rows = [target]
+
+    one_price_rows, non_one_price_rows = split_profit_rows_by_price_mode(source_rows)
+    results = []
+    if one_price_rows or not only_row_id:
+        results.append(sync_profit_spreadsheet_target(
+            token,
+            one_price_rows,
+            PROFIT_SPREADSHEET_TOKEN,
+            PROFIT_SPREADSHEET_URL,
+            '一口价',
+            active_year,
+            only_row_id
+        ))
+    if non_one_price_rows or not only_row_id:
+        results.append(sync_profit_spreadsheet_target(
+            token,
+            non_one_price_rows,
+            NON_ONE_PRICE_SPREADSHEET_TOKEN,
+            NON_ONE_PRICE_SPREADSHEET_URL,
+            '非一口价',
+            active_year,
+            only_row_id
+        ))
+    return merge_profit_spreadsheet_stats(results, active_year)
 
 def read_profit_spreadsheet(year=0, month=0):
     token = get_token()

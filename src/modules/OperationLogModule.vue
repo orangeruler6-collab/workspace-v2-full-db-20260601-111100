@@ -41,9 +41,13 @@
         <option v-for="module in modules" :key="module.id" :value="module.id">{{ module.label }}</option>
       </select>
       <input v-model.trim="filters.action" class="inp" placeholder="动作关键词" @keyup.enter="search" />
-      <input v-model.trim="filters.keyword" class="inp" placeholder="路径/摘要/详情" @keyup.enter="search" />
+      <input v-model.trim="filters.keyword" class="inp" placeholder="摘要 / 详情" @keyup.enter="search" />
       <input v-model="filters.fromDate" class="inp" type="date" />
       <input v-model="filters.toDate" class="inp" type="date" />
+      <label class="quiet-toggle">
+        <input v-model="filters.importantOnly" type="checkbox" @change="search" />
+        <span>只看有效操作</span>
+      </label>
       <button class="btn btn-primary" @click="search">筛选</button>
     </div>
 
@@ -60,17 +64,25 @@
           <span>用户</span>
           <span>模块</span>
           <span>动作</span>
-          <span>摘要</span>
+          <span>具体操作</span>
         </div>
         <article v-for="log in logs" :key="log.id" class="log-row">
-          <span>{{ formatTime(log.created_at) }}</span>
+          <span class="time-cell">{{ formatTime(log.created_at) }}</span>
           <span>{{ log.username || '-' }}</span>
           <span>{{ moduleLabel(log.module) }}</span>
-          <span>{{ log.action }}</span>
           <span>
-            {{ log.summary || '-' }}
+            <em class="action-chip" :class="actionTone(log.action)">{{ actionLabel(log.action) }}</em>
+          </span>
+          <span class="summary-cell">
+            {{ displaySummary(log) }}
             <details v-if="hasMeta(log.metadata)">
               <summary>详情</summary>
+              <div class="meta-list">
+                <div v-for="item in metaItems(log.metadata)" :key="item.key" class="meta-item">
+                  <b>{{ item.label }}</b>
+                  <span>{{ item.value }}</span>
+                </div>
+              </div>
               <pre>{{ formatMeta(log.metadata) }}</pre>
             </details>
           </span>
@@ -91,7 +103,7 @@ import { MODULE_DEFINITIONS } from '../permissions'
 import { useToast } from '../composables/useToast'
 
 const { showToast } = useToast()
-const modules = MODULE_DEFINITIONS
+const modules = flattenModules(MODULE_DEFINITIONS)
 const logs = ref([])
 const total = ref(0)
 const loading = ref(false)
@@ -105,8 +117,67 @@ const filters = reactive({
   action: '',
   keyword: '',
   fromDate: '',
-  toDate: ''
+  toDate: '',
+  importantOnly: true
 })
+
+const actionLabels = {
+  'schedule.task.create': '新建排期',
+  'schedule.task.update': '修改排期',
+  'schedule.task.progress': '推进排期',
+  'schedule.task.delete': '删除排期',
+  'schedule.task.handoff': '任务交接',
+  'schedule.todo.create': '新建待办',
+  'schedule.todo.update': '修改待办',
+  'schedule.todo.done': '完成待办',
+  'schedule.todo.reopen': '重开待办',
+  'schedule.todo.delete': '删除待办',
+  'user.create': '新建用户',
+  'user.update': '修改用户',
+  'user.reset_password': '重置密码',
+  'user.delete': '删除用户',
+  'profit.create': '新增流水',
+  'profit.update': '修改流水',
+  'profit.delete': '删除流水',
+  'material.upload': '上传素材',
+  'material.update': '修改素材',
+  'material.delete': '删除素材',
+  'idea.create': '新增创意',
+  'idea.update': '修改创意',
+  'idea.delete': '删除创意',
+  'dailyhot.refresh': '更新热点',
+  'dailyhot.analyze': '分析热点',
+  'dailyhot.update_status': '修改热点状态',
+  'dailyhot.manual_add': '手动加热点',
+  'system_health.run': '系统自检',
+  'imagegen.text2image': '文生图',
+  'imagegen.image2image': '图生图',
+  'imagegen.task.create': '生图排队',
+  'imagegen.history.delete': '删除生图',
+  'posttools.video_download': '视频下载',
+  'posttools.video_download_batch': '批量下载',
+  'posttools.media_convert': '媒体转换',
+  'posttools.ncm_convert': 'NCM 转换',
+  'posttools.video_analyze': '视频转写',
+  'posttools.ai_recommend': 'AI 推荐',
+  'videopublish.job.create': '创建发布',
+  'videopublish.job.status': '修改发布状态',
+  'videopublish.job.cancel': '取消发布',
+  'videopublish.job.run': '执行发布',
+  'videopublish.job.run_batch': '启动队列',
+  'videopublish.job.delete': '删除发布',
+  'videopublish.account.save': '保存发布账号',
+  'videopublish.account.login': '打开登录态',
+  'videopublish.video.upload': '上传视频',
+  'videopublish.video.transcribe': '视频转写',
+  'comment_reply.collect': '采集评论',
+  'comment_reply.plan': '生成回复',
+  'comment_reply.send': '发送回复',
+  login: '登录',
+  logout: '退出登录',
+  'login.success': '登录',
+  'auth.login': '登录'
+}
 
 const moduleMap = computed(() => Object.fromEntries(modules.map(module => [module.id, module.label])))
 const healthOverallOk = computed(() => {
@@ -124,31 +195,31 @@ const healthItems = computed(() => {
   return [
     {
       key: 'api',
-      icon: '🟢',
+      icon: '●',
       label: '主 API',
       required: true,
       ok: Boolean(data.api?.ok),
       detail: data.api?.ok ? '端口 ' + (data.api.port || 5555) + ' 可用' : '未返回状态'
     },
     {
-      key: 'next',
+      key: 'styleWorkbench',
       icon: '🧩',
       label: '账号风格库',
       required: false,
       ok: Boolean(data.styleWorkbench?.ok),
-      detail: data.styleWorkbench?.ok ? 'Next ' + (data.styleWorkbench.port || 3100) + ' 已连接' : (data.styleWorkbench?.error || 'Next 子应用未连接')
+      detail: data.styleWorkbench?.ok ? '原生 API 已接入' : (data.styleWorkbench?.error || '文案工作台原生 API 未连接')
     },
     {
       key: 'opencli',
-      icon: '🔎',
+      icon: 'C',
       label: 'OpenCLI',
       required: false,
       ok: Boolean(data.opencli?.ok),
-      detail: data.opencli?.ok ? [data.opencli.bin, data.opencli.version].filter(Boolean).join(' · ') : (data.opencli?.error || '命令不可用')
+      detail: data.opencli?.ok ? [data.opencli.bin, data.opencli.version].filter(Boolean).join(' / ') : (data.opencli?.error || '命令不可用')
     },
     {
       key: 'chat',
-      icon: '🤖',
+      icon: 'AI',
       label: '对话模型',
       required: true,
       ok: Boolean(data.chat?.ok),
@@ -156,7 +227,7 @@ const healthItems = computed(() => {
     },
     {
       key: 'siliconflow',
-      icon: '⚡',
+      icon: 'SF',
       label: '硅基流动',
       required: true,
       ok: Boolean(data.siliconflow?.ok),
@@ -164,7 +235,7 @@ const healthItems = computed(() => {
     },
     {
       key: 'feishu',
-      icon: '📄',
+      icon: 'F',
       label: '飞书',
       required: false,
       ok: Boolean(data.feishu?.ok || data.feishu?.doctorOk),
@@ -172,6 +243,10 @@ const healthItems = computed(() => {
     }
   ]
 })
+
+function flattenModules(items = []) {
+  return items.flatMap(item => Array.isArray(item.children) ? item.children : [item])
+}
 
 function dateToSeconds(value, endOfDay = false) {
   if (!value) return ''
@@ -187,6 +262,7 @@ async function loadLogs() {
       module: filters.module,
       action: filters.action,
       keyword: filters.keyword,
+      importantOnly: filters.importantOnly,
       from: dateToSeconds(filters.fromDate),
       to: dateToSeconds(filters.toDate, true),
       limit,
@@ -210,7 +286,7 @@ async function loadHealth() {
     health.value = {
       checkedAt: Date.now(),
       api: { ok: false },
-      styleWorkbench: { ok: false, error: e.message }
+      styleWorkbench: { ok: false, native: true, error: e.message }
     }
   } finally {
     healthLoading.value = false
@@ -235,7 +311,40 @@ function nextPage() {
 
 function moduleLabel(value) {
   if (value === 'auth') return '登录认证'
+  if (value === 'schedule') return '排期看板'
+  if (value === 'operationLogs') return '操作日志'
   return moduleMap.value[value] || value || '-'
+}
+
+function actionLabel(value) {
+  const raw = String(value || '')
+  if (raw.endsWith('.failed')) {
+    const base = raw.replace(/\.failed$/, '')
+    return (actionLabels[base] || base) + '失败'
+  }
+  return actionLabels[raw] || raw || '-'
+}
+
+function actionTone(value = '') {
+  if (value.includes('delete')) return 'danger'
+  if (value.includes('failed')) return 'danger'
+  if (value.includes('create') || value.includes('upload')) return 'success'
+  if (value.includes('progress') || value.includes('done') || value.includes('handoff')) return 'primary'
+  return 'neutral'
+}
+
+function displaySummary(log) {
+  const meta = log.metadata || {}
+  if (log.action?.startsWith('profit.')) {
+    const verb = log.action === 'profit.create' ? '新增流水' : log.action === 'profit.delete' ? '删除流水' : '修改流水'
+    const subject = [meta.grp, meta.project, meta.account].filter(Boolean).join(' / ')
+    const amount = meta.final_amount || meta.revenue || meta.margin
+    const status = meta.execution_status ? `，状态：${meta.execution_status}` : ''
+    return `${verb}：${subject || meta.id || '未命名记录'}${amount ? `，金额：${amount}` : ''}${status}`
+  }
+  if (log.summary) return log.summary
+  if (meta.path) return `${meta.method || 'POST'} ${meta.path}`
+  return '-'
 }
 
 function formatTime(ts) {
@@ -252,6 +361,37 @@ function formatTime(ts) {
 
 function hasMeta(meta) {
   return meta && Object.keys(meta).length > 0
+}
+
+function metaItems(meta) {
+  const data = meta || {}
+  const pairs = [
+    ['account', '账号'],
+    ['person', '执行人'],
+    ['group_name', '分组'],
+    ['grp', '分组'],
+    ['project', '项目'],
+    ['platform', '平台'],
+    ['account', '账号'],
+    ['date', '日期'],
+    ['month', '月份'],
+    ['type', '类型'],
+    ['status', '状态'],
+    ['execution_status', '执行状态'],
+    ['final_amount', '金额'],
+    ['revenue', '营收'],
+    ['margin', '毛利'],
+    ['progress', '进度'],
+    ['workflow_stage', '阶段'],
+    ['title', '标题'],
+    ['due_at', '时间'],
+    ['from', '交接人'],
+    ['to', '接收人']
+  ]
+  const source = data.after || data.task || data
+  return pairs
+    .map(([key, label]) => ({ key, label, value: source?.[key] }))
+    .filter(item => item.value !== undefined && item.value !== null && String(item.value).trim() !== '')
 }
 
 function formatMeta(meta) {
@@ -271,7 +411,6 @@ onMounted(() => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 0;
 }
 
 .log-head {
@@ -282,26 +421,27 @@ onMounted(() => {
   min-height: 44px;
 }
 
-.log-kicker {
-  color: var(--text-muted);
-  font-size: 10px;
-  font-weight: 800;
-}
-
-.log-head h2 {
-  margin: 0;
-  color: var(--text);
-  font-size: 20px;
-  font-weight: 750;
-  line-height: 1.2;
-}
-
 .filter-bar {
   display: grid;
-  grid-template-columns: minmax(110px, 1fr) minmax(140px, 1fr) minmax(120px, 1fr) minmax(140px, 1.2fr) 140px 140px auto;
+  grid-template-columns: minmax(110px, 1fr) minmax(140px, 1fr) minmax(120px, 1fr) minmax(150px, 1.2fr) 140px 140px auto auto;
   gap: 8px;
   align-items: center;
   margin-bottom: 14px;
+}
+
+.quiet-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  background: var(--surface);
 }
 
 .health-panel {
@@ -428,7 +568,7 @@ onMounted(() => {
 
 .log-row {
   display: grid;
-  grid-template-columns: 140px 130px 130px 170px minmax(240px, 1fr);
+  grid-template-columns: 140px 120px 120px 120px minmax(280px, 1fr);
   gap: 10px;
   align-items: start;
   padding: 10px 12px;
@@ -450,6 +590,43 @@ onMounted(() => {
   font-weight: 800;
 }
 
+.time-cell {
+  color: var(--text-muted);
+}
+
+.summary-cell {
+  color: var(--text);
+  line-height: 1.55;
+}
+
+.action-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  font-style: normal;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.action-chip.primary {
+  color: var(--primary-light);
+  background: var(--status-bg);
+}
+
+.action-chip.success {
+  color: #0f8f5f;
+  background: rgba(15, 143, 95, 0.1);
+}
+
+.action-chip.danger {
+  color: var(--danger-text, #ef4444);
+  background: var(--danger-bg, rgba(239, 68, 68, 0.1));
+}
+
 details {
   margin-top: 6px;
 }
@@ -458,6 +635,28 @@ summary {
   color: var(--primary-light);
   cursor: pointer;
   font-size: 12px;
+}
+
+.meta-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.meta-item {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 11px;
+}
+
+.meta-item b {
+  color: var(--text-muted);
 }
 
 pre {
@@ -486,7 +685,7 @@ pre {
   text-align: center;
 }
 
-@media (max-width: 980px) {
+@media (max-width: 1100px) {
   .health-grid,
   .filter-bar,
   .log-row {

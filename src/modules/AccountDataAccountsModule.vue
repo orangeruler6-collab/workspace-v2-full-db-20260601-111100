@@ -10,12 +10,9 @@
       </div>
       <div class="pool-actions">
         <select v-model="platformFilter" class="inp pool-select">
-          <option value="all">全平台</option>
-          <option value="douyin">抖音</option>
-          <option value="bilibili">B站</option>
-          <option value="kuaishou">快手</option>
-          <option value="xiaohongshu">小红书</option>
-          <option value="wechatVideo">视频号</option>
+          <option v-for="platform in accountPoolPlatformOptions" :key="platform.id" :value="platform.id">
+            {{ platform.label }}
+          </option>
         </select>
         <select v-model="groupFilter" class="inp pool-select">
           <option value="all">全部小组</option>
@@ -66,8 +63,9 @@
               v-for="platform in account.displayPlatforms"
               :key="platform.id"
               class="platform-chip"
-              :class="[platform.id, platform.loginClass]"
+              :class="[platform.id, platform.loginClass, { actionable: platform.canOpenLogin }]"
               :title="platform.title"
+              @click="platform.canOpenLogin && openLogin(account, platform)"
             >
               {{ platform.label }}
             </span>
@@ -90,14 +88,29 @@
         </div>
       </div>
     </section>
+
+    <div v-if="loginModal.open" class="login-modal-backdrop" @click.self="closeLoginModal">
+      <section class="login-modal">
+        <header>
+          <strong>{{ loginModal.title }}</strong>
+          <button type="button" @click="closeLoginModal">×</button>
+        </header>
+        <div v-if="loginModal.loading" class="login-modal-state">正在打开浏览器 Profile...</div>
+        <template v-else>
+          <img v-if="loginModal.screenshotDataUrl" :src="loginModal.screenshotDataUrl" alt="login screenshot" />
+          <div v-else class="login-modal-state">{{ loginModal.message }}</div>
+          <p>{{ loginModal.message }}</p>
+        </template>
+      </section>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { loadAccountDataDashboard } from '../api/accountData'
+import { closeAccountDataProfileLogin, loadAccountDataDashboard, openAccountDataProfileLogin } from '../api/accountData'
 import { listVideoPublishAccounts } from '../api/videoPublish'
-import { GROUPS } from './schedule/constants'
+import { platformOptions as accountDataPlatformOptions } from './account-data/mockData'
 
 const accounts = ref([])
 const collectionFailures = ref([])
@@ -106,9 +119,23 @@ const error = ref('')
 const platformFilter = ref('all')
 const groupFilter = ref('all')
 const keyword = ref('')
+const loginModal = ref({
+  open: false,
+  loading: false,
+  title: '',
+  message: '',
+  screenshotDataUrl: '',
+  loginWindowId: ''
+})
 
 const groupOptions = computed(() => Array.from(new Set(accounts.value.map(item => item.groupName).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'zh-CN')))
 const knownAccountNames = computed(() => new Set(accounts.value.map(item => normalize(item.account)).filter(Boolean)))
+const accountPoolPlatformOptions = computed(() => {
+  const ids = new Set(accounts.value.flatMap(item => item.platformIds || []))
+  return accountDataPlatformOptions
+    .filter(item => item.id === 'all' || ids.has(item.id))
+    .map(item => ({ id: item.id, label: item.label }))
+})
 
 const filteredAccounts = computed(() => {
   const word = keyword.value.toLowerCase()
@@ -155,12 +182,28 @@ function normalize(value) {
   return String(value || '').trim().toLowerCase()
 }
 
+function cleanFailureMessage(value) {
+  const raw = String(value || '').trim()
+  if (/not connected|profile not connected|Browser profile/i.test(raw)) return '浏览器 Profile 未连接，需要重新绑定或启动浏览器扩展'
+  if (/login|unauthorized|forbidden|cookie|未登录|登录|401|403/i.test(raw)) return '登录态失效或权限不足，需要复查平台登录'
+  return raw.replace(/\s+/g, ' ').slice(0, 80) || '采集失败'
+}
+
+function isLoginFailure(value) {
+  return /not connected|profile not connected|Browser profile|login|unauthorized|forbidden|cookie|未登录|登录|401|403/i.test(String(value || ''))
+}
+
 function bindingKey(accountId, platformId) {
   return `${normalize(accountId)}:${normalize(platformId)}`
 }
 
 function platformLabel(platform) {
   return readableText(platform.name, platform.platform_name, platform.platformLabel, platform.id, platform.platform_id, '')
+}
+
+function platformStatusFor(statusMap, profile, platformId) {
+  const profileStatus = statusMap?.profiles?.[String(profile || '').trim()]
+  return profileStatus?.platforms?.[String(platformId || '').trim()] || null
 }
 
 function loginState(status) {
@@ -199,37 +242,6 @@ function readableText(...values) {
   return ''
 }
 
-function buildDashboardIndex(rows = []) {
-  const byProfile = new Map()
-  const byAccount = new Map()
-  for (const row of rows || []) {
-    const platform = normalize(row.platform)
-    if (!platform) continue
-    if (row.profile) byProfile.set(`${normalize(row.profile)}:${platform}`, row)
-    for (const name of [row.account, row.knownProfile].filter(Boolean)) {
-      byAccount.set(`${normalize(name)}:${platform}`, row)
-    }
-  }
-  return { byProfile, byAccount }
-}
-
-function findDashboardRow(index, account, platform, publishProfile, dataProfile) {
-  const platformId = normalize(platform.id)
-  const profileKeys = [publishProfile, dataProfile, ...(account.profileAliases || [])]
-    .filter(Boolean)
-    .map(value => `${normalize(value)}:${platformId}`)
-  for (const key of profileKeys) {
-    if (index.byProfile.has(key)) return index.byProfile.get(key)
-  }
-  const accountKeys = [account.name, account.dashboardName, account.id]
-    .filter(Boolean)
-    .map(value => `${normalize(value)}:${platformId}`)
-  for (const key of accountKeys) {
-    if (index.byAccount.has(key)) return index.byAccount.get(key)
-  }
-  return null
-}
-
 function createAccountRow(seed = {}) {
   return {
     id: seed.id || seed.accountId || seed.account || seed.profile || 'unknown',
@@ -264,8 +276,10 @@ function addOrUpdatePlatform(account, platform) {
     next.handle,
     next.publishProfile ? `发布 Profile: ${next.publishProfile}` : '',
     next.publishProfileDirectory ? `Chrome: ${next.publishProfileDirectory}` : '',
-    state.raw ? `登录状态: ${state.raw}` : ''
+    state.raw ? `登录状态: ${state.raw}` : '',
+    next.collectReason || ''
   ].filter(Boolean).join('\n')
+  next.canOpenLogin = ['warn', 'unknown'].includes(state.className) && Boolean(next.publishProfile)
   if (!existing) account.platforms.push(next)
 }
 
@@ -305,87 +319,143 @@ function findAccountRow(rowMap, aliases = []) {
   return null
 }
 
-function seedScheduleAccounts(rowMap) {
-  for (const group of GROUPS || []) {
-    for (const accountName of group.accounts || []) {
-      if (!accountName || accountName === '素材') continue
-      const existing = findAccountRow(rowMap, [accountName])
-      if (existing) continue
-      const row = createAccountRow({
-        id: `schedule:${group.id}:${accountName}`,
-        account: accountName,
-        groupId: group.id,
-        groupName: group.label
-      })
-      registerAccountRow(rowMap, row, [row.id, accountName])
-    }
-  }
+function sourceRowCount(sources) {
+  return (sources || []).reduce((sum, source) => sum + (Number(source?.rows) || 0), 0)
 }
 
-function buildAccountRows(catalogAccounts = [], bindingRows = [], dashboardAccounts = []) {
+function hasCollectedDashboardData(row) {
+  return Boolean(
+    Number(row?.postTotal) > 0 ||
+    Number(row?.totalViews) > 0 ||
+    Number(row?.totalLikes) > 0 ||
+    Number(row?.followers) > 0 ||
+    Number(row?.followerDelta) !== 0 ||
+    sourceRowCount(row?.sources) > 0
+  )
+}
+
+function findCatalogForDashboard(catalogAccounts, dashboardRow) {
+  const platformId = normalize(dashboardRow.platform)
+  const profile = normalize(dashboardRow.profile || dashboardRow.accountId)
+  const accountName = normalize(dashboardRow.account)
+  return (catalogAccounts || []).find(account => {
+    const names = [account.id, account.name, account.dashboardName, ...(account.profileAliases || [])].map(normalize)
+    const platformAliases = (account.platforms || [])
+      .filter(platform => !platformId || normalize(platform.id) === platformId)
+      .flatMap(platform => [platform.profile_alias, platform.profile])
+      .map(normalize)
+    return (profile && (names.includes(profile) || platformAliases.includes(profile))) ||
+      (accountName && names.includes(accountName))
+  }) || null
+}
+
+function buildAccountRows(catalogAccounts = [], bindingRows = [], dashboardAccounts = [], statusMap = {}) {
   const bindingByKey = new Map()
   for (const row of bindingRows || []) {
     bindingByKey.set(bindingKey(row.account_id, row.platform_id), row)
   }
-  const dashboardIndex = buildDashboardIndex(dashboardAccounts)
   const rowMap = new Map()
-  seedScheduleAccounts(rowMap)
 
-  for (const account of catalogAccounts || []) {
-    const row = findAccountRow(rowMap, [
-      account.name,
-      account.dashboardName,
-      account.id,
-      ...(account.profileAliases || []),
-      ...(account.platforms || []).map(platform => platform.profile_alias || platform.profile)
-    ])
-    if (!row) continue
-    row.accountId = account.id || row.accountId
-    row.owner = row.owner || account.owner || ''
-    row.dataProfile = account.dataProfileAlias || row.dataProfile
-    row.dataProfileDirectory = account.dataProfileDirectory || row.dataProfileDirectory
-    for (const platform of account.platforms || []) {
-      const key = bindingKey(account.id, platform.id)
-      const binding = bindingByKey.get(key) || {}
-      const publishProfile = binding.profile_alias || platform.profile_alias || platform.profile || ''
-      const publishProfileDirectory = platform.chrome_profile_directory || platform.chromeProfileDirectory || ''
-      const dataProfile = account.dataProfileAlias || ''
-      const dashboardRow = findDashboardRow(dashboardIndex, account, platform, publishProfile, dataProfile)
-      addOrUpdatePlatform(row, {
-        id: platform.id,
-        label: platformLabel(platform),
-        handle: binding.platform_handle || platform.handle || '',
-        publishProfile,
-        publishProfileDirectory,
-        loginStatus: binding.login_status || platform.login_status || platform.status || 'unknown',
-        collectStatus: dashboardRow?.collectStatus || '',
-        lastCollectedAt: dashboardRow?.lastCollectedAt || ''
-      })
-    }
-    registerAccountRow(rowMap, row, [
-      row.id,
-      row.accountId,
-      row.account,
-      account.dashboardName,
-      ...(account.profileAliases || []),
-      ...(account.platforms || []).map(platform => platform.profile_alias || platform.profile)
-    ])
-  }
-
-  for (const dashboardRow of dashboardAccounts || []) {
-    const row = findAccountRow(rowMap, [dashboardRow.account, dashboardRow.knownProfile, dashboardRow.profile])
-    if (!row) continue
+  for (const dashboardRow of (dashboardAccounts || []).filter(hasCollectedDashboardData)) {
+    const catalog = findCatalogForDashboard(catalogAccounts, dashboardRow)
+    const platformId = dashboardRow.platform || 'unknown'
+    const platformMeta = (catalog?.platforms || []).find(platform => normalize(platform.id) === normalize(platformId)) || {}
+    const binding = bindingByKey.get(bindingKey(catalog?.id || dashboardRow.accountId, platformId)) || {}
+    const row = findAccountRow(rowMap, [dashboardRow.account, dashboardRow.accountId, dashboardRow.profile]) || createAccountRow({
+      id: dashboardRow.accountId || dashboardRow.profile || dashboardRow.id || dashboardRow.account,
+      accountId: catalog?.id || dashboardRow.accountId || dashboardRow.profile || '',
+      account: dashboardRow.account,
+      groupId: dashboardRow.groupId,
+      groupName: dashboardRow.groupName,
+      owner: catalog?.owner || dashboardRow.owner || '',
+      dataProfile: catalog?.dataProfileAlias || dashboardRow.profile || '',
+      dataProfileDirectory: catalog?.dataProfileDirectory || ''
+    })
+    row.accountId = row.accountId || catalog?.id || dashboardRow.accountId || dashboardRow.profile || ''
+    row.owner = row.owner || catalog?.owner || dashboardRow.owner || ''
+    row.dataProfile = row.dataProfile || catalog?.dataProfileAlias || dashboardRow.profile || ''
+    row.dataProfileDirectory = row.dataProfileDirectory || catalog?.dataProfileDirectory || ''
     addOrUpdatePlatform(row, {
-      id: dashboardRow.platform || 'unknown',
+      id: platformId,
       label: dashboardRow.platformLabel || dashboardRow.platform || '未知平台',
-      publishProfile: dashboardRow.profile || '',
-      loginStatus: 'unknown',
+      handle: binding.platform_handle || platformMeta.handle || '',
+      publishProfile: binding.profile_alias || platformMeta.profile_alias || platformMeta.profile || dashboardRow.profile || '',
+      publishProfileDirectory: platformMeta.chrome_profile_directory || platformMeta.chromeProfileDirectory || '',
+      loginStatus: platformStatusFor(statusMap, dashboardRow.profile || platformMeta.profile_alias, platformId)?.status || binding.login_status || platformMeta.login_status || platformMeta.status || 'unknown',
+      collectReason: platformStatusFor(statusMap, dashboardRow.profile || platformMeta.profile_alias, platformId)?.reason || '',
       collectStatus: dashboardRow.collectStatus || '',
       lastCollectedAt: dashboardRow.lastCollectedAt || ''
     })
+    registerAccountRow(rowMap, row, [row.id, row.accountId, row.account, dashboardRow.profile])
+  }
+
+  for (const catalog of catalogAccounts || []) {
+    const row = findAccountRow(rowMap, [catalog.id, catalog.name, catalog.dashboardName, ...(catalog.profileAliases || [])]) || createAccountRow({
+      id: catalog.id,
+      accountId: catalog.id,
+      account: catalog.dashboardName || catalog.name,
+      groupId: catalog.groupId,
+      groupName: catalog.groupName,
+      owner: catalog.owner,
+      dataProfile: catalog.dataProfileAlias,
+      dataProfileDirectory: catalog.dataProfileDirectory
+    })
+    row.accountId = row.accountId || catalog.id || ''
+    row.owner = row.owner || catalog.owner || ''
+    row.dataProfile = row.dataProfile || catalog.dataProfileAlias || ''
+    row.dataProfileDirectory = row.dataProfileDirectory || catalog.dataProfileDirectory || ''
+    for (const platform of catalog.platforms || []) {
+      if (platform.account_data_collect_enabled === false) continue
+      const profileAlias = platform.profile_alias || platform.profile || ''
+      const status = platformStatusFor(statusMap, profileAlias, platform.id)
+      addOrUpdatePlatform(row, {
+        id: platform.id,
+        label: platformLabel(platform),
+        handle: platform.handle || '',
+        publishProfile: profileAlias,
+        publishProfileDirectory: platform.chrome_profile_directory || platform.chromeProfileDirectory || '',
+        loginStatus: status?.status || platform.login_status || platform.status || 'unknown',
+        collectReason: status?.reason || '',
+        lastCollectedAt: status?.lastCheckedAt || ''
+      })
+    }
+    registerAccountRow(rowMap, row, [row.id, row.accountId, row.account, catalog.name, catalog.dashboardName, ...(catalog.profileAliases || [])])
   }
 
   return finalizeAccountRows(rowMap)
+}
+
+function closeLoginModal() {
+  const id = loginModal.value.loginWindowId
+  loginModal.value.open = false
+  loginModal.value.loginWindowId = ''
+  if (id) closeAccountDataProfileLogin({ id, reason: 'user closed modal' }).catch(() => {})
+}
+
+async function openLogin(account, platform) {
+  loginModal.value = {
+    open: true,
+    loading: true,
+    title: `${account.account} / ${platform.label}`,
+    message: '正在打开浏览器 Profile...',
+    screenshotDataUrl: '',
+    loginWindowId: ''
+  }
+  try {
+    const result = await openAccountDataProfileLogin({
+      profile: platform.publishProfile,
+      platform: platform.id
+    })
+    loginModal.value.loading = false
+    loginModal.value.loginWindowId = result.loginWindow?.id || ''
+    loginModal.value.screenshotDataUrl = result.screenshot?.dataUrl || ''
+    loginModal.value.message = result.screenshot?.dataUrl
+      ? '浏览器已打开，请用手机扫码登录；登录完成后刷新账号池或等待下一轮采集。'
+      : (result.error || '浏览器已打开，但暂时没有拿到截图，请直接看桌面 Chrome 登录。')
+  } catch (err) {
+    loginModal.value.loading = false
+    loginModal.value.message = err?.message || '打开登录页失败'
+  }
 }
 
 async function loadAccounts() {
@@ -400,14 +470,15 @@ async function loadAccounts() {
     const bindings = Array.isArray(publishData.accounts) ? publishData.accounts : []
     const dashboardRows = Array.isArray(dashboardData.accounts) ? dashboardData.accounts : []
     collectionFailures.value = (Array.isArray(dashboardData.collectionFailures) ? dashboardData.collectionFailures : [])
+      .filter(item => item?.needsLogin || isLoginFailure(item?.message) || isLoginFailure(item?.error))
       .map((item, index) => ({
         key: `${item.account || ''}:${item.platform || ''}:${item.dataset || ''}:${index}`,
         account: item.account || '数据采集账号',
         groupName: item.groupName || '待接入',
-        message: item.message || item.error || '采集失败'
+        message: cleanFailureMessage(item.message || item.error || '采集失败')
       }))
-    accounts.value = buildAccountRows(catalog, bindings, dashboardRows)
-    if (!accounts.value.length) error.value = '后端账号目录为空'
+    accounts.value = buildAccountRows(catalog, bindings, dashboardRows, dashboardData.accountPlatformStatus || {})
+    if (!accounts.value.length) error.value = '暂无采集成功账号'
   } catch (err) {
     accounts.value = []
     collectionFailures.value = []
@@ -661,6 +732,17 @@ onMounted(loadAccounts)
   box-shadow: inset 0 0 0 1px color-mix(in srgb, #f59f00 42%, transparent);
 }
 
+.platform-chip.actionable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.platform-chip.actionable:hover {
+  filter: brightness(.96);
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
 .platform-chip.unknown {
   color: var(--text-muted);
   background: color-mix(in srgb, var(--text-muted) 10%, var(--surface));
@@ -841,6 +923,73 @@ onMounted(loadAccounts)
 .pool-table-row > em.empty {
   background: color-mix(in srgb, var(--text-muted) 14%, var(--surface));
   color: var(--text-muted);
+}
+
+.login-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, .42);
+}
+
+.login-modal {
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: 0 24px 80px rgba(15, 23, 42, .28);
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.login-modal header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.login-modal header button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface2);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.login-modal img {
+  width: 100%;
+  max-height: 62vh;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.login-modal p,
+.login-modal-state {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.login-modal-state {
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+  border: 1px dashed var(--border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--surface2) 62%, transparent);
 }
 
 @media (max-width: 900px) {

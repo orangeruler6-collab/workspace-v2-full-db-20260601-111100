@@ -491,8 +491,8 @@
         </template>
         <template v-else-if="selectedNode.type === 'ideaCard'">
           <div class="wf-side-callout">
-            <b>先定创意，再挂风格</b>
-            <span>切入点、框架和结尾先对齐，风格只做语气加成。</span>
+            <b>先定创意，再选风格/项目</b>
+            <span>切入点、框架和结尾先对齐，再选择项目风格或账号风格作为语气和结构参考。</span>
           </div>
           <label class="wf-field">
             <span>字数</span>
@@ -520,43 +520,71 @@
           </label>
           <section class="wf-style-picker">
             <div class="wf-style-picker-head">
-              <span>风格卡（可选）</span>
+              <span>风格 / 项目选择</span>
               <button class="btn btn-sm btn-soft" :disabled="styleLoading" @click="loadStyles(true)">
                 {{ styleLoading ? '读取中' : '刷新' }}
               </button>
             </div>
             <div class="wf-style-hero" :class="{ chosen: !!activeWorkflowStyle, empty: !activeWorkflowStyle }">
               <div class="wf-style-hero-copy">
-                <strong>{{ activeWorkflowStyle ? '已挂风格卡' : '风格卡未选' }}</strong>
-                <p>{{ activeWorkflowStyle ? (selectedNode.data.styleReason || activeWorkflowStyle.preview || makeStylePreview(activeWorkflowStyle.style)) : '先把创意卡定准，风格卡按需补上。' }}</p>
+                <strong>{{ activeWorkflowStyle ? '已挂载：' + styleKindLabel(activeWorkflowStyle) : '尚未选择风格/项目' }}</strong>
+                <p>{{ activeWorkflowStyle ? (selectedNode.data.styleReason || activeWorkflowStyle.preview || makeStylePreview(activeWorkflowStyle.style)) : '建议优先选择项目风格；没有项目风格时，再选择相近账号风格。' }}</p>
               </div>
-              <span class="wf-style-hero-badge">{{ activeWorkflowStyle ? '已挂载' : '可选' }}</span>
+              <span class="wf-style-hero-badge">{{ activeWorkflowStyle ? styleKindLabel(activeWorkflowStyle) : '待选择' }}</span>
             </div>
-            <div v-if="quickStyleChoices(selectedNode).length" class="wf-style-quick">
+            <div class="wf-style-quick">
               <button
                 class="wf-style-chip"
                 :class="{ active: !activeWorkflowStyle && selectedNode.data.styleSkipped !== false }"
                 @click="selectIdeaCardStyleById(selectedNode, '__none')">
-                不使用风格
+                不使用风格/项目
               </button>
-              <button
-                v-for="style in quickStyleChoices(selectedNode)"
-                :key="style.id"
-                class="wf-style-chip"
-                :class="{ active: activeWorkflowStyle?.id === style.id }"
-                @click="selectIdeaCardStyle(selectedNode, style)">
-                {{ style.name }}
-              </button>
+            </div>
+            <div v-if="projectStyleChoices(selectedNode).length" class="wf-style-group">
+              <span>项目风格优先</span>
+              <div class="wf-style-quick">
+                <button
+                  v-for="style in projectStyleChoices(selectedNode)"
+                  :key="style.id"
+                  class="wf-style-chip project"
+                  :class="{ active: activeWorkflowStyle?.id === style.id }"
+                  @click="selectIdeaCardStyle(selectedNode, style)">
+                  {{ style.name }}
+                </button>
+              </div>
+            </div>
+            <div v-if="accountStyleChoices(selectedNode).length" class="wf-style-group">
+              <span>账号风格备选</span>
+              <div class="wf-style-quick">
+                <button
+                  v-for="style in accountStyleChoices(selectedNode)"
+                  :key="style.id"
+                  class="wf-style-chip"
+                  :class="{ active: activeWorkflowStyle?.id === style.id }"
+                  @click="selectIdeaCardStyle(selectedNode, style)">
+                  {{ style.name }}
+                </button>
+              </div>
             </div>
             <label class="wf-style-select-wrap">
               <span class="wf-style-select-label">从完整列表里选</span>
               <select class="wf-side-input wf-style-select" :value="selectedNode.data.styleRef?.id || '__none'" @change="selectIdeaCardStyleById(selectedNode, $event.target.value)">
-                <option value="__none">不使用风格（默认）</option>
-                <option v-for="style in ideaCardStyleOptions(selectedNode)" :key="style.id" :value="style.id">
-                  {{ style.name }} · {{ formatStylePlatform(style.platform) }}
-                </option>
+                <option value="__none">不使用风格/项目（默认）</option>
+                <optgroup v-if="projectStyleOptions(selectedNode).length" label="项目风格">
+                  <option v-for="style in projectStyleOptions(selectedNode)" :key="style.id" :value="style.id">
+                    {{ style.name }} · 项目
+                  </option>
+                </optgroup>
+                <optgroup v-if="accountStyleOptions(selectedNode).length" label="账号风格">
+                  <option v-for="style in accountStyleOptions(selectedNode)" :key="style.id" :value="style.id">
+                    {{ style.name }} · {{ formatStylePlatform(style.platform) }}
+                  </option>
+                </optgroup>
               </select>
             </label>
+            <div v-if="!styleLoading && !workflowStyles.length" class="wf-style-empty">
+              暂未读取到风格/项目卡。可以先选择“不使用风格/项目”生成，后续维护完成后再补风格。
+            </div>
             <div v-if="activeWorkflowStyle" class="wf-style-current wf-style-current-compact">
               <b>{{ activeWorkflowStyle.name }}</b>
               <p>{{ selectedNode.data.styleReason || activeWorkflowStyle.preview || makeStylePreview(activeWorkflowStyle.style) }}</p>
@@ -1137,6 +1165,22 @@ function ideaCardStyleOptions(card) {
   return ranked.concat(rest)
 }
 
+function projectStyleOptions(card) {
+  return ideaCardStyleOptions(card).filter(style => style.type === 'project' || style.platform === 'project')
+}
+
+function accountStyleOptions(card) {
+  return ideaCardStyleOptions(card).filter(style => !(style.type === 'project' || style.platform === 'project'))
+}
+
+function projectStyleChoices(card) {
+  return ideaCardStyleChoices(card).filter(style => style.type === 'project' || style.platform === 'project').slice(0, 4)
+}
+
+function accountStyleChoices(card) {
+  return ideaCardStyleChoices(card).filter(style => !(style.type === 'project' || style.platform === 'project')).slice(0, 4)
+}
+
 function quickStyleChoices(card) {
   return ideaCardStyleChoices(card)
 }
@@ -1221,6 +1265,10 @@ function formatStylePlatform(platform) {
   if (platform === 'douyin') return '抖音'
   if (platform === 'project') return '项目'
   return platform || '风格'
+}
+
+function styleKindLabel(style) {
+  return style?.type === 'project' || style?.platform === 'project' ? '项目风格' : '账号风格'
 }
 
 async function loadStyles(force = false) {

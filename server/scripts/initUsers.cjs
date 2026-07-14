@@ -11,42 +11,49 @@ const DB_PATH = path.join(DATA_DIR, 'auth.db');
 
 // 用户名单
 const USERS = [
-  { name: '姚琳琳', group: '内容一组', type: '正式员工', onJob: true, isMinister: true },
+  { name: '姚琳琳', group: '内容一部', type: '正式员工', onJob: true, isMinister: true },
   { name: '姚希', group: '内容四组', type: '正式员工', onJob: true },
-  { name: '许树杰', group: '内容一组', type: '正式员工', onJob: true },
-  { name: '廖李星', group: '内容六组', type: '正式员工', onJob: true },
+  { name: '许树杰', group: '内容一部', type: '正式员工', onJob: true },
+  { name: '廖李星', group: '内容一部', type: '正式员工', onJob: true },
   { name: '吴皓轩', group: '内容六组', type: '正式员工', onJob: true },
   { name: '朱信宇', group: '内容五组', type: '正式员工', onJob: true },
-  { name: '许梦婷', group: '内容一组', type: '正式员工', onJob: true },
+  { name: '许梦婷', group: '内容一部', type: '正式员工', onJob: true },
   { name: '陈健伊', group: '内容四组', type: '正式员工', onJob: true },
-  { name: '刘登魁', group: '内容一组', type: '正式员工', onJob: true },
-  { name: '许国锬', group: '内容一组', type: '正式员工', onJob: true },
-  { name: '林孝添', group: '内容六组', type: '正式员工', onJob: true },
+  { name: '刘登魁', group: '内容六组', type: '正式员工', onJob: true },
+  { name: '许国锬', group: '内容一部', type: '正式员工', onJob: true },
+  { name: '林孝添', group: '内容一部', type: '正式员工', onJob: true },
   { name: '宋丽佳', group: '内容四组', type: '正式员工', onJob: true },
   { name: '傅思敏', group: '内容二组', type: '正式员工', onJob: true },
-  { name: '叶进生', group: '内容一组', type: '正式员工', onJob: true },
+  { name: '叶进生', group: '内容六组', type: '正式员工', onJob: true },
   { name: '曹媛', group: '内容三组', type: '正式员工', onJob: true },
   { name: '陈泓睿', group: '内容三组', type: '正式员工', onJob: true },
   { name: '林文涛', group: '内容三组', type: '正式员工', onJob: true },
   { name: '林心语', group: '内容五组', type: '正式员工', onJob: true },
-  { name: '高明镇', group: '内容一组', type: '正式员工', onJob: true },
+  { name: '高明镇', group: '内容一部', type: '正式员工', onJob: true },
   { name: '赵良杰', group: '内容二组', type: '正式员工', onJob: true },
   { name: '商光涵', group: '内容五组', type: '正式员工', onJob: true },
-  { name: '林语婷', group: '内容六组', type: '正式员工', onJob: true },
+  { name: '林语婷', group: '内容一部', type: '正式员工', onJob: true },
   { name: '林宇辰', group: '内容四组', type: '正式员工', onJob: true },
-  { name: '张碧珊', group: '内容六组', type: '正式员工', onJob: true },
+  { name: '张碧珊', group: '内容六组', type: '正式员工', onJob: false }, // 已离职
   { name: '陈乐恒', group: '内容二组', type: '正式员工', onJob: true },
   { name: '吴恒', group: '内容二组', type: '正式员工', onJob: true },
-  { name: '薛荐轩', group: '内容一组', type: '正式员工', onJob: true },
+  { name: '薛荐轩', group: '内容一部', type: '正式员工', onJob: true },
   { name: '杨鸿霆', group: '内容五组', type: '正式员工', onJob: true },
-  { name: '叶子健', group: '内容六组', type: '正式员工', onJob: true },
+  { name: '叶子健', group: '内容一部', type: '正式员工', onJob: true },
   { name: '李扬林', group: '内容二组', type: '正式员工', onJob: true },
   { name: '施律彬', group: '内容二组', type: '正式员工', onJob: false }, // 已离职
   { name: '刘佳琳', group: '内容三组', type: '实习生', onJob: true },
   { name: '罗晓棋', group: '内容二组', type: '实习生', onJob: true },
   { name: '肖子璇', group: '内容三组', type: '实习生', onJob: true },
-  { name: '叶颖', group: '内容一组', type: '实习生', onJob: true },
+  { name: '叶颖', group: '内容六组', type: '实习生', onJob: true },
+  { name: '张莹珊', group: '内容六组', type: '正式员工', onJob: true },
+  { name: '刘思嫚', group: '内容六组', type: '正式员工', onJob: true },
+  { name: '邓姝', group: '内容六组', type: '正式员工', onJob: true },
   { name: '吴楷煌', group: '内容五组', type: '实习生', onJob: true },
+  { name: '张家豪', group: 'MCN经纪组', type: '正式员工', onJob: true },
+  { name: '钟文祯', group: 'MCN经纪组', type: '正式员工', onJob: true },
+  { name: '龙星羽', group: 'MCN经纪组', type: '正式员工', onJob: true },
+  { name: '吴羿玄', group: 'MCN经纪组', type: '正式员工', onJob: true },
 ];
 
 function now() {
@@ -54,7 +61,7 @@ function now() {
 }
 
 // 组长名单
-const LEADERS = ['傅思敏', '陈健伊', '曹媛', '薛荐轩', '杨鸿霆', '张碧珊'];
+const LEADERS = ['薛荐轩', '傅思敏', '陈健伊', '曹媛', '杨鸿霆', '刘登魁'];
 
 async function init() {
   const db = new sqlite3.Database(DB_PATH);
@@ -147,6 +154,18 @@ async function init() {
       console.log(`Created: ${user.name} (${user.group}, ${user.type}, ${title || '成员'})`);
       created++;
     }
+  }
+
+  const inactiveUsers = USERS.filter(u => !u.onJob);
+  for (const user of inactiveUsers) {
+    const existing = await get('SELECT id FROM users WHERE username=?', [user.name]);
+    if (!existing) continue;
+    await run(
+      `UPDATE users SET group_name=?, employee_type=?, is_on_job=0, title='', updated_at=? WHERE id=?`,
+      [user.group, user.type, now(), existing.id]
+    );
+    console.log(`Marked off-job: ${user.name} (${user.group}, ${user.type})`);
+    updated++;
   }
 
   console.log(`\n完成！新建 ${created} 个用户，更新 ${updated} 个用户，跳过 ${skipped} 个`);

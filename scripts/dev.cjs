@@ -4,10 +4,8 @@ const fs = require('fs');
 const path = require('path');
 
 const root = path.join(__dirname, '..');
-const styleRoot = path.join(root, 'apps', 'account-style-library');
 const isWindows = process.platform === 'win32';
 const viteBin = path.join(root, 'node_modules', '.bin', isWindows ? 'vite.cmd' : 'vite');
-const styleDevBin = path.join(root, 'scripts', 'style-dev.cjs');
 const contentBoardProxyBin = path.join(root, 'scripts', 'content-board-proxy.cjs');
 const workspacePython = path.join(root, '.venv', isWindows ? 'Scripts\\python.exe' : 'bin/python');
 const douyinPython = path.join(root, 'tools', 'douyin-downloader', '.venv', isWindows ? 'Scripts\\python.exe' : 'bin/python');
@@ -127,4 +125,3 @@ run('vite', viteBin, []);
 if (process.env.CONTENT_BOARD_PROXY !== '0') {
   runOptional('content-board-proxy', process.execPath, [contentBoardProxyBin]);
 }
-run('style-workbench', process.execPath, [styleDevBin], styleRoot);

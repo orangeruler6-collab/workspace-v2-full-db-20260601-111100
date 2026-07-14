@@ -3,12 +3,14 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { randomUUID } = require('crypto');
 const { spawn, execFile } = require('child_process');
 const createLogger = require('../lib/logger.cjs');
 const searchIntent = require('../lib/searchIntent.cjs');
 const createSqliteAdapter = require('../lib/sqlite.cjs');
 const downloadAdapters = require('../lib/downloadAdapters.cjs');
 const { proxyAgentForUrl } = require('../lib/proxy.cjs');
+const { chromeProfileDirectoryMap } = require('../lib/accountCatalog.cjs');
 
 const logger = createLogger('routes:tools');
 
@@ -24,6 +26,11 @@ module.exports = function createToolsRoutes(deps) {
   const root = deps.root || path.join(serverDir, '..');
   const styleLibraryRoot = path.resolve(root, process.env.STYLE_LIBRARY_DIR || path.join(root, 'data', 'style-library'));
   const accountStylesDbPath = path.join(root, 'data', 'account_styles.db');
+  const chromeProfiles = chromeProfileDirectoryMap();
+  const openCliMain = process.env.OPENCLI_MAIN
+    || path.join(process.env.APPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Roaming'), 'npm', 'node_modules', '@jackwener', 'opencli', 'dist', 'src', 'main.js');
+  const openCliExtensionDir = process.env.OPENCLI_EXTENSION_DIR
+    || path.join(process.env.USERPROFILE || '', '.opencli', 'chrome-extension', 'opencli-webstore-unpacked');
 
   function delay(ms) {
     return new Promise(function(resolve) {
@@ -38,7 +45,7 @@ module.exports = function createToolsRoutes(deps) {
       const status = Number(httpMatch[1]);
       return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
     }
-    return /timeout|socket hang up|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|UNEXPECTED_EOF|network socket disconnected|secure TLS connection|fetch failed|Remote end closed/i.test(msg);
+    return /timeout|socket hang up|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|UNEXPECTED_EOF|network socket disconnected|secure TLS connection|fetch failed|Remote end closed|model returned empty content/i.test(msg);
   }
 
   function callTextModelWithRetry(systemPrompt, userPrompt, options) {
@@ -48,7 +55,9 @@ module.exports = function createToolsRoutes(deps) {
       model: options.model || process.env.FHL_DEFAULT_MODEL || 'gpt-5.5',
       maxTokens: options.maxTokens || 2000,
       temperature: options.temperature === undefined ? 0.7 : options.temperature,
-      timeoutMs: options.timeoutMs || 180000
+      timeoutMs: options.timeoutMs || 180000,
+      apiKey: options.apiKey,
+      baseUrl: options.baseUrl
     };
     const messages = [
       { role: 'system', content: systemPrompt || '' },
@@ -59,7 +68,10 @@ module.exports = function createToolsRoutes(deps) {
       const run = callOpenAICompatible
         ? callOpenAICompatible(messages, requestOptions)
         : callMiniMaxChat(systemPrompt, userPrompt, requestOptions.maxTokens, requestOptions);
-      return run.catch(function(err) {
+      return run.then(function(value) {
+        if (!String(value || '').trim()) throw new Error('model returned empty content');
+        return value;
+      }).catch(function(err) {
         if (index >= attempts - 1 || !isRetryableModelError(err)) throw err;
         logger.warn('comment model call failed, retrying', {
           attempt: index + 1,
@@ -94,92 +106,141 @@ module.exports = function createToolsRoutes(deps) {
   }
 
   function parseGeneratedCommentLines(reply, count) {
-    const rawLines = String(reply || '')
-      .replace(/<think>[\s\S]*?<\/think>/gi, '')
-      .replace(/```[\s\S]*?```/g, function(block) {
-        return block.replace(/```[a-z]*|```/gi, '');
-      })
-      .split(/\n+/);
     const comments = [];
     const seen = new Set();
-    for (let i = 0; i < rawLines.length; i++) {
-      let line = rawLines[i].trim();
-      if (!line || line.length < 2) continue;
-      line = line
-        .replace(/^(番\d+[.、:：]\s*)|(第[一二三四五六七八九十百千万\d]+[.、:：]\s*)|(评论?\d+[.、:：]\s*)|(弹幕?\d+[.、:：]\s*)|(^\d+[.、:：\-]\s*)/, '')
-        .replace(/^[-*•\s]+/, '')
-        .trim();
-      if (line.length < 2) continue;
-      const key = line.replace(/\s+/g, '');
-      if (seen.has(key)) continue;
-      seen.add(key);
-      comments.push(line);
-      if (comments.length >= count) break;
-    }
-    return comments;
-  }
 
-  function fallbackCommentItems(script, count, isDanmaku) {
-    const chunks = cleanText(script)
-      .replace(/\s+/g, ' ')
-      .split(/[。！？!?；;\n]+/)
-      .map(function(item) {
-        return item.replace(/[“”"']/g, '').trim();
-      })
-      .filter(function(item) {
-        return item.length >= 4 && item.length <= 36;
-      })
-      .slice(0, 40);
-    const base = isDanmaku
-      ? [
-        '这段有点意思',
-        '前方重点来了',
-        '这句可以',
-        '细节拉满',
-        '这里得暂停看',
-        '节奏突然起来了',
-        '懂的人已经懂了',
-        '这波信息量不小',
-        '看到这里绷不住',
-        '这段适合反复看'
-      ]
-      : [
-        '这段看完第一反应就是信息量挺大，细节越品越有意思',
-        '评论区先别急着站队，这里面有几个点其实挺值得聊',
-        '感觉这条最抓人的不是结果，是中间那个转折',
-        '这内容适合多看一遍，前后逻辑其实是连着的',
-        '有一说一，这个点比表面看起来更有讨论度',
-        '前面铺得挺稳，后面那个细节一下就把情绪带起来了',
-        '这类内容最怕空喊，但这条至少有具体东西能聊',
-        '我比较在意里面那个细节，感觉评论区会有不同看法',
-        '看完能理解为什么会有人反复讨论，确实有抓手',
-        '这条如果放到评论区，最容易讨论的应该就是那个关键点'
-      ];
-    const items = [];
-    const seen = new Set();
-    function push(item) {
-      const text = String(item || '').replace(/\s+/g, ' ').trim();
-      if (!text) return;
-      const clipped = isDanmaku ? text.slice(0, 24) : text.slice(0, 42);
-      const key = clipped.replace(/\s+/g, '');
+    function pushLine(value) {
+      let line = String(value || '').replace(/\uFFFD+/g, '').trim();
+      if (!line || line.length < 2) return;
+      line = line
+        .replace(/^(?:["'“”‘’]+|[,，\]\}]+)+/, '')
+        .replace(/(?:["'“”‘’]+|[,，\[\{]+)+$/, '')
+        .replace(/^(?:第[\d一二三四五六七八九十百千万]+(?:条|个)?|[\d一二三四五六七八九十百千万]+(?:条|个)|评论?\d*|弹幕?\d*)[.。、:：)）\-\s]+/, '')
+        .replace(/^\d{1,3}[.、:：)）\-]\s+/, '')
+        .replace(/^[-*•\s]+/, '')
+        .replace(/^(?:评论|弹幕|内容|文案)\s*[:：]\s*/, '')
+        .trim();
+      if (line.length < 2) return;
+      if (/^(?:以下|好的|当然|这里是|输出|结果)[:：，,\s]/.test(line)) return;
+      const key = line.replace(/\s+/g, '');
       if (seen.has(key)) return;
       seen.add(key);
-      items.push(clipped);
+      comments.push(line);
     }
-    chunks.forEach(function(chunk, index) {
-      if (isDanmaku) {
-        push(index % 2 ? '这里说的是' + chunk.slice(0, 10) : chunk.slice(0, 14) + '这段好看');
-      } else {
-        push('看到“' + chunk.slice(0, 18) + '”这段，感觉评论区肯定会有不同理解');
+
+    function walkJson(value) {
+      if (Array.isArray(value)) {
+        value.forEach(walkJson);
+        return;
       }
-    });
-    base.forEach(push);
-    let i = 0;
-    while (items.length < count) {
-      push(isDanmaku ? '第' + (i + 1) + '遍看还是有点东西' : '第' + (i + 1) + '个角度看，这条内容还是有继续讨论的空间');
-      i += 1;
+      if (value && typeof value === 'object') {
+        const direct = value.comment || value.text || value.content || value.output_text || value.reply || value.response || value.message || value.danmaku || value.barrage;
+        if (direct) pushLine(direct);
+        ['comments', 'items', 'list', 'result', 'results', 'data', 'danmakuList', 'choices', 'output', 'messages'].forEach(function(key) {
+          if (value[key]) walkJson(value[key]);
+        });
+        Object.keys(value).forEach(function(key) {
+          if (!value[key] || ['comment', 'text', 'content', 'output_text', 'reply', 'response', 'message', 'danmaku', 'barrage', 'comments', 'items', 'list', 'result', 'results', 'data', 'danmakuList', 'choices', 'output', 'messages'].includes(key)) return;
+          if (typeof value[key] === 'string' || Array.isArray(value[key]) || typeof value[key] === 'object') walkJson(value[key]);
+        });
+        return;
+      }
+      pushLine(value);
     }
-    return items.slice(0, count);
+
+    const text = typeof reply === 'string' ? reply : JSON.stringify(reply || '');
+    try {
+      walkJson(JSON.parse(text));
+    } catch {}
+
+    const arrayMatch = !comments.length && text.match(/\[[\s\S]*\]/);
+    if (arrayMatch) {
+      try {
+        walkJson(JSON.parse(arrayMatch[0]));
+      } catch {}
+    }
+
+    if (comments.length < count) {
+      String(text || '')
+        .replace(/<think>[\s\S]*?<\/think>/gi, '')
+        .replace(/```[\s\S]*?```/g, function(block) {
+          return block.replace(/```[a-z]*|```/gi, '');
+        })
+        .replace(/\\n/g, '\n')
+        .replace(/([^\n])\s+((?:\d{1,3}|第[\d一二三四五六七八九十百千万]+(?:条|个)?|评论?\d+|弹幕?\d+)[.。、:：)）])/g, '$1\n$2')
+        .split(/\n+|(?<=["”])\s*[,，]\s*(?=["“])/)
+        .forEach(pushLine);
+    }
+
+    return comments.slice(0, count);
+  }
+
+  function buildLocalCommentFallback(source, count, isDanmaku, existingSeen) {
+    const text = String(source || '');
+    const game = text.includes('\u9057\u5fd8\u4e4b\u6d77')
+      ? '\u9057\u5fd8\u4e4b\u6d77'
+      : '\u8fd9\u6e38\u620f';
+    const hooks = [];
+    if (/航海|海雾|海怪|岛屿|海图/.test(text)) hooks.push('航海探索');
+    if (/开放世界|地图|探索/.test(text)) hooks.push('开放世界');
+    if (/伙伴|船只|改造/.test(text)) hooks.push('船和伙伴');
+    if (/新手|引导|打磨/.test(text)) hooks.push('新手引导');
+    if (!hooks.length) hooks.push('内容');
+    const shortPool = isDanmaku
+      ? ['这能冲', '海雾味儿来了', '有点东西', '先码住', '船长集合', '捡垃圾启动', '别追了哥', '这怪好离谱', '我先上船', '懂了开捡']
+      : ['有点想试', '先蹲一手', '海雾这味对了', '捡垃圾玩家狂喜', '船长集合', '我先上船', '这怪别追我', '有点上头啊', '开放世界又香了', '先码住'];
+    const normalPool = [
+      game + '的海雾探索听着挺有画面感的。',
+      '如果真不是纯数值碾压，那还挺适合慢慢摸。',
+      '航海加捡垃圾，这组合对我杀伤力有点大。',
+      '新手引导慢可以接受，别后面也磨叽就行。',
+      '破船捡海图然后被怪追，这不就是我本人。',
+      '岛屿、遗迹、船改造都有的话，内容量应该不小。',
+      '这种边走边遇事的探索，比开图标清单舒服。',
+      '7月9日公测我去看看，主要想试试船只改造。',
+      '别的不说，海怪追人这段已经有直播效果了。',
+      '希望打磨跟得上，题材确实挺吸引人。'
+    ];
+    const memePool = [
+      '海怪：今天 KPI 有了。',
+      '捡垃圾玩家听到“残缺海图”已经坐直了。',
+      '我：探索一下。海怪：探索你。',
+      '这下不得不当海上保安了。',
+      '船还没改完，人先被改造心态了。',
+      '开放世界可以，别开放我的血压。',
+      '海雾一进，CPU 和方向感一起下线。',
+      '怪东西越多越好，我就爱这口不正常的。'
+    ];
+    const longPool = [
+      '感觉亮点在随机探索感，不是单纯堆大地图，这点如果做好会比较耐玩。',
+      '喜欢航海题材的人应该会吃这一套，海图、遗迹、船改造都很容易让人继续玩。',
+      '问题主要看公测优化和引导，如果前期节奏顺一点，留存会好很多。',
+      '比起数值碾压，我更期待那种一边跑图一边突然出事的体验。',
+      '这种游戏最怕内容空，希望岛屿和事件别只是换皮点位。'
+    ];
+    const pools = isDanmaku ? [shortPool, shortPool, memePool, normalPool] : [shortPool, normalPool, memePool, normalPool, longPool];
+    const variants = isDanmaku
+      ? ['', '先蹲', '这能看', '别鸽', '有画面了', '等实测', '确实香', '上船']
+      : ['', '先蹲', '看公测表现', '有点期待', '希望稳点', '想试试', '等实测', '题材可以', '路过心动', '别翻车'];
+    const out = [];
+    const seen = existingSeen || new Set();
+    let index = 0;
+    while (out.length < count && index < count * 20) {
+      const pool = pools[index % pools.length];
+      const seed = pool[Math.floor(index / pools.length) % pool.length];
+      const hook = hooks[index % hooks.length];
+      const round = Math.floor(index / (pool.length * pools.length));
+      const variant = index >= pool.length * pools.length ? variants[round % variants.length] : '';
+      const suffix = index >= pool.length * pools.length && variant ? (isDanmaku ? variant : '，' + variant) : '';
+      const line = String(seed + suffix).replace('这个这个', '这个').trim();
+      const key = line.replace(/\s+/g, '');
+      if (line && !seen.has(key)) {
+        seen.add(key);
+        out.push(line);
+      }
+      index += 1;
+    }
+    return out;
   }
 
   function extractBvid(value) {
@@ -677,13 +738,8 @@ module.exports = function createToolsRoutes(deps) {
     });
   }
 
-  function transcribeMediaFileWithSiliconFlow(videoPath, options) {
+  function extractAudioForTranscription(videoPath, options) {
     return new Promise(function(resolve) {
-      const siliconflowKey = deps.siliconflowApiKey || process.env.SILICONFLOW_API_KEY || process.env.SF_KEY || '';
-      if (!siliconflowKey) {
-        resolve({ text: '', error: 'SILICONFLOW_API_KEY is not configured' });
-        return;
-      }
       const audioPath = path.join(os.tmpdir(), 'bili_fallback_audio_' + Date.now() + '_' + Math.random().toString(36).slice(2) + '.mp3');
       const configuredMaxSeconds = Number(options && options.maxSeconds) || Number(process.env.BILIBILI_TRANSCRIBE_MAX_SECONDS) || 1800;
       const maxSeconds = Math.max(30, Math.min(7200, configuredMaxSeconds));
@@ -700,24 +756,162 @@ module.exports = function createToolsRoutes(deps) {
       ff.stderr.on('data', () => {});
       ff.on('error', function(err) {
         logger.warn('/api/transcribe/bilibili fallback audio extract failed', err);
-        resolve({ text: '', error: err.message || String(err) });
+        resolve({ audioPath: '', maxSeconds, error: err.message || String(err) });
       });
       ff.on('close', function(code) {
         if (code !== 0 || !fs.existsSync(audioPath)) {
           try { if (fs.existsSync(audioPath)) fs.unlinkSync(audioPath); } catch(e) {}
-          resolve({ text: '', error: 'ffmpeg audio extract failed' });
+          resolve({ audioPath: '', maxSeconds, error: 'ffmpeg audio extract failed' });
           return;
         }
+        resolve({ audioPath, maxSeconds });
+      });
+    });
+  }
 
-        let audioBuffer;
-        try {
-          audioBuffer = fs.readFileSync(audioPath);
-        } catch(e) {
-          try { fs.unlinkSync(audioPath); } catch(cleanErr) {}
-          resolve({ text: '', error: e.message || String(e) });
-          return;
+  function volcengineHeader(response, name) {
+    return response.headers[String(name || '').toLowerCase()] || '';
+  }
+
+  function extractVolcengineTranscript(data) {
+    const parts = [];
+    function visit(value) {
+      if (!value || typeof value !== 'object') return;
+      if (Array.isArray(value)) {
+        value.forEach(visit);
+        return;
+      }
+      ['text', 'utterance_text', 'result_text'].forEach(function(key) {
+        if (typeof value[key] === 'string' && value[key].trim()) parts.push(value[key].trim());
+      });
+      Object.keys(value).forEach(function(key) { visit(value[key]); });
+    }
+    visit(data);
+    return cleanText(Array.from(new Set(parts)).join('\n'));
+  }
+
+  function postJsonWithProxy(url, headers, body, timeoutMs) {
+    return new Promise(function(resolve, reject) {
+      const target = new URL(url);
+      const req = https.request({
+        hostname: target.hostname,
+        port: Number(target.port) || 443,
+        path: target.pathname + target.search,
+        method: 'POST',
+        agent: proxyAgentForUrl(url),
+        headers: Object.assign({}, headers, {
+          'Content-Length': Buffer.byteLength(body)
+        })
+      }, function(res) {
+        let data = '';
+        res.setEncoding('utf8');
+        res.on('data', function(chunk) { data += chunk; });
+        res.on('end', function() {
+          resolve({ statusCode: res.statusCode || 0, headers: res.headers || {}, body: data });
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(timeoutMs || 30000, function() {
+        req.destroy(new Error('request timeout'));
+      });
+      req.write(body);
+      req.end();
+    });
+  }
+
+  async function transcribeAudioFileWithVolcengine(audioPath, options) {
+    const apiKey = process.env.VOLCENGINE_ASR_API_KEY || process.env.VOLCENGINE_API_KEY || '';
+    const appKey = process.env.VOLCENGINE_ASR_APP_KEY || '';
+    const accessKey = process.env.VOLCENGINE_ASR_ACCESS_KEY || '';
+    if (!apiKey && (!appKey || !accessKey)) {
+      return { text: '', error: 'VOLCENGINE_ASR_API_KEY is not configured', provider: 'volcengine' };
+    }
+    let audioBuffer;
+    try {
+      audioBuffer = fs.readFileSync(audioPath);
+    } catch(e) {
+      return { text: '', error: e.message || String(e), provider: 'volcengine' };
+    }
+    const submitUrl = process.env.VOLCENGINE_ASR_SUBMIT_URL || 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/submit';
+    const queryUrl = process.env.VOLCENGINE_ASR_QUERY_URL || 'https://openspeech.bytedance.com/api/v3/auc/bigmodel/query';
+    const resourceId = process.env.VOLCENGINE_ASR_RESOURCE_ID || 'volc.seedasr.auc';
+    const timeoutMs = Number(process.env.VOLCENGINE_ASR_REQUEST_TIMEOUT_MS || 30000);
+    const pollIntervalMs = Number(process.env.VOLCENGINE_ASR_POLL_INTERVAL_MS || 1000);
+    const maxPollAttempts = Number(process.env.VOLCENGINE_ASR_MAX_POLL_ATTEMPTS || 120);
+    const taskId = randomUUID();
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Api-Resource-Id': resourceId,
+      'X-Api-Request-Id': taskId,
+      'X-Api-Sequence': '-1'
+    };
+    if (apiKey) {
+      headers['X-Api-Key'] = apiKey;
+    } else {
+      headers['X-Api-App-Key'] = appKey;
+      headers['X-Api-Access-Key'] = accessKey;
+    }
+    const submitBody = JSON.stringify({
+      user: { uid: process.env.VOLCENGINE_ASR_UID || 'content-board' },
+      audio: {
+        format: process.env.VOLCENGINE_ASR_AUDIO_FORMAT || 'mp3',
+        data: audioBuffer.toString('base64')
+      },
+      request: {
+        model_name: 'bigmodel',
+        enable_itn: true,
+        enable_punc: true,
+        show_utterances: false
+      }
+    });
+    try {
+      const submitResponse = await postJsonWithProxy(submitUrl, headers, submitBody, timeoutMs);
+      const submitStatus = volcengineHeader(submitResponse, 'X-Api-Status-Code');
+      if (submitStatus !== '20000000') {
+        return {
+          text: '',
+          error: 'Volcengine submit ' + (submitResponse.statusCode || '') + ' ' + submitStatus + ': ' + (volcengineHeader(submitResponse, 'X-Api-Message') || submitResponse.body || '').slice(0, 240),
+          provider: 'volcengine'
+        };
+      }
+      for (let attempt = 0; attempt < maxPollAttempts; attempt += 1) {
+        if (attempt > 0) await delay(pollIntervalMs);
+        const queryResponse = await postJsonWithProxy(queryUrl, headers, '{}', timeoutMs);
+        const queryStatus = volcengineHeader(queryResponse, 'X-Api-Status-Code');
+        if (queryStatus === '20000001' || queryStatus === '20000002') continue;
+        if (queryStatus !== '20000000') {
+          return {
+            text: '',
+            error: 'Volcengine query ' + (queryResponse.statusCode || '') + ' ' + queryStatus + ': ' + (volcengineHeader(queryResponse, 'X-Api-Message') || queryResponse.body || '').slice(0, 240),
+            provider: 'volcengine'
+          };
         }
+        const parsed = JSON.parse(queryResponse.body || '{}');
+        const text = extractVolcengineTranscript(parsed);
+        return text
+          ? { text, provider: 'volcengine' }
+          : { text: '', error: 'Volcengine returned empty transcript', provider: 'volcengine' };
+      }
+      return { text: '', error: 'Volcengine transcription timeout', provider: 'volcengine' };
+    } catch(e) {
+      return { text: '', error: e.message || String(e), provider: 'volcengine' };
+    }
+  }
 
+  function transcribeAudioFileWithSiliconFlow(audioPath, maxSeconds) {
+    return new Promise(function(resolve) {
+      const siliconflowKey = deps.siliconflowApiKey || process.env.SILICONFLOW_API_KEY || process.env.SF_KEY || '';
+      if (!siliconflowKey) {
+        resolve({ text: '', error: 'SILICONFLOW_API_KEY is not configured', provider: 'siliconflow' });
+        return;
+      }
+      let audioBuffer;
+      try {
+        audioBuffer = fs.readFileSync(audioPath);
+      } catch(e) {
+        resolve({ text: '', error: e.message || String(e), provider: 'siliconflow' });
+        return;
+      }
         const boundary = '----bili-fallback-' + Date.now();
         const body = Buffer.concat([
           Buffer.from('--' + boundary + '\r\n' +
@@ -750,29 +944,55 @@ module.exports = function createToolsRoutes(deps) {
           res.on('end', function() {
             try { fs.unlinkSync(audioPath); } catch(e) {}
             if (res.statusCode < 200 || res.statusCode >= 300) {
-              resolve({ text: '', error: 'SiliconFlow HTTP ' + res.statusCode + ': ' + data.substring(0, 200) });
+              resolve({ text: '', error: 'SiliconFlow HTTP ' + res.statusCode + ': ' + data.substring(0, 200), provider: 'siliconflow' });
               return;
             }
             try {
               const parsed = JSON.parse(data);
               const text = cleanText(parsed.text || parsed.result || '');
-              resolve(text ? { text } : { text: '', error: 'SiliconFlow returned empty transcript' });
+              resolve(text ? { text, provider: 'siliconflow' } : { text: '', error: 'SiliconFlow returned empty transcript', provider: 'siliconflow' });
             } catch(e) {
-              resolve({ text: '', error: 'SiliconFlow parse failed: ' + data.substring(0, 200) });
+              resolve({ text: '', error: 'SiliconFlow parse failed: ' + data.substring(0, 200), provider: 'siliconflow' });
             }
           });
         });
         req.on('error', function(err) {
-          try { fs.unlinkSync(audioPath); } catch(e) {}
-          resolve({ text: '', error: err.message || String(err) });
+          resolve({ text: '', error: err.message || String(err), provider: 'siliconflow' });
         });
         req.setTimeout(Math.max(240000, Math.min(900000, maxSeconds * 1000)), function() {
           req.destroy(new Error('SiliconFlow transcription timeout'));
         });
         req.write(body);
         req.end();
-      });
     });
+  }
+
+  async function transcribeAudioFileWithPreferredAsr(audioPath, options) {
+    const volcengine = await transcribeAudioFileWithVolcengine(audioPath, options);
+    if (volcengine.text) return volcengine;
+    const siliconflow = await transcribeAudioFileWithSiliconFlow(audioPath, Number(options && options.maxSeconds) || 1800);
+    if (siliconflow.text) {
+      return Object.assign({}, siliconflow, {
+        warning: 'Volcengine failed, used SiliconFlow fallback: ' + (volcengine.error || 'unknown')
+      });
+    }
+    return {
+      text: '',
+      error: (volcengine.error || 'Volcengine failed') + '; SiliconFlow fallback failed: ' + (siliconflow.error || 'unknown'),
+      provider: 'asr'
+    };
+  }
+
+  async function transcribeMediaFileWithPreferredAsr(videoPath, options) {
+    const extracted = await extractAudioForTranscription(videoPath, options);
+    if (!extracted.audioPath) return { text: '', error: extracted.error || 'ffmpeg audio extract failed' };
+    try {
+      return await transcribeAudioFileWithPreferredAsr(extracted.audioPath, Object.assign({}, options || {}, {
+        maxSeconds: extracted.maxSeconds || 1800
+      }));
+    } finally {
+      try { fs.unlinkSync(extracted.audioPath); } catch(e) {}
+    }
   }
 
   async function transcribeDownloadedBilibiliVideo(url, bvid, previousError) {
@@ -795,7 +1015,7 @@ module.exports = function createToolsRoutes(deps) {
         };
       }
       const videoPath = downloaded.files.find(file => downloadAdapters.getMediaKind(file) === 'video') || downloaded.files[0];
-      const transcribed = await transcribeMediaFileWithSiliconFlow(videoPath, {});
+      const transcribed = await transcribeMediaFileWithPreferredAsr(videoPath, {});
       if (!transcribed.text) {
         return {
           text: '',
@@ -806,7 +1026,8 @@ module.exports = function createToolsRoutes(deps) {
       return {
         text: transcribed.text,
         error: '',
-        source: 'bilibili-download:' + (downloaded.tool || 'unknown')
+        source: 'bilibili-download:' + (downloaded.tool || 'unknown') + ':' + (transcribed.provider || 'asr'),
+        warning: transcribed.warning || ''
       };
     } finally {
       if (outputDir) fs.rmSync(outputDir, { recursive: true, force: true });
@@ -851,31 +1072,34 @@ module.exports = function createToolsRoutes(deps) {
   }
 
   function buildSystemHealth(cb) {
-    const nextPort = Number(process.env.STYLE_WORKBENCH_PORT || process.env.NEXT_PORT || 3100);
-    const nextUrl = 'http://127.0.0.1:' + nextPort + '/style-workbench/api/health';
+    const apiPort = Number(process.env.PORT) || 5555;
+    const styleUrl = 'http://127.0.0.1:' + apiPort + '/api/health/style-workbench';
     const opencliBin = process.env.OPENCLI_BIN || (process.platform === 'win32' ? path.join(os.homedir(), 'AppData', 'Roaming', 'npm', 'opencli.cmd') : 'opencli');
-    let nextDone = false;
+    let styleDone = false;
     let cliDone = false;
-    let nextHealth = null;
+    let styleHealth = null;
     let cliHealth = null;
 
     function done() {
-      if (!nextDone || !cliDone) return;
-      const nextData = nextHealth && nextHealth.data ? nextHealth.data : {};
-      const nextOpencli = nextData.opencli || {};
-      const opencli = nextOpencli.ok ? nextOpencli : (cliHealth || nextOpencli || {});
+      if (!styleDone || !cliDone) return;
+      const styleData = styleHealth && styleHealth.data ? styleHealth.data : {};
+      const opencli = cliHealth || {};
+      const chatConfigured = Boolean(process.env.CHAT_API_KEY || process.env.OPENAI_API_KEY || process.env.FHL_API_KEY || process.env.OPENAI_BASE_URL || deps.minimaxApiKey);
+      const siliconflowConfigured = Boolean(process.env.SILICONFLOW_API_KEY || deps.siliconflowApiKey);
+      const feishuConfigured = Boolean(process.env.FEISHU_OPENCLI_AS || process.env.FEISHU_FOLDER_TOKEN || process.env.FEISHU_APP_ID);
       cb({
         ok: true,
         checkedAt: Date.now(),
         api: {
           ok: true,
-          port: Number(process.env.PORT) || 5555
+          port: apiPort
         },
         styleWorkbench: {
-          ok: Boolean(nextHealth && nextHealth.ok),
-          port: nextPort,
-          url: nextUrl,
-          error: nextHealth && nextHealth.error || ''
+          ok: Boolean(styleHealth && styleHealth.ok),
+          native: true,
+          url: styleUrl,
+          name: styleData.name || 'style-workbench-native',
+          error: styleHealth && styleHealth.error || ''
         },
         opencli: {
           ok: Boolean(opencli.ok),
@@ -884,29 +1108,29 @@ module.exports = function createToolsRoutes(deps) {
           error: opencli.error || ''
         },
         siliconflow: {
-          ok: Boolean(nextData.siliconflowConfigured || process.env.SILICONFLOW_API_KEY || deps.siliconflowApiKey),
-          configured: Boolean(nextData.siliconflowConfigured || process.env.SILICONFLOW_API_KEY || deps.siliconflowApiKey)
+          ok: siliconflowConfigured,
+          configured: siliconflowConfigured
         },
         chat: {
-          ok: Boolean(nextData.chatConfigured || process.env.FHL_API_KEY || process.env.OPENAI_API_KEY || process.env.OPENAI_BASE_URL || deps.minimaxApiKey),
-          configured: Boolean(nextData.chatConfigured || process.env.FHL_API_KEY || process.env.OPENAI_API_KEY || process.env.OPENAI_BASE_URL || deps.minimaxApiKey),
-          model: nextData.chat && nextData.chat.model || process.env.FHL_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-5.5',
-          wireApi: nextData.chat && nextData.chat.wireApi || process.env.OPENAI_WIRE_API || 'responses',
-          proxyConfigured: Boolean(nextData.chat && nextData.chat.proxyConfigured || process.env.FHL_PROXY_URL || process.env.MODEL_PROXY_URL || process.env.OPENAI_BASE_URL)
+          ok: chatConfigured,
+          configured: chatConfigured,
+          model: process.env.CHAT_MODEL || process.env.FHL_DEFAULT_MODEL || process.env.OPENAI_MODEL || 'gpt-5.5',
+          wireApi: process.env.CHAT_WIRE_API || process.env.OPENAI_WIRE_API || 'responses',
+          proxyConfigured: Boolean(process.env.CHAT_PROXY_URL || process.env.FHL_PROXY_URL || process.env.MODEL_PROXY_URL || process.env.OPENAI_BASE_URL)
         },
         feishu: {
-          ok: Boolean(nextData.feishuConfigured || nextData.feishu && nextData.feishu.configured),
-          configured: Boolean(nextData.feishuConfigured || nextData.feishu && nextData.feishu.configured),
-          doctorOk: Boolean(nextData.feishu && nextData.feishu.doctor && nextData.feishu.doctor.ok),
-          error: nextData.feishu && nextData.feishu.error || ''
+          ok: feishuConfigured,
+          configured: feishuConfigured,
+          doctorOk: false,
+          error: ''
         },
-        libraryRoot: nextData.libraryRoot || styleLibraryRoot
+        libraryRoot: styleData.libraryRoot || styleLibraryRoot
       });
     }
 
-    fetchJson(nextUrl, 4500, function(err, result) {
-      nextHealth = err ? { ok: false, error: err.message } : result;
-      nextDone = true;
+    fetchJson(styleUrl, 4500, function(err, result) {
+      styleHealth = err ? { ok: false, error: err.message } : result;
+      styleDone = true;
       done();
     });
     execVersion(opencliBin, ['--version'], 4500, function(result) {
@@ -1417,7 +1641,7 @@ module.exports = function createToolsRoutes(deps) {
 
   function extractDouyinUrl(value) {
     const text = String(value || '');
-    const match = text.match(/https?:\/\/(?:[^\s"'<>，。！？；：、）】》」』\])}]*\.)?(?:douyin|iesdouyin)\.com\/[^\s"'<>，。！？；：、）】》」』\])}]+/i);
+    const match = text.match(/https?:\/\/(?:[a-z0-9-]+\.)?(?:douyin|iesdouyin)\.com\/[^\s"'<>，。！？；：、）】》」』\]\)}]+/i);
     if (match) return match[0];
     const awemeId = extractAwemeId(text);
     return awemeId ? 'https://www.douyin.com/video/' + awemeId : '';
@@ -1519,6 +1743,714 @@ module.exports = function createToolsRoutes(deps) {
     const preferred = process.env.OPENCLI_BIN || process.env.USAGI_OPENCLI_PATH || 'C:\\Users\\Administrator\\AppData\\Roaming\\npm\\opencli.cmd';
     if (preferred && fs.existsSync(preferred)) return preferred;
     return process.platform === 'win32' ? 'opencli.cmd' : 'opencli';
+  }
+
+  function runPlayCountOpenCli(args, timeout) {
+    if (fs.existsSync(openCliMain)) {
+      return runCommand(process.execPath, [openCliMain].concat(args || []), { timeout: timeout || 30000 });
+    }
+    return runCommand(platformOpenCliBin(), args || [], { timeout: timeout || 30000 });
+  }
+
+  const douyinPlayCountState = {
+    running: false,
+    lastResult: null,
+    cooldowns: new Map(),
+    profileArgs: null,
+    launchedChromePid: 0
+  };
+
+  function encodeOpenCliBrowserEval(source) {
+    return 'eval(atob(' + JSON.stringify(Buffer.from(String(source || ''), 'utf8').toString('base64')) + '))';
+  }
+
+  function douyinPlayCountProfileArgs() {
+    if (Array.isArray(douyinPlayCountState.profileArgs)) return douyinPlayCountState.profileArgs.slice();
+    const profile = String(
+      process.env.CHABOFANG_OPENCLI_PROFILE
+      || process.env.DOUYIN_PLAY_COUNT_OPENCLI_PROFILE
+      || process.env.ACCOUNT_DATA_OPENCLI_PROFILE
+      || 'collector-link-crawl'
+    ).trim();
+    return profile ? ['--profile', profile] : [];
+  }
+
+  function douyinPlayCountPreferredProfile() {
+    return String(
+      process.env.CHABOFANG_OPENCLI_PROFILE
+      || process.env.DOUYIN_PLAY_COUNT_OPENCLI_PROFILE
+      || process.env.ACCOUNT_DATA_OPENCLI_PROFILE
+      || 'collector-link-crawl'
+    ).trim();
+  }
+
+  function chromeBin() {
+    const candidates = [
+      process.env.CHROME_BIN,
+      'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+      'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe'
+    ].filter(Boolean);
+    return candidates.find(function(file) { return fs.existsSync(file); }) || 'chrome.exe';
+  }
+
+  function chromeUserDataDir() {
+    return process.env.CHROME_USER_DATA_DIR
+      || path.join(process.env.LOCALAPPDATA || path.join(process.env.USERPROFILE || '', 'AppData', 'Local'), 'Google', 'Chrome', 'User Data');
+  }
+
+  function launchPlayCountChromeProfile(profileAlias) {
+    const profile = String(profileAlias || '').trim();
+    const profileDirectory = chromeProfiles[profile] || '';
+    if (!profileDirectory) return { ok: false, error: '没有找到 Chrome Profile 映射：' + profile, profile };
+    const hasOpenCliExtension = fs.existsSync(path.join(openCliExtensionDir, 'manifest.json'));
+    const args = [
+      '--new-window',
+      '--user-data-dir=' + chromeUserDataDir(),
+      '--no-first-run',
+      '--no-default-browser-check',
+      '--profile-directory=' + profileDirectory
+    ];
+    if (hasOpenCliExtension) args.push('--load-extension=' + openCliExtensionDir);
+    args.push('https://chabofang.com/');
+    try {
+      const child = spawn(chromeBin(), args, {
+        detached: true,
+        stdio: 'ignore',
+        windowsHide: true
+      });
+      child.unref();
+      return { ok: true, profile, profileDirectory, pid: child.pid || 0, extensionDir: hasOpenCliExtension ? openCliExtensionDir : '' };
+    } catch (e) {
+      return { ok: false, profile, profileDirectory, error: e.message || String(e) };
+    }
+  }
+
+  function isOpenCliProfileDisconnected(result) {
+    return /Browser profile .*not connected|No Browser Bridge profiles connected|not connected|OpenCLI Browser Bridge not connected/i.test(
+      String(result && (result.stderr || result.stdout) || '')
+    );
+  }
+
+  function pickConnectedOpenCliProfile(text) {
+    const lines = String(text || '').split(/\r?\n/);
+    for (const line of lines) {
+      if (!/connected/i.test(line) || /not connected|Disconnected/i.test(line)) continue;
+      if (/Connected Browser Bridge profiles|No Browser Bridge profiles|Update available|Run:/i.test(line)) continue;
+      const match = line.match(/^\s*(\S+)\s+(\S+)\s+.*connected/i);
+      if (match && !/^Browser$/i.test(match[2] || '')) return match[2] || match[1];
+    }
+    return '';
+  }
+
+  async function listConnectedPlayCountProfile() {
+    const listed = await runPlayCountOpenCli(['profile', 'list'], 8000);
+    return pickConnectedOpenCliProfile((listed.stdout || '') + '\n' + (listed.stderr || ''));
+  }
+
+  async function connectedPlayCountProfileArgs(forceLaunch) {
+    const preferred = douyinPlayCountPreferredProfile();
+    let profile = '';
+    if (forceLaunch) {
+      const launched = launchPlayCountChromeProfile(preferred);
+      if (launched && launched.pid) douyinPlayCountState.launchedChromePid = launched.pid;
+      logger.info('/api/douyin/play-count launched fresh chrome profile', launched);
+      if (launched && launched.ok) {
+        douyinPlayCountState.profileArgs = ['--profile', preferred];
+        // Start browser work immediately. The bind loop below waits for the bridge,
+        // avoiding several seconds of profile-list polling before the first action.
+        return douyinPlayCountState.profileArgs.slice();
+      }
+    } else {
+      profile = await listConnectedPlayCountProfile().catch(function() { return ''; });
+    }
+    if (!profile) {
+      if (!forceLaunch) {
+      const launched = launchPlayCountChromeProfile(preferred);
+      if (launched && launched.pid) douyinPlayCountState.launchedChromePid = launched.pid;
+      logger.info('/api/douyin/play-count launched chrome profile', launched);
+      }
+      const deadline = Date.now() + Number(process.env.DOUYIN_PLAY_COUNT_PROFILE_CONNECT_TIMEOUT_MS || 8000);
+      while (Date.now() < deadline) {
+        await delay(100);
+        profile = await listConnectedPlayCountProfile().catch(function() { return ''; });
+        if (profile) break;
+      }
+    }
+    if (!profile) return [];
+    douyinPlayCountState.profileArgs = ['--profile', profile];
+    return douyinPlayCountState.profileArgs.slice();
+  }
+
+  async function runPlayCountBrowser(session, args, timeout, options) {
+    const finalArgs = ['browser', session].concat(args || []);
+    const result = await runPlayCountOpenCli(douyinPlayCountProfileArgs().concat(finalArgs), timeout || 30000);
+    if (!isOpenCliProfileDisconnected(result)) return result;
+    if (options && options.noFallback) return result;
+    const fallbackProfileArgs = await connectedPlayCountProfileArgs().catch(function() { return []; });
+    if (!fallbackProfileArgs.length) return result;
+    return runPlayCountOpenCli(fallbackProfileArgs.concat(finalArgs), timeout || 30000);
+  }
+
+  function normalizeDouyinPlayCountKey(input) {
+    const awemeId = extractAwemeId(input);
+    if (awemeId) return awemeId;
+    const url = extractDouyinUrl(input);
+    return (url || String(input || '')).trim().toLowerCase().replace(/[?#].*$/, '');
+  }
+
+  function douyinPlayCountCooldownMs() {
+    const minutes = Number(process.env.DOUYIN_PLAY_COUNT_COOLDOWN_MINUTES || process.env.CHABOFANG_COOLDOWN_MINUTES || 180);
+    return Math.max(1, minutes || 180) * 60 * 1000;
+  }
+
+  function cleanupPlayCountCooldowns(now) {
+    const at = now || Date.now();
+    for (const entry of douyinPlayCountState.cooldowns.entries()) {
+      if (!entry[1] || entry[1] <= at) douyinPlayCountState.cooldowns.delete(entry[0]);
+    }
+  }
+
+  function playCountCooldownPayload(key) {
+    cleanupPlayCountCooldowns();
+    let next = 0;
+    if (key) {
+      next = Number(douyinPlayCountState.cooldowns.get(key) || 0);
+    } else {
+      for (const value of douyinPlayCountState.cooldowns.values()) {
+        if (Number(value || 0) > next) next = Number(value || 0);
+      }
+    }
+    return {
+      running: douyinPlayCountState.running,
+      lastResult: douyinPlayCountState.lastResult,
+      nextAvailableAt: next > Date.now() ? new Date(next).toISOString() : '',
+      cooldownSeconds: next > Date.now() ? Math.ceil((next - Date.now()) / 1000) : 0
+    };
+  }
+
+  function numberFromPlayCountValue(value) {
+    if (typeof value === 'number' && Number.isFinite(value)) return Math.round(value);
+    const text = String(value || '').replace(/,/g, '').trim();
+    if (!text) return 0;
+    const match = text.match(/([\d.]+)\s*(亿|万|k|K)?/);
+    if (!match) return 0;
+    const base = Number(match[1]);
+    if (!Number.isFinite(base)) return 0;
+    const unit = match[2];
+    if (unit === '亿') return Math.round(base * 100000000);
+    if (unit === '万') return Math.round(base * 10000);
+    if (unit === 'k' || unit === 'K') return Math.round(base * 1000);
+    return Math.round(base);
+  }
+
+  function buildPlayCountResult(raw) {
+    const data = raw && (raw.data || raw.result || raw);
+    const comprehensive = numberFromPlayCountValue(
+      data && (data.vv_cnt || data.comprehensivePlayCount || data.comprehensive_play_count || data.total_play_count || data.video_play_count)
+    );
+    const natural = numberFromPlayCountValue(
+      data && (data.play_count || data.naturalPlayCount || data.natural_play_count || data.real_play_count)
+    );
+    if (!comprehensive && !natural) return null;
+    const finalComprehensive = comprehensive || natural;
+    const finalNatural = natural || comprehensive;
+    return {
+      comprehensivePlayCount: finalComprehensive,
+      comprehensive_play_count: finalComprehensive,
+      naturalPlayCount: finalNatural,
+      natural_play_count: finalNatural,
+      awemeId: data && (data.aweme_id || data.awemeId) || '',
+      verdict: finalComprehensive < 100000 || finalComprehensive - finalNatural > 10000
+        ? '该视频虚量较少，结果仅供参考'
+        : '该视频虚量较多，结果仅供参考',
+      source: 'chabofang.com'
+    };
+  }
+
+  async function postChabofangPlayCount(videoUrl, turnstileToken) {
+    const controller = new AbortController();
+    const timer = setTimeout(function() {
+      controller.abort();
+    }, Number(process.env.DOUYIN_PLAY_COUNT_SITE_TIMEOUT_MS || 30000));
+    try {
+      const response = await fetch('https://chabofang.com/webapi/chabofangliang', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Origin': 'https://chabofang.com',
+          'Referer': 'https://chabofang.com/',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/149.0.0.0 Safari/537.36'
+        },
+        body: JSON.stringify({ video_url: videoUrl, turnstile_token: turnstileToken }),
+        signal: controller.signal
+      });
+      const json = await response.json().catch(function() { return null; });
+      if (!response.ok) {
+        return { ok: false, reason: 'http_' + response.status, message: '查播放接口请求失败', payload: json };
+      }
+      if (!json || json.code !== 0) {
+        return { ok: false, reason: 'site_failed', message: json && json.msg || '查播放接口未返回成功', payload: json };
+      }
+      return { ok: true, data: json.data || json };
+    } catch (e) {
+      return { ok: false, reason: e && e.name === 'AbortError' ? 'site_timeout' : 'site_request_failed', message: e && e.name === 'AbortError' ? '查播放接口请求超时' : (e.message || String(e)) };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function waitChabofangTurnstileToken(session) {
+    const deadline = Date.now() + Number(process.env.DOUYIN_PLAY_COUNT_TOKEN_TIMEOUT_MS || 15000);
+    const tokenJs = encodeOpenCliBrowserEval(`
+      (() => {
+        const tokenEl = document.querySelector('input[name="cf-turnstile-response"], textarea[name="cf-turnstile-response"], [name="cf-turnstile-response"]');
+        const text = document.body && document.body.innerText || '';
+        return {
+          ok: true,
+          token: tokenEl && tokenEl.value || '',
+          hasTurnstile: Boolean(window.turnstile),
+          text: text.slice(0, 900)
+        };
+      })()
+    `);
+    while (Date.now() < deadline) {
+      const result = await runPlayCountBrowser(session, ['eval', tokenJs], 10000);
+      const payload = parseJsonLoose(result.stdout);
+      if (result.ok && payload && payload.token) return payload.token;
+      await delay(400);
+    }
+    return '';
+  }
+
+  async function clickChabofangHumanVerification(session, videoUrl) {
+    const prepareTargetJs = encodeOpenCliBrowserEval(`
+      (() => {
+        const videoInput = document.querySelector('#douyin-video-url');
+        if (videoInput) {
+          const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+          if (descriptor && descriptor.set) descriptor.set.call(videoInput, ${JSON.stringify(videoUrl || '')});
+          else videoInput.value = ${JSON.stringify(videoUrl || '')};
+          videoInput.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText' }));
+          videoInput.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        const input = document.querySelector('[name="cf-turnstile-response"]');
+        const host = input && input.parentElement;
+        if (!host) return { ok: false, reason: 'no_turnstile_host' };
+        host.id = 'usagi-turnstile-checkbox-target';
+        host.style.width = '44px';
+        host.style.height = '70px';
+        host.style.overflow = 'visible';
+        const rect = host.getBoundingClientRect();
+        return { ok: rect.width > 0 && rect.height > 0, x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+      })()
+    `);
+    const prepared = await runPlayCountBrowser(session, ['eval', prepareTargetJs], 8000).catch(function() { return null; });
+    const preparedPayload = parseJsonLoose(prepared && prepared.stdout);
+    if (prepared && prepared.ok && preparedPayload && preparedPayload.ok) {
+      const clicked = await runPlayCountBrowser(session, ['click', '#usagi-turnstile-checkbox-target'], 5000).catch(function() { return null; });
+      const clickedPayload = parseJsonLoose(clicked && clicked.stdout);
+      const clickedResult = clickedPayload && (clickedPayload.data || clickedPayload.result || clickedPayload);
+      if (clicked && clicked.ok && (!clickedResult || clickedResult.clicked !== false)) return true;
+    }
+
+    const attempts = [
+      ['check', '--role', 'checkbox'],
+      ['click', '--role', 'checkbox'],
+      ['click', 'input[type="checkbox"]']
+    ];
+    for (const args of attempts) {
+      const result = await runPlayCountBrowser(session, args, 5000).catch(function() { return null; });
+      const payload = parseJsonLoose(result && result.stdout);
+      const clickResult = payload && (payload.data || payload.result || payload);
+      if (result && result.ok && clickResult && (clickResult.clicked || clickResult.checked || clickResult.changed)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function findChabofangPlayCountPayload(value, seen, depth) {
+    if (value === null || value === undefined || depth > 10) return null;
+    if (typeof value === 'string') {
+      const text = value.trim();
+      if (!text || (text[0] !== '{' && text[0] !== '[')) return null;
+      try {
+        return findChabofangPlayCountPayload(JSON.parse(text), seen, depth + 1);
+      } catch (e) {
+        return null;
+      }
+    }
+    if (typeof value !== 'object') return null;
+    if (seen.has(value)) return null;
+    seen.add(value);
+
+    if (Object.prototype.hasOwnProperty.call(value, 'vv_cnt')
+      || Object.prototype.hasOwnProperty.call(value, 'play_count')) {
+      return value;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'code')
+      && (Number(value.code) !== 0 || value.msg || value.message)) {
+      return value;
+    }
+    if (Object.prototype.hasOwnProperty.call(value, 'code') && value.data) {
+      const nested = findChabofangPlayCountPayload(value.data, seen, depth + 1);
+      if (nested) return value;
+    }
+
+    const preferredKeys = ['body', 'data', 'result', 'response', 'payload', 'entries'];
+    for (const key of preferredKeys) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+      const found = findChabofangPlayCountPayload(value[key], seen, depth + 1);
+      if (found) return found;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        const found = findChabofangPlayCountPayload(item, seen, depth + 1);
+        if (found) return found;
+      }
+    }
+    return null;
+  }
+
+  function unwrapOpenCliBrowserPayload(value) {
+    let current = value;
+    for (let depth = 0; depth < 6 && current && typeof current === 'object'; depth += 1) {
+      const nested = current.data && typeof current.data === 'object'
+        ? current.data
+        : (current.result && typeof current.result === 'object' ? current.result : null);
+      if (!nested) break;
+      if (Object.prototype.hasOwnProperty.call(nested, 'ok')
+        || Object.prototype.hasOwnProperty.call(nested, 'body')
+        || Object.prototype.hasOwnProperty.call(nested, 'error')
+        || Object.prototype.hasOwnProperty.call(nested, 'triggered')) {
+        current = nested;
+        continue;
+      }
+      break;
+    }
+    return current;
+  }
+
+  function chabofangResultFromValue(value) {
+    const payload = findChabofangPlayCountPayload(value, new Set(), 0);
+    if (!payload) {
+      return { ok: false, reason: 'site_failed', message: '播放量接口已返回，但结果格式无法识别' };
+    }
+    if (Object.prototype.hasOwnProperty.call(payload, 'code') && Number(payload.code) !== 0) {
+      return {
+        ok: false,
+        reason: 'site_failed',
+        message: payload.msg || payload.message || '查播放页面返回查询失败'
+      };
+    }
+    return { ok: true, data: payload.data || payload };
+  }
+
+  function findChabofangNetworkBody(value, seen, depth) {
+    if (!value || typeof value !== 'object' || depth > 10 || seen.has(value)) return null;
+    seen.add(value);
+    const url = String(value.url || value.href || value.requestUrl || '').toLowerCase();
+    if (url.includes('/webapi/chabofangliang')) {
+      return value.body || value.response || value.data || value;
+    }
+    for (const nested of Object.values(value)) {
+      if (!nested || typeof nested !== 'object') continue;
+      const found = findChabofangNetworkBody(nested, seen, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  function parseChabofangNetworkCommand(result) {
+    if (!result || (!result.ok && !result.stdout)) return null;
+    const raw = String(result.stdout || '').trim();
+    const candidates = [];
+    const whole = parseJsonLoose(raw);
+    if (whole) candidates.push(whole);
+    for (const line of raw.split(/\r?\n/)) {
+      const text = line.trim();
+      if (!text || text[0] !== '{' && text[0] !== '[') continue;
+      try { candidates.push(JSON.parse(text)); } catch (e) {}
+    }
+    for (const candidate of candidates) {
+      const body = findChabofangNetworkBody(candidate, new Set(), 0);
+      const payload = findChabofangPlayCountPayload(body || candidate, new Set(), 0);
+      if (!payload) continue;
+      return chabofangResultFromValue(body || candidate);
+    }
+    return null;
+  }
+
+  async function waitForChabofangNetworkResult(session) {
+    const deadline = Date.now() + Number(process.env.DOUYIN_PLAY_COUNT_RESULT_TIMEOUT_MS || 10000);
+    while (Date.now() < deadline) {
+      const network = await runPlayCountBrowser(
+        session,
+        ['network', '--since', '30s', '--filter', 'vv_cnt,play_count', '--raw'],
+        4000,
+        { noFallback: true }
+      ).catch(function() { return null; });
+      const parsed = parseChabofangNetworkCommand(network);
+      if (parsed) return parsed;
+      await delay(100);
+    }
+    return null;
+  }
+
+  function parseChabofangCapturedResult(captured) {
+    const capturePayload = unwrapOpenCliBrowserPayload(parseJsonLoose(captured && captured.stdout));
+    if (!captured || !captured.ok || !capturePayload || !capturePayload.ok) {
+      return {
+        ok: false,
+        reason: capturePayload && capturePayload.reason || 'site_failed',
+        message: capturePayload && capturePayload.error || '查询页面没有返回播放量接口结果'
+      };
+    }
+    return chabofangResultFromValue(capturePayload.body);
+  }
+
+  async function queryChabofangInBrowser(session, videoUrl) {
+    const prepareJs = encodeOpenCliBrowserEval(`
+      (async () => {
+        const value = ${JSON.stringify(videoUrl)};
+        const input = document.querySelector('#douyin-video-url');
+        if (!input) return { ok: false, error: '查播放页面输入框未加载完成' };
+        const descriptor = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value');
+        if (descriptor && descriptor.set) descriptor.set.call(input, value);
+        else input.value = value;
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+
+        const tokenDeadline = Date.now() + 2500;
+        let token = '';
+        while (Date.now() < tokenDeadline) {
+          const tokenEl = document.querySelector('[name="cf-turnstile-response"]');
+          token = tokenEl && tokenEl.value || '';
+          if (token) break;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        if (!token) return { ok: false, error: '安全验证未完成' };
+
+        window.__usagiChabofangResponse = null;
+        if (!window.__usagiChabofangCaptureInstalled) {
+          window.__usagiChabofangCaptureInstalled = true;
+          const originalFetch = window.fetch;
+          window.fetch = async function(...args) {
+            const response = await originalFetch.apply(this, args);
+            const requestUrl = String(args[0] && args[0].url || args[0] || '');
+            if (requestUrl.includes('/webapi/chabofangliang')) {
+              window.__usagiChabofangRequestStarted = true;
+              response.clone().text().then(text => {
+                window.__usagiChabofangResponse = text;
+              }).catch(() => {});
+            }
+            return response;
+          };
+
+          const originalOpen = XMLHttpRequest.prototype.open;
+          XMLHttpRequest.prototype.open = function(method, requestUrl, ...rest) {
+            this.__usagiRequestUrl = String(requestUrl || '');
+            if (this.__usagiRequestUrl.includes('/webapi/chabofangliang')) {
+              window.__usagiChabofangRequestStarted = true;
+            }
+            this.addEventListener('loadend', function() {
+              if (this.__usagiRequestUrl.includes('/webapi/chabofangliang')) {
+                window.__usagiChabofangResponse = this.responseText || '';
+              }
+            }, { once: true });
+            return originalOpen.call(this, method, requestUrl, ...rest);
+          };
+        }
+        window.__usagiChabofangRequestStarted = false;
+        window.__usagiChabofangSubmitStarted = false;
+        const form = input.closest('form');
+        if (form && !form.__usagiSubmitListenerInstalled) {
+          form.__usagiSubmitListenerInstalled = true;
+          form.addEventListener('submit', () => {
+            window.__usagiChabofangSubmitStarted = true;
+          }, true);
+        }
+        const buttons = Array.from(document.querySelectorAll('button'));
+        const button = buttons.find(item => (item.innerText || item.textContent || '').replace(/\s+/g, '') === '\u7acb\u5373\u67e5\u8be2')
+          || document.querySelector('button[type="submit"]');
+        if (!button || button.disabled) {
+          return { ok: false, error: button && button.innerText || '查询按钮不可用' };
+        }
+        button.id = 'usagi-chabofang-query-button';
+        return { ok: true, value: input.value, tokenLength: token.length, buttonText: (button.innerText || button.textContent || '').trim() };
+      })()
+    `);
+    const prepared = await runPlayCountBrowser(session, ['eval', prepareJs], 10000).catch(function() { return null; });
+    const preparedPayload = unwrapOpenCliBrowserPayload(parseJsonLoose(prepared && prepared.stdout));
+    if (!prepared || !prepared.ok || !preparedPayload || !preparedPayload.ok) {
+      return {
+        ok: false,
+        reason: 'cloudflare',
+        message: preparedPayload && preparedPayload.error || '安全验证未完成'
+      };
+    }
+
+    const clicked = await runPlayCountBrowser(
+      session,
+      ['click', '#usagi-chabofang-query-button'],
+      5000,
+      { noFallback: true }
+    ).catch(function() { return null; });
+    const clickedPayload = unwrapOpenCliBrowserPayload(parseJsonLoose(clicked && clicked.stdout));
+    const clickedResult = clickedPayload && (clickedPayload.data || clickedPayload.result || clickedPayload);
+    if (!clicked || !clicked.ok || (clickedResult && clickedResult.clicked === false)) {
+      const fallbackClickJs = encodeOpenCliBrowserEval(`
+        (() => {
+          const button = document.querySelector('#usagi-chabofang-query-button');
+          if (!button || button.disabled) return { ok: false };
+          const form = button.form || button.closest('form');
+          if (form && typeof form.requestSubmit === 'function') form.requestSubmit(button);
+          else button.click();
+          return { ok: true };
+        })()
+      `);
+      const fallbackClicked = await runPlayCountBrowser(session, ['eval', fallbackClickJs], 5000, { noFallback: true }).catch(function() { return null; });
+      const fallbackPayload = unwrapOpenCliBrowserPayload(parseJsonLoose(fallbackClicked && fallbackClicked.stdout));
+      if (!fallbackClicked || !fallbackClicked.ok || !fallbackPayload || !fallbackPayload.ok) {
+        return { ok: false, reason: 'query_button', message: '查询按钮没有点击成功' };
+      }
+    }
+
+    const networkResult = await waitForChabofangNetworkResult(session);
+    if (networkResult) return networkResult;
+
+    const resultJs = encodeOpenCliBrowserEval(`
+      (async () => {
+        const readVisibleResult = () => {
+          const text = (document.body && document.body.innerText || '').replace(/\u00a0/g, ' ').replace(/[ \t]+/g, ' ');
+          const read = label => {
+            const index = text.indexOf(label);
+            if (index < 0) return '';
+            const match = text.slice(index + label.length, index + label.length + 160).match(/([\d,.]+\s*(?:万|亿|[kK])?)/);
+            return match && match[1] ? match[1].replace(/\s+/g, '') : '';
+          };
+          const comprehensive = read('综合播放量') || read('综合播放');
+          const natural = read('自然播放量') || read('自然播放');
+          if (!comprehensive && !natural) return null;
+          return {
+            code: 0,
+            data: {
+              vv_cnt: comprehensive || natural,
+              play_count: natural || comprehensive
+            }
+          };
+        };
+        const visibleResult = readVisibleResult();
+        if (visibleResult) return { ok: true, body: visibleResult };
+        const pageText = document.body && document.body.innerText || '';
+        const errorMatch = pageText.match(/(查询失败[^\n]*|请稍后重试[^\n]*|请求过于频繁[^\n]*|\d+S后可用)/);
+        return { ok: false, reason: 'site_failed', error: errorMatch && errorMatch[1] || '查询已提交，但没有读取到播放量接口结果' };
+      })()
+    `);
+    const captured = await runPlayCountBrowser(session, ['eval', resultJs], 5000, { noFallback: true }).catch(function() { return null; });
+    const capturedResult = parseChabofangCapturedResult(captured);
+    if (capturedResult.ok) return capturedResult;
+
+    // Never submit a second request here. The first request may already have
+    // succeeded on the page, while a retry can hit the site's per-video limit.
+    return capturedResult;
+  }
+
+  function collectChabofangTabIds(value, output, seen, depth) {
+    if (!value || typeof value !== 'object' || depth > 8 || seen.has(value)) return;
+    seen.add(value);
+    if (!Array.isArray(value)) {
+      const url = String(value.url || value.href || '').toLowerCase();
+      const id = String(value.page || value.targetId || value.target_id || value.id || '').trim();
+      if (id && url.includes('chabofang.com')) output.add(id);
+    }
+    for (const nested of Object.values(value)) {
+      if (nested && typeof nested === 'object') collectChabofangTabIds(nested, output, seen, depth + 1);
+    }
+  }
+
+  async function closeChabofangBrowser(session, openedPageId) {
+    const launchedPid = Number(douyinPlayCountState.launchedChromePid || 0);
+    if (launchedPid) {
+      douyinPlayCountState.launchedChromePid = 0;
+      douyinPlayCountState.profileArgs = null;
+      if (process.platform === 'win32') {
+        await runCommand('taskkill.exe', ['/PID', String(launchedPid), '/T', '/F'], { timeout: 5000 }).catch(function() { return null; });
+      } else {
+        try { process.kill(launchedPid, 'SIGTERM'); } catch (e) {}
+      }
+      return;
+    }
+    try {
+      if (openedPageId) {
+        const closed = await runPlayCountBrowser(session, ['tab', 'close', openedPageId], 4000, { noFallback: true }).catch(function() { return null; });
+        if (closed && closed.ok) return;
+      }
+      const pageIds = new Set();
+      const tabs = await runPlayCountBrowser(session, ['tab', 'list'], 4000, { noFallback: true }).catch(function() { return null; });
+      collectChabofangTabIds(parseJsonLoose(tabs && tabs.stdout), pageIds, new Set(), 0);
+      for (const pageId of pageIds) {
+        await runPlayCountBrowser(session, ['tab', 'close', pageId], 4000, { noFallback: true }).catch(function() { return null; });
+      }
+      if (!pageIds.size) {
+        await runPlayCountBrowser(session, ['eval', encodeOpenCliBrowserEval('window.close(); true')], 3000, { noFallback: true }).catch(function() { return null; });
+      }
+    } finally {
+      const launchedPid = Number(douyinPlayCountState.launchedChromePid || 0);
+      douyinPlayCountState.launchedChromePid = 0;
+      douyinPlayCountState.profileArgs = null;
+      if (launchedPid) {
+        if (process.platform === 'win32') {
+          await runCommand('taskkill.exe', ['/PID', String(launchedPid), '/T', '/F'], { timeout: 5000 }).catch(function() { return null; });
+        } else {
+          try { process.kill(launchedPid, 'SIGTERM'); } catch (e) {}
+        }
+      }
+    }
+  }
+
+  async function queryDouyinPlayCountWithChabofang(input) {
+    const videoUrl = extractDouyinUrl(input) || String(input || '').trim();
+    if (!videoUrl) throw new Error('请先粘贴抖音视频链接或分享口令');
+    const session = ('chabofang-play-count-' + Date.now()).replace(/[^a-zA-Z0-9_-]/g, '-');
+    const pageUrl = 'https://chabofang.com/';
+    let openedSession = false;
+    let openedPageId = '';
+
+    try {
+      openedSession = true;
+      const profileArgs = await connectedPlayCountProfileArgs(true);
+      if (!profileArgs.length) throw new Error('播放量查询浏览器连接失败');
+      const bindDeadline = Date.now() + Number(process.env.DOUYIN_PLAY_COUNT_PROFILE_CONNECT_TIMEOUT_MS || 8000);
+      let opened = null;
+      while (Date.now() < bindDeadline) {
+        opened = await runPlayCountBrowser(session, ['--window', 'foreground', 'bind'], 2500, { noFallback: true });
+        if (opened && opened.ok) break;
+        await delay(100);
+      }
+      let usedExistingPage = opened && opened.ok;
+      if (!usedExistingPage) {
+        opened = await runPlayCountBrowser(session, ['--window', 'foreground', 'open', pageUrl], 20000, { noFallback: true });
+      }
+      if (!opened || !opened.ok) throw new Error(opened && (opened.stderr || opened.stdout) || '打开查播放页面失败');
+      const openedPayload = parseJsonLoose(opened.stdout);
+      const openedResult = openedPayload && (openedPayload.data || openedPayload.result || openedPayload);
+      openedPageId = String(openedResult && (openedResult.page || openedResult.targetId || openedResult.target_id) || '').trim();
+      if (!usedExistingPage) {
+        await runPlayCountBrowser(session, ['wait', 'time', '3'], 8000, { noFallback: true }).catch(function() { return null; });
+      }
+      await clickChabofangHumanVerification(session, videoUrl);
+
+      const payload = await queryChabofangInBrowser(session, videoUrl);
+      if (payload.ok === false) return payload;
+      const result = buildPlayCountResult(payload);
+      if (!result) throw new Error('查播放返回了结果，但没有解析到播放量');
+      return { ok: true, result: result };
+    } finally {
+      if (openedSession) {
+        await closeChabofangBrowser(session, openedPageId);
+      }
+    }
   }
 
   async function getDouyinAuthorByStats(sourceText) {
@@ -2002,6 +2934,40 @@ module.exports = function createToolsRoutes(deps) {
       });
     },
 
+    '/api/transcribe/audio': async function(body, cb) {
+      const audioPath = body._tempPath || body.path || '';
+      const filename = body._originalName || body.filename || 'audio';
+      if (!audioPath || !fs.existsSync(audioPath)) {
+        cb({ ok: false, text: '', error: 'missing uploaded audio file' });
+        return;
+      }
+      logger.info('/api/transcribe/audio', { filename: filename });
+      try {
+        const result = await transcribeAudioFileWithPreferredAsr(audioPath, {
+          maxSeconds: Number(body.max_seconds || body.maxSeconds) || 1800
+        });
+        if (!result.text) {
+          cb({
+            ok: false,
+            text: '',
+            error: result.error || '转写失败',
+            source: result.provider || ''
+          });
+          return;
+        }
+        cb({
+          ok: true,
+          text: result.text,
+          source: result.provider || 'volcengine',
+          warning: result.warning || ''
+        });
+      } catch(e) {
+        cb({ ok: false, text: '', error: e.message || String(e) });
+      } finally {
+        try { fs.unlinkSync(audioPath); } catch(e) {}
+      }
+    },
+
     '/api/transcribe/douyin': function(body, cb) {
       const url = body.url || '';
       if (!url) { cb({ text: 'url required' }); return; }
@@ -2157,6 +3123,91 @@ module.exports = function createToolsRoutes(deps) {
         }).catch(function(e) {
           cb(Object.assign({}, result, { author_error: e.message || String(e) }));
         });
+      });
+    },
+
+    '/api/douyin/play-count-status': function(body, cb) {
+      const key = normalizeDouyinPlayCountKey(body && (body.input || body.url || body.video_url));
+      cb(Object.assign({ ok: true }, playCountCooldownPayload(key)));
+    },
+
+    '/api/douyin/play-count': function(body, cb) {
+      const input = String(body && (body.input || body.url || body.video_url) || '').trim();
+      const key = normalizeDouyinPlayCountKey(input);
+      if (!input) {
+        cb({ ok: false, error: '请先粘贴抖音视频链接或分享口令' });
+        return;
+      }
+      if (!key) {
+        cb({ ok: false, error: '没有识别到有效的抖音视频链接' });
+        return;
+      }
+      if (douyinPlayCountState.running) {
+        cb(Object.assign({ ok: false, reason: 'running', message: '上一条播放量查询还在进行中，请稍等' }, playCountCooldownPayload(key)));
+        return;
+      }
+      const cooldownUntil = Number(douyinPlayCountState.cooldowns.get(key) || 0);
+      if (cooldownUntil > Date.now()) {
+        cb(Object.assign({
+          ok: false,
+          reason: 'cooldown',
+          message: '同一条视频处于查询冷却中'
+        }, playCountCooldownPayload(key)));
+        return;
+      }
+
+      douyinPlayCountState.running = true;
+      let responded = false;
+      const totalTimeout = setTimeout(function() {
+        if (responded) return;
+        responded = true;
+        douyinPlayCountState.running = false;
+        cb(Object.assign({
+          ok: false,
+          reason: 'timeout',
+          message: '播放量查询超时，已释放查询锁，请稍后重试'
+        }, playCountCooldownPayload(key)));
+      }, Number(process.env.DOUYIN_PLAY_COUNT_TOTAL_TIMEOUT_MS || 65000));
+
+      function finish(payload) {
+        if (responded) return;
+        responded = true;
+        clearTimeout(totalTimeout);
+        cb(payload);
+      }
+
+      queryDouyinPlayCountWithChabofang(input).then(function(payload) {
+        douyinPlayCountState.running = false;
+        if (responded) return;
+        if (payload && payload.result) {
+          const next = Date.now() + douyinPlayCountCooldownMs();
+          douyinPlayCountState.cooldowns.set(key, next);
+          douyinPlayCountState.lastResult = Object.assign({}, payload.result, {
+            input: input,
+            key: key,
+            queriedAt: new Date().toISOString(),
+            nextAvailableAt: new Date(next).toISOString()
+          });
+          finish(Object.assign({ ok: true, result: douyinPlayCountState.lastResult }, playCountCooldownPayload(key)));
+          return;
+        }
+        const reason = payload && payload.reason || 'failed';
+        finish(Object.assign({
+          ok: false,
+          reason: reason,
+          message: payload && payload.message || '播放量查询失败'
+        }, playCountCooldownPayload(key)));
+      }).catch(function(e) {
+        douyinPlayCountState.running = false;
+        if (responded) return;
+        logger.error('/api/douyin/play-count failed', e);
+        finish(Object.assign({
+          ok: false,
+          error: e.message || String(e),
+          message: e.message || String(e)
+        }, playCountCooldownPayload(key)));
+      }).finally(function() {
+        douyinPlayCountState.running = false;
       });
     },
 
@@ -2523,10 +3574,10 @@ ${videoUrl ? '视频链接：' + videoUrl : ''}
 
     '/api/comment/generate': function(body, cb) {
       const raw = (body.script || '')
-        .replace(/复制此链接[，,]\s*打开[多D抖]?音[搜索看看]+[！!。\s]*/gi, '')
+        .replace(/复制此链接[，,]?\s*打开(?:抖音|Dou音|抖音搜索|Douyin)[^\n。；;]*/gi, '')
         .replace(/https?:\/\/[^\s\u4e00-\u9fff]*/gi, '')
         .replace(/\b[A-Za-z0-9]{1,20}@[A-Za-z0-9]{1,20}\b/g, '')
-        .replace(/^\d+\.\d+\s*rre?:\/\s*\S+\s+\d{2}\/\d{2}\s*/gm, '')
+        .replace(/^\d+\.\d+\s*[^\s]{1,8}:\/\s*\S+\s+\d{2}\/\d{2}\s*/gm, '')
         .replace(/\n{3,}/g, '\n\n')
         .trim();
       let count = parseInt(body.count, 10) || 30;
@@ -2544,60 +3595,73 @@ ${videoUrl ? '视频链接：' + videoUrl : ''}
       count = Math.min(Math.max(count, 10), 300);
       const itemLabel = isDanmaku ? '弹幕' : '评论';
       const scenarioDesc = isDanmaku
-        ? (scenario ? '重点使用「' + scenario + '」风格，' : '按 B站弹幕语境生成，')
-        : (scenario ? '重点使用「' + scenario + '」风格，' : '五大风格（逻辑鬼才、本地/业内人、抽象乐子人、阴阳怪气高手、暴躁/狂热老铁）混合使用，');
+        ? (scenario ? '重点使用“' + scenario + '”风格，' : '按 B 站弹幕语境生成，')
+        : (scenario ? '重点使用“' + scenario + '”风格，' : '五大风格（逻辑鬼才、本地业内人、抽象乐子人、阴阳怪气高手、暴躁狂热老铁）混合使用，');
       const accountLine = account ? '\n账号倾向：' + account + '（可用该账号的人设语气）' : '';
       const targetCount = count;
       (async function() {
         const comments = [];
         const seen = new Set();
+        const debugPreviews = [];
         const batchAngles = isDanmaku
           ? ['震惊反应', '现场吐槽', '抽象玩梗', '节奏跟拍', '夸张惊呼']
           : ['更毒舌', '更共鸣', '更抽象', '更拆解', '更戏谑'];
-        const maxWaves = 3;
+        const batchProfiles = isDanmaku
+          ? [
+              { label: '短弹幕', rule: '以 4-12 字短句为主，像屏幕上一闪而过的真实弹幕。', tokenPerItem: 28 },
+              { label: '玩梗弹幕', rule: '混入网络梗、抽象反应、无厘头吐槽，但不要低俗攻击。', tokenPerItem: 30 },
+              { label: '反应弹幕', rule: '写即时反应、惊讶、笑点、疑问，尽量短。', tokenPerItem: 28 },
+              { label: '正常弹幕', rule: '写自然口语弹幕，长度 8-20 字，别像文案。', tokenPerItem: 34 }
+            ]
+          : [
+              { label: '短梗', rule: '至少一半写成 5-16 字短评，像路人顺手发的短梗。', tokenPerItem: 30 },
+              { label: '正常短评', rule: '以 12-35 字短评为主，口语、具体、不要长篇分析。', tokenPerItem: 42 },
+              { label: '细节吐槽', rule: '抓视频里的具体点吐槽，长度 20-55 字，别写成小作文。', tokenPerItem: 58 },
+              { label: '无厘头玩梗', rule: '混入几条抽象、玩梗、反差感评论，可以很短，但不要尬解释。', tokenPerItem: 34 },
+              { label: '认真共鸣', rule: '少量认真共鸣型评论，控制在 25-60 字，不要全都很长。', tokenPerItem: 62 }
+            ];
+        const parallelLimit = Math.min(4, Math.max(1, Number(process.env.COMMENT_GENERATE_CONCURRENCY || 3)));
+        const maxWaves = 4;
         let lastError = '';
 
         function plannedBatchCount(remaining) {
-          if (remaining <= 40) return 1;
-          if (remaining <= 80) return 2;
-          if (remaining <= 150) return 3;
-          if (remaining <= 240) return 4;
-          return 5;
+          const targetBatchSize = isDanmaku ? 18 : 24;
+          const maxBatchCount = isDanmaku ? 14 : 10;
+          return Math.max(1, Math.min(maxBatchCount, Math.ceil(remaining / targetBatchSize)));
         }
 
         async function runWave(waveIndex) {
           const remaining = targetCount - comments.length;
           const batchCount = plannedBatchCount(remaining);
           const baseSize = Math.ceil(remaining / batchCount);
-          const batchMaxSize = isDanmaku ? 80 : 70;
-          const extraPerBatch = batchCount === 1 ? 0 : (remaining >= 100 ? 5 : 2);
+          const batchMaxSize = isDanmaku ? 22 : 30;
+          const extraPerBatch = batchCount === 1 ? 0 : (remaining >= 100 ? 8 : 3);
           const promptIntro = isDanmaku
-            ? '你是熟悉中文短视频弹幕语境的内容策划。'
-            : '你是熟悉中文短视频评论区语境的内容策划。';
+            ? '你只负责生成中文短视频弹幕。'
+            : '你只负责生成中文短视频评论。';
           const styleRule = isDanmaku
-            ? '只输出中文弹幕，每行一条，短、快、贴画面感。'
-            : '只输出中文评论，每行一条，具体、犀利、有画面感。';
+            ? '每条弹幕要短、口语、有画面感。'
+            : '每条评论要像真实网友评论，口语、具体、有梗，不要官方腔。';
           const specs = [];
           for (let index = 0; index < batchCount; index += 1) {
             specs.push({
-              requestCount: Math.min(batchMaxSize, baseSize + extraPerBatch),
+              requestCount: Math.min(batchMaxSize, Math.ceil((baseSize + extraPerBatch) * 1.15)),
               angle: batchAngles[(waveIndex + index) % batchAngles.length],
+              profile: batchProfiles[(waveIndex + index) % batchProfiles.length],
               slot: index + 1
             });
           }
 
-          const results = await Promise.allSettled(specs.map(function(spec) {
+          async function runSpec(spec) {
             let userPrompt = [
-              '视频文案：',
-              script,
+              '根据下面内容生成 ' + spec.requestCount + ' 条' + itemLabel + '：',
+              script.slice(0, 900),
               accountLine || '',
-              scenarioDesc,
-              '本批请补充 ' + spec.requestCount + ' 条' + itemLabel + '。',
-              '本批风格重点：' + spec.angle + '。',
-              '要求：不要重复之前已经生成的内容，不要泛泛而谈，不要模板化，不要编号，不要标题，不要解释。',
-              '如果文案里出现日文假名、音乐符号、emoji、口吃或 ASR 噪声，比如 ははは、はいあ、🎼，请忽略这些噪声，继续围绕中文主体内容写。',
+              scenarioDesc + '本批风格重点：' + spec.angle + '。',
+              '本批评论形态：' + spec.profile.label + '。' + spec.profile.rule,
+              isDanmaku ? '长度配比：短弹幕优先，允许少量 2-5 字反应。' : '长度配比：约 45% 短评/短梗，40% 正常短评，15% 稍长细节评论；不要全写成长段。',
               styleRule,
-              '只输出结果本身，每行一条。'
+              '硬性要求：只输出' + itemLabel + '本身；每行一条；不要编号；不要标题；不要解释；不要重复；不要写“第几个角度”；不要写“继续讨论的空间”。'
             ].filter(Boolean).join('\n');
 
             if (comments.length) {
@@ -2605,11 +3669,32 @@ ${videoUrl ? '视频链接：' + videoUrl : ''}
             }
 
             return callTextModelWithRetry(promptIntro, userPrompt, {
-              maxTokens: Math.min(9000, Math.max(1800, spec.requestCount * (isDanmaku ? 36 : 70))),
-              temperature: isDanmaku ? 0.82 : 0.76,
-              timeoutMs: 90000,
-              attempts: 2
+              model: process.env.COMMENT_MODEL || process.env.FHL_DEFAULT_MODEL || 'gpt-5.5',
+              apiKey: process.env.COMMENT_API_KEY,
+              baseUrl: process.env.COMMENT_BASE_URL,
+              maxTokens: Math.min(2500, Math.max(700, spec.requestCount * spec.profile.tokenPerItem)),
+              temperature: spec.profile.label.includes('梗') || spec.profile.label.includes('无厘头') ? 0.9 : (isDanmaku ? 0.84 : 0.78),
+              timeoutMs: 35000,
+              attempts: 1
             });
+          }
+
+          const results = new Array(specs.length);
+          let cursor = 0;
+          async function worker(workerIndex) {
+            while (cursor < specs.length) {
+              const index = cursor;
+              cursor += 1;
+              if (index > 0) await delay(180 + workerIndex * 140);
+              try {
+                results[index] = { status: 'fulfilled', value: await runSpec(specs[index]) };
+              } catch (error) {
+                results[index] = { status: 'rejected', reason: error };
+              }
+            }
+          }
+          await Promise.all(Array.from({ length: Math.min(parallelLimit, specs.length) }, function(_, index) {
+            return worker(index);
           }));
 
           let added = 0;
@@ -2618,7 +3703,20 @@ ${videoUrl ? '视频链接：' + videoUrl : ''}
               lastError = String(result.reason && result.reason.message || result.reason || '').slice(0, 180);
               return;
             }
-            parseGeneratedCommentLines(result.value, specs[index].requestCount * 2).forEach(function(line) {
+            const parsedLines = parseGeneratedCommentLines(result.value, specs[index].requestCount * 2);
+            if (!parsedLines.length) {
+              debugPreviews.push({
+                batch: index + 1,
+                type: typeof result.value,
+                preview: String(result.value || '').slice(0, 500)
+              });
+              logger.warn('comment model reply parsed zero', {
+                batch: index + 1,
+                requested: specs[index].requestCount,
+                replyPreview: String(result.value || '').slice(0, 500)
+              });
+            }
+            parsedLines.forEach(function(line) {
               const key = line.replace(/\s+/g, '');
               if (!seen.has(key)) {
                 seen.add(key);
@@ -2638,33 +3736,35 @@ ${videoUrl ? '视频链接：' + videoUrl : ''}
           const added = await runWave(wave);
           if (!added && comments.length < targetCount) {
             lastError = lastError || '模型返回内容无法解析';
+            break;
           }
         }
 
         if (comments.length < targetCount) {
-          cb({
-            error: 'AI 只生成了 ' + comments.length + '/' + targetCount + ' 条，请稍后重试或减少条数' + (lastError ? '：' + lastError : ''),
-            comments: comments.slice(0, targetCount),
-            fallback: false,
-            warning: lastError
+          buildLocalCommentFallback(script, targetCount - comments.length, isDanmaku, seen).forEach(function(line) {
+            comments.push(line);
           });
-          return;
         }
 
         cb({
           comments: comments.slice(0, targetCount),
-          fallback: false,
-          warning: ''
+          fallback: Boolean(lastError),
+          warning: lastError ? ('部分批次失败，已用本地短评模板补齐；' + lastError) : ''
         });
       })().catch(function(e) {
         cb({
-          error: 'AI 生成失败：' + String(e && e.message || e).slice(0, 180),
+          error: String(e && e.message || e).slice(0, 220),
           comments: [],
-          fallback: false
+          fallback: false,
+          debugPreviews: body.debug ? (e && e.debugPreviews || []) : undefined,
+          debugConfig: body.debug ? {
+            model: process.env.COMMENT_MODEL || process.env.FHL_DEFAULT_MODEL || 'gpt-5.5',
+            baseUrl: process.env.COMMENT_BASE_URL || process.env.FHL_BASE_URL || '',
+            hasCommentKey: Boolean(process.env.COMMENT_API_KEY)
+          } : undefined
         });
       });
     },
-
     '/api/audit': function(body, cb) {
       const urlA = body.urlA || '';
       const urlB = body.urlB || '';
@@ -2714,7 +3814,7 @@ ${videoUrl ? '视频链接：' + videoUrl : ''}
           ok: true,
           checkedAt: Date.now(),
           api: { ok: true, port: Number(process.env.PORT) || 5555 },
-          styleWorkbench: { ok: false, error: e.message },
+          styleWorkbench: { ok: false, native: true, error: e.message },
           opencli: { ok: false, error: e.message },
           siliconflow: { ok: Boolean(process.env.SILICONFLOW_API_KEY || deps.siliconflowApiKey), configured: Boolean(process.env.SILICONFLOW_API_KEY || deps.siliconflowApiKey) },
           chat: { ok: Boolean(process.env.FHL_API_KEY || process.env.OPENAI_API_KEY || deps.minimaxApiKey), configured: Boolean(process.env.FHL_API_KEY || process.env.OPENAI_API_KEY || deps.minimaxApiKey), model: process.env.FHL_DEFAULT_MODEL || 'gpt-5.5', proxyConfigured: Boolean(process.env.FHL_PROXY_URL || process.env.MODEL_PROXY_URL) },

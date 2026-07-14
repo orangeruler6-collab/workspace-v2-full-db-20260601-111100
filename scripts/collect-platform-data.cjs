@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const XLSX = require('xlsx');
 const {
   chromeProfileDirectoryMap,
+  dashboardProfileMeta,
   dataMaintenanceProfile,
   dataProfileAliasForAccountKey,
   openCliBrowserProfileAliases
@@ -15,6 +16,7 @@ const OPENCLI_MAIN = process.env.OPENCLI_MAIN ||
 const DOWNLOADS = process.env.DOWNLOADS_DIR || path.join(process.env.USERPROFILE || '', 'Downloads');
 const OPENCLI_EXTENSION_DIR = process.env.OPENCLI_EXTENSION_DIR
   || path.join(process.env.USERPROFILE || '', '.opencli', 'chrome-extension', 'opencli-webstore-unpacked');
+const OPENCLI_EXTENSION_ID = process.env.OPENCLI_EXTENSION_ID || 'gcinkafolidndmjililfhhdofdhmkbbn';
 const chromeProfileByOpenCli = chromeProfileDirectoryMap();
 
 const args = parseArgs(process.argv.slice(2));
@@ -25,7 +27,7 @@ let profile = (profileMode === 'data' || profileMode === 'maintenance')
   : requestedProfile;
 const sessionPrefix = args.sessionPrefix || `data-collect-${Date.now()}`;
 const artifactPrefix = String(args.artifactPrefix || sessionPrefix || `data-collect-${Date.now()}`)
-  .replace(/[^a-zA-Z0-9_.-]+/g, '-')
+  .replace(/[\\/:*?"<>|\s]+/g, '-')
   .replace(/^-+|-+$/g, '')
   .slice(0, 120) || `data-collect-${Date.now()}`;
 const outDir = path.resolve(ROOT, args.outDir || path.join('data', 'data-export-tests'));
@@ -37,9 +39,30 @@ const openCliAliases = openCliBrowserProfileAliases();
 const browserOpenTimeoutMs = Number(args.browserOpenTimeoutMs || process.env.ACCOUNT_DATA_BROWSER_OPEN_TIMEOUT_MS || 120000);
 const browserEvalTimeoutMs = Number(args.browserEvalTimeoutMs || process.env.ACCOUNT_DATA_BROWSER_EVAL_TIMEOUT_MS || 120000);
 const browserClickTimeoutMs = Number(args.browserClickTimeoutMs || process.env.ACCOUNT_DATA_BROWSER_CLICK_TIMEOUT_MS || 60000);
+const pageReadyTimeoutMs = Number(args.pageReadyTimeoutMs || process.env.ACCOUNT_DATA_PAGE_READY_TIMEOUT_MS || 15000);
+const loginProbeTimeoutMs = Number(args.loginProbeTimeoutMs || process.env.ACCOUNT_DATA_LOGIN_PROBE_TIMEOUT_MS || 8000);
 const postOpenWaitMs = Number(args.postOpenWaitMs || process.env.ACCOUNT_DATA_POST_OPEN_WAIT_MS || 2000);
 const downloadTimeoutMs = Number(args.downloadTimeoutMs || process.env.ACCOUNT_DATA_DOWNLOAD_TIMEOUT_MS || 180000);
 const skipDisconnected = args.skipDisconnected !== 'false' && process.env.ACCOUNT_DATA_SKIP_DISCONNECTED !== 'false';
+const profileMeta = dashboardProfileMeta();
+const accountName = String((profileMeta[requestedProfile] && profileMeta[requestedProfile].account) || '').trim();
+const shouldCloseProfile = args.closeProfile === 'true';
+const shouldPreCloseProfile = shouldCloseProfile && args.preCloseProfile !== 'false' && process.env.ACCOUNT_DATA_PRE_CLOSE_PROFILE !== 'false';
+const singleProfileBind = args.singleProfileBind === 'true';
+const singleProfilePlatform = platforms.length === 1 ? platforms[0] : '';
+const singleProfileSession = `${sessionPrefix}-${singleProfilePlatform || 'platform'}-single`;
+const singleProfileReadyPollMs = Math.max(100, Number(args.profileReadyPollMs || 200));
+const singleProfileReadyTimeoutMs = Math.max(2000, Number(args.profileConnectTimeoutMs || 15000));
+let singleProfileLaunchAttempted = false;
+let singleProfileLaunchResult = null;
+let singleProfileState = null;
+let singleProfilePage = '';
+let singleProfileRebindUsed = false;
+let daemonStatePromise = null;
+
+function defaultProfileDirectoryToClose() {
+  return chromeProfileByOpenCli[requestedProfile] || chromeProfileByOpenCli[profile] || '';
+}
 
 function parseArgs(argv) {
   const parsed = {};
@@ -163,6 +186,24 @@ async function listOpenCliProfiles() {
   return parseOpenCliProfiles(text);
 }
 
+async function ensureOpenCliDaemon() {
+  if (args.restartDaemon === 'false' || process.env.ACCOUNT_DATA_RESTART_OPENCLI_DAEMON === 'false') {
+    return { ok: true, skipped: true };
+  }
+  const status = await run(process.execPath, [OPENCLI_MAIN, 'daemon', 'status'], { timeoutMs: 30000 }).catch(err => ({
+    code: 1,
+    stdout: '',
+    stderr: err && err.message ? err.message : String(err || '')
+  }));
+  const text = `${status.stdout || ''}\n${status.stderr || ''}`;
+  if (status.code === 0 && /Daemon:\s*running/i.test(text)) {
+    return { ok: true, restarted: false, status: text.trim() };
+  }
+  await run(process.execPath, [OPENCLI_MAIN, 'daemon', 'restart'], { timeoutMs: 30000 }).catch(() => null);
+  await wait(Number(args.daemonRestartWaitMs || process.env.ACCOUNT_DATA_DAEMON_RESTART_WAIT_MS || 2000));
+  return { ok: true, restarted: true, status: text.trim() };
+}
+
 async function isProfileConnected(alias) {
   const profiles = await listOpenCliProfiles().catch(() => []);
   return Boolean(findConnectedProfile(profiles, alias));
@@ -186,34 +227,141 @@ function findConnectedProfile(profiles, alias) {
   )) || null;
 }
 
+function resolveBrowserBridgeProfileAlias(alias) {
+  const requested = String(alias || '').trim();
+  if (openCliAliases[requested]) return requested;
+  const profileDirectory = chromeProfileByOpenCli[requested];
+  if (!profileDirectory) return requested;
+  return Object.keys(openCliAliases).find(candidate => (
+    chromeProfileByOpenCli[candidate] === profileDirectory
+  )) || requested;
+}
+
 async function launchChromeProfile(profileAlias, platformId) {
   const profileDirectory = chromeProfileByOpenCli[profileAlias];
   if (!profileDirectory) return { ok: false, skipped: true, error: `no chrome profile mapping for ${profileAlias}` };
+  const initialUrls = singleProfileBind
+    ? [`chrome-extension://${OPENCLI_EXTENSION_ID}/popup.html`, platformUrl(platformId)]
+    : [args.launchInitialUrl === 'true' ? platformUrl(platformId) : 'about:blank'];
   const launchArgs = [
     '--new-window',
-    `--user-data-dir=${chromeUserDataDir()}`,
     '--no-first-run',
     '--no-default-browser-check',
-    `--profile-directory=${profileDirectory}`
+    `--profile-directory=${profileDirectory}`,
+    ...initialUrls
   ];
-  if (fs.existsSync(path.join(OPENCLI_EXTENSION_DIR, 'manifest.json'))) {
+  if (!singleProfileBind && fs.existsSync(path.join(OPENCLI_EXTENSION_DIR, 'manifest.json'))) {
     launchArgs.push(`--load-extension=${OPENCLI_EXTENSION_DIR}`);
   }
-  launchArgs.push(platformUrl(platformId));
   const child = spawn(chromeBin(), launchArgs, {
     windowsHide: true,
     detached: true,
     stdio: 'ignore'
   });
   child.unref();
-  return { ok: true, profileDirectory, extensionDir: fs.existsSync(path.join(OPENCLI_EXTENSION_DIR, 'manifest.json')) ? OPENCLI_EXTENSION_DIR : '' };
+  return {
+    ok: true,
+    profileDirectory,
+    initialUrls,
+    extensionDir: !singleProfileBind && fs.existsSync(path.join(OPENCLI_EXTENSION_DIR, 'manifest.json')) ? OPENCLI_EXTENSION_DIR : '',
+    profileManagedExtension: singleProfileBind,
+    extensionWake: singleProfileBind ? { ok: true, mode: 'same_window_initial_tab', extensionId: OPENCLI_EXTENSION_ID } : null
+  };
+}
+
+async function bindSingleProfileWindow(timeoutMs = singleProfileReadyTimeoutMs) {
+  const deadline = Date.now() + Math.max(500, Number(timeoutMs) || singleProfileReadyTimeoutMs);
+  let lastError = '';
+  while (Date.now() < deadline) {
+    const result = await opencliQuiet(['browser', singleProfileSession, '--window', 'foreground', 'bind'], 5000);
+    if (result.code === 0) {
+      try {
+        const bound = extractJson(result.stdout || result.stderr);
+        let page = normalizePageId(bound);
+        if (!page) {
+          const listed = await opencliQuiet(['browser', singleProfileSession, 'tab', 'list'], 5000);
+          const tabs = listed.code === 0 ? extractJson(listed.stdout || listed.stderr) : [];
+          const entries = Array.isArray(tabs) ? tabs : [];
+          const expected = expectedUrlPattern(platformUrl(singleProfilePlatform || platforms[0]));
+          const preferred = entries.find(item => {
+            try {
+              return expected && expected.test(new URL(String(item && item.url || '')).hostname.replace(/^www\./, ''));
+            } catch (_) {
+              return false;
+            }
+          })
+            || entries.find(item => item && item.active)
+            || entries[0];
+          page = normalizePageId(preferred);
+        }
+        if (page) {
+          singleProfilePage = page;
+          activeBrowserSessions.add(singleProfileSession);
+          return { ok: true, connected: true, page, session: singleProfileSession };
+        }
+        lastError = 'browser bind succeeded without a page id';
+      } catch (err) {
+        lastError = err.message || String(err);
+      }
+    } else {
+      lastError = String(result.stderr || result.stdout || `opencli exit ${result.code}`).trim();
+      const profiles = await listOpenCliProfiles().catch(() => []);
+      const connected = findConnectedProfile(profiles, profile);
+      if (connected) profile = String(connected.context_id || connected.alias || profile).trim() || profile;
+    }
+    await wait(singleProfileReadyPollMs);
+  }
+  return { ok: false, error: `single profile window was not ready: ${lastError || profile}` };
+}
+
+async function ensureSingleProfileWindow(platformId) {
+  if (singleProfileState && singleProfileState.ok) return singleProfileState;
+  if (singleProfileLaunchAttempted) {
+    return singleProfileState || { ok: false, error: `single profile launch already attempted: ${profile}` };
+  }
+  singleProfileLaunchAttempted = true;
+  profile = resolveBrowserBridgeProfileAlias(profile);
+  daemonStatePromise = daemonStatePromise || ensureOpenCliDaemon();
+  const daemon = await daemonStatePromise;
+  if (args.launchProfile !== 'false') {
+    const beforeProfiles = await listOpenCliProfiles().catch(() => []);
+    const connected = findConnectedProfile(beforeProfiles, profile);
+    if (connected) {
+      profile = String(connected.context_id || connected.alias || profile).trim() || profile;
+    } else {
+      singleProfileLaunchResult = await launchChromeProfile(profile, platformId);
+      if (!singleProfileLaunchResult.ok) {
+        singleProfileState = singleProfileLaunchResult;
+        return singleProfileState;
+      }
+    }
+  }
+  const bound = await bindSingleProfileWindow();
+  singleProfileState = Object.assign({}, bound, {
+    launched: singleProfileLaunchResult,
+    resolvedProfile: profile,
+    daemon
+  });
+  return singleProfileState;
+}
+
+async function rebindSingleProfileWindow() {
+  if (singleProfileRebindUsed) return { ok: false, error: 'single profile rebind already used' };
+  singleProfileRebindUsed = true;
+  const rebound = await bindSingleProfileWindow(Number(args.profileRebindTimeoutMs || 2500));
+  if (rebound.ok) {
+    singleProfileState = Object.assign({}, singleProfileState || {}, rebound, { rebound: true });
+  }
+  return rebound;
 }
 
 async function ensureOpenCliProfile(platformId) {
+  if (singleProfileBind) return ensureSingleProfileWindow(platformId);
   if (args.launchProfile === 'false') return { ok: true, skipped: true };
+  const daemon = await ensureOpenCliDaemon();
   const beforeProfiles = await listOpenCliProfiles().catch(() => []);
   if (findConnectedProfile(beforeProfiles, profile)) {
-    return { ok: true, connected: true, resolvedProfile: profile };
+    return { ok: true, connected: true, resolvedProfile: profile, daemon };
   }
   const beforeIds = new Set((beforeProfiles || []).map(item => String(item && item.context_id || '').trim()).filter(Boolean));
   const launched = await launchChromeProfile(profile, platformId);
@@ -223,16 +371,16 @@ async function ensureOpenCliProfile(platformId) {
     await wait(1000);
     const profiles = await listOpenCliProfiles().catch(() => []);
     const aliased = findConnectedProfile(profiles, profile);
-    if (aliased) return { ok: true, connected: true, launched, resolvedProfile: profile };
+    if (aliased) return { ok: true, connected: true, launched, resolvedProfile: profile, daemon };
     const newlyConnected = args.allowNewContextFallback === 'true'
       ? profiles.find(item => item && item.connected && item.context_id && !beforeIds.has(String(item.context_id).trim()))
       : null;
     if (newlyConnected) {
       profile = String(newlyConnected.context_id || newlyConnected.alias || profile).trim() || profile;
-      return { ok: true, connected: true, launched, resolvedProfile: profile, detectedContextId: newlyConnected.context_id };
+      return { ok: true, connected: true, launched, resolvedProfile: profile, detectedContextId: newlyConnected.context_id, daemon };
     }
   }
-  return { ok: false, launched, error: `profile not connected after launch: ${profile}` };
+  return { ok: false, launched, daemon, error: `profile not connected after launch: ${profile}` };
 }
 
 async function opencli(argv, timeoutMs = 30000) {
@@ -285,13 +433,20 @@ function platformFromSession(session) {
 
 function isBridgeDisconnectError(err) {
   const text = String(err && err.message || err || '');
-  return /not connected|connection dropped|Browser Bridge|profile not connected/i.test(text);
+  return /not connected|connection dropped|Browser Bridge|profile not connected|Target tab .*not part of the current browser session|Target closed|Session closed|browser has been closed|WebSocket.*closed/i.test(text);
+}
+
+function isRecoverableBrowserError(err) {
+  const text = String(err && err.message || err || '');
+  return /Target tab .*not part of the current browser session|Browser Bridge session may have restarted|Browser connection dropped|connection dropped|profile not connected|Browser profile .*not connected|Target closed|Session closed|browser has been closed|WebSocket.*closed|Page crashed|RESULT_CODE_KILLED|chrome-error:\/\//i.test(text);
 }
 
 function normalizePageId(value) {
   if (!value) return '';
   if (typeof value === 'string') return value.trim();
-  return String(value.page || value.targetId || value.target_id || value.id || '').trim();
+  const direct = String(value.page || value.targetId || value.target_id || value.id || '').trim();
+  if (direct) return direct;
+  return normalizePageId(value.data || value.result || null);
 }
 
 function expectedUrlPattern(url) {
@@ -329,6 +484,38 @@ function urlMatchesExpected(actualUrl, targetUrl) {
   }
 }
 
+function looksLikeLoginUrl(actualUrl, targetUrl) {
+  try {
+    const actual = new URL(String(actualUrl || ''));
+    const target = new URL(String(targetUrl || ''));
+    const host = actual.hostname.replace(/^www\./, '');
+    const pathAndQuery = `${actual.pathname}${actual.search}`.toLowerCase();
+    if (/douyin\.com$/i.test(target.hostname)) {
+      return /login|passport|sso|oauth|authorize/.test(pathAndQuery)
+        || /passport|sso|login/i.test(host);
+    }
+    if (/kuaishou\.com$/i.test(target.hostname)) {
+      return /login|passport|sso|oauth|authorize/.test(pathAndQuery)
+        || /passport|sso|login/i.test(host);
+    }
+    if (/bilibili\.com$/i.test(target.hostname)) {
+      return /login|passport|sso|oauth|authorize/.test(pathAndQuery)
+        || /passport|sso|login/i.test(host);
+    }
+  } catch (_) {}
+  return false;
+}
+
+async function probeLoginPage(session, page) {
+  return browserEval(session, page, `(() => {
+    const text = (document.body && document.body.innerText || '').replace(/\\s+/g, ' ');
+    const href = location.href;
+    const hasConsole = /数据中心|作品分析|投稿列表|导出数据|作品数据|粉丝分析|内容管理|互动管理|发布作品|创作中心/.test(text);
+    const needsLogin = !hasConsole && /扫码登录|验证码登录|密码登录|立即登录|登录\\/注册|创作者登录|请先登录/.test(text);
+    return { href, needsLogin, hasConsole, text: text.slice(0, 300) };
+  })()`, loginProbeTimeoutMs).catch(() => null);
+}
+
 async function browserPageUrl(session, page) {
   try {
     return await browserEval(session, page, '(()=>location.href)()', 30000);
@@ -342,8 +529,9 @@ async function waitForExpectedPage(session, page, url, timeoutMs) {
   let lastUrl = '';
   while (Date.now() < deadline) {
     lastUrl = String(await browserPageUrl(session, page) || '');
+    if (looksLikeLoginUrl(lastUrl, url)) return { ok: false, needsLogin: true, url: lastUrl };
     if (urlMatchesExpected(lastUrl, url)) return { ok: true, url: lastUrl };
-    await wait(1500);
+    await wait(800);
   }
   return { ok: false, url: lastUrl };
 }
@@ -365,36 +553,76 @@ async function waitForUrlMatch(session, page, predicateSource, timeoutMs = 10000
 }
 
 async function browserOpen(session, url) {
+  if (singleProfileBind) {
+    const state = await ensureSingleProfileWindow(platformFromSession(session));
+    if (!state || !state.ok || !singleProfilePage) {
+      throw new Error(state && state.error || 'single profile page is unavailable');
+    }
+    const opened = extractJson(await opencli([
+      'browser', singleProfileSession, 'open', '--tab', singleProfilePage, url
+    ], browserOpenTimeoutMs));
+    singleProfilePage = normalizePageId(opened) || singleProfilePage;
+    const ready = await waitForExpectedPage(singleProfileSession, singleProfilePage, url, Math.min(browserOpenTimeoutMs, pageReadyTimeoutMs));
+    if (ready.needsLogin) throw new Error(`needs login after open: ${ready.url || url}`);
+    if (!ready.ok) throw new Error(`opened wrong page for ${url}: ${ready.url || 'unknown url'}`);
+    activeBrowserSessions.add(singleProfileSession);
+    return singleProfilePage;
+  }
   let opened;
   try {
     try {
-      opened = extractJson(await opencli(['browser', session, 'tab', 'new', url], browserOpenTimeoutMs));
-    } catch (_) {
       opened = extractJson(await opencli(['browser', session, 'open', url], browserOpenTimeoutMs));
+    } catch (_) {
+      opened = extractJson(await opencli(['browser', session, 'tab', 'new', url], browserOpenTimeoutMs));
     }
   } catch (err) {
     if (!isBridgeDisconnectError(err) || args.reconnectOnDisconnect === 'false') throw err;
     const ensured = await ensureOpenCliProfile(platformFromSession(session));
     if (!ensured || ensured.ok === false) throw err;
-    await wait(2500);
+    await wait(1000);
     try {
-      opened = extractJson(await opencli(['browser', session, 'tab', 'new', url], browserOpenTimeoutMs));
-    } catch (_) {
       opened = extractJson(await opencli(['browser', session, 'open', url], browserOpenTimeoutMs));
+    } catch (_) {
+      opened = extractJson(await opencli(['browser', session, 'tab', 'new', url], browserOpenTimeoutMs));
     }
   }
   let page = normalizePageId(opened);
   if (!page) throw new Error(`missing page id for ${url}`);
-  let ready = await waitForExpectedPage(session, page, url, Math.min(browserOpenTimeoutMs, 45000));
+  const loginProbe = await probeLoginPage(session, page);
+  if (loginProbe && loginProbe.needsLogin) throw new Error(`needs login after open: ${loginProbe.href || url}`);
+  let ready = await waitForExpectedPage(session, page, url, Math.min(browserOpenTimeoutMs, pageReadyTimeoutMs));
+  if (ready.needsLogin) throw new Error(`needs login after open: ${ready.url || url}`);
   if (!ready.ok) {
     const reopened = extractJson(await opencli(['browser', session, 'open', '--tab', page, url], browserOpenTimeoutMs));
     page = normalizePageId(reopened) || page;
-    ready = await waitForExpectedPage(session, page, url, Math.min(browserOpenTimeoutMs, 45000));
+    ready = await waitForExpectedPage(session, page, url, Math.min(browserOpenTimeoutMs, pageReadyTimeoutMs));
+    if (ready.needsLogin) throw new Error(`needs login after reopen: ${ready.url || url}`);
   }
   if (!ready.ok) {
     const navigated = await browserEval(session, page, `(() => { location.href = ${JSON.stringify(url)}; return location.href; })()`, 30000).catch(() => '');
-    ready = await waitForExpectedPage(session, page, url, Math.min(browserOpenTimeoutMs, 45000));
+    ready = await waitForExpectedPage(session, page, url, Math.min(browserOpenTimeoutMs, pageReadyTimeoutMs));
     if (!ready.url && navigated) ready.url = navigated;
+    if (ready.needsLogin) throw new Error(`needs login after navigate: ${ready.url || url}`);
+  }
+  if (!ready.ok) throw new Error(`opened wrong page for ${url}: ${ready.url || 'unknown url'}`);
+  activeBrowserSessions.add(session);
+  return page;
+}
+
+async function browserOpenNewTab(session, url) {
+  if (singleProfileBind) return browserOpen(singleProfileSession, url);
+  const opened = extractJson(await opencli(['browser', session, 'tab', 'new', url], browserOpenTimeoutMs));
+  let page = normalizePageId(opened);
+  if (!page) throw new Error(`missing page id for ${url}`);
+  const loginProbe = await probeLoginPage(session, page);
+  if (loginProbe && loginProbe.needsLogin) throw new Error(`needs login after open: ${loginProbe.href || url}`);
+  let ready = await waitForExpectedPage(session, page, url, Math.min(browserOpenTimeoutMs, pageReadyTimeoutMs));
+  if (ready.needsLogin) throw new Error(`needs login after open: ${ready.url || url}`);
+  if (!ready.ok) {
+    const navigated = await browserEval(session, page, `(() => { location.href = ${JSON.stringify(url)}; return location.href; })()`, 30000).catch(() => '');
+    ready = await waitForExpectedPage(session, page, url, Math.min(browserOpenTimeoutMs, pageReadyTimeoutMs));
+    if (!ready.url && navigated) ready.url = navigated;
+    if (ready.needsLogin) throw new Error(`needs login after navigate: ${ready.url || url}`);
   }
   if (!ready.ok) throw new Error(`opened wrong page for ${url}: ${ready.url || 'unknown url'}`);
   activeBrowserSessions.add(session);
@@ -433,9 +661,13 @@ async function closeChromeProfileDirectory(profileDirectory, reason) {
     "$needleQuoted='--profile-directory=\"" + escaped + "\"';",
     "$killed=@();",
     "for($i=0;$i -lt 3;$i++){",
-    "$rows=Get-CimInstance Win32_Process -Filter \"name = 'chrome.exe'\" | Where-Object { $cmd=($_.CommandLine -replace '\"',''); $cmd -like \"*$needle*\" -or $_.CommandLine -like \"*$needleQuoted*\" };",
-    "if(-not $rows){ break }",
-    "$rows | ForEach-Object { $killed += $_.ProcessId; Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue };",
+    "$all=Get-CimInstance Win32_Process;",
+    "$roots=@($all | Where-Object { $_.Name -eq 'chrome.exe' -and (($cmd=(($_.CommandLine -replace '\"','') -replace '\\\\','')) -like \"*$needle*\" -or $_.CommandLine -like \"*$needleQuoted*\") });",
+    "if(-not $roots){ break }",
+    "$ids=New-Object 'System.Collections.Generic.HashSet[int]';",
+    "$roots | ForEach-Object { [void]$ids.Add([int]$_.ProcessId) };",
+    "do { $added=$false; foreach($row in $all){ if($ids.Contains([int]$row.ParentProcessId) -and -not $ids.Contains([int]$row.ProcessId)){ [void]$ids.Add([int]$row.ProcessId); $added=$true } } } while($added);",
+    "@($ids) | Sort-Object -Descending | ForEach-Object { $killed += $_; Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue };",
     "Start-Sleep -Milliseconds 800;",
     "}",
     "$killed | Select-Object -Unique"
@@ -452,7 +684,38 @@ async function closeChromeProfileDirectory(profileDirectory, reason) {
   };
 }
 
+async function cleanupBrowserLifecycle(summary, reason, profileDirectoryOverride = '') {
+  const lifecycle = summary && summary.lifecycle;
+  const closedSessions = await closeActiveBrowserSessions().catch(err => ([{
+    ok: false,
+    error: err && err.message ? err.message : String(err || ''),
+    reason
+  }]));
+  if (lifecycle && closedSessions.length) {
+    lifecycle.sessionCloses.push({ after: reason, results: closedSessions });
+  }
+  const profileDirectory = profileDirectoryOverride || defaultProfileDirectoryToClose();
+  if (!shouldCloseProfile || !profileDirectory) {
+    return {
+      sessionCloses: closedSessions,
+      profileClose: {
+        ok: true,
+        skipped: true,
+        reason: shouldCloseProfile ? 'missing profile directory' : 'closeProfile disabled'
+      }
+    };
+  }
+  const profileClose = await closeChromeProfileDirectory(profileDirectory, reason);
+  if (lifecycle) lifecycle.profileClose = profileClose;
+  console.error(`[lifecycle] close profile ${profileDirectory} ${profileClose.ok ? 'ok' : 'failed'} (${reason})`);
+  return { sessionCloses: closedSessions, profileClose };
+}
+
 async function browserEval(session, page, source, timeoutMs = browserEvalTimeoutMs) {
+  if (singleProfileBind) {
+    const output = await opencli(['browser', singleProfileSession, 'eval', '--tab', page, source], timeoutMs);
+    return extractJson(output);
+  }
   let lastError = null;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -466,23 +729,53 @@ async function browserEval(session, page, source, timeoutMs = browserEvalTimeout
         const ensured = await ensureOpenCliProfile(platformFromSession(session)).catch(() => null);
         if (!ensured || ensured.ok === false) break;
       }
-      await wait(2000);
+        await wait(1000);
+    }
+  }
+  throw lastError;
+}
+
+async function collectWithBrowserRecovery(platform, key, collect) {
+  const maxAttempts = singleProfileBind ? 2 : Math.max(1, Number(args.browserRecoveryAttempts || 2));
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const platformState = await ensureOpenCliProfile(platform);
+      if (!platformState || platformState.ok === false) {
+        throw new Error(platformState && platformState.error || `profile not connected before ${key}`);
+      }
+      return await collect();
+    } catch (err) {
+      lastError = err;
+      if (attempt >= maxAttempts || !isRecoverableBrowserError(err)) break;
+      if (singleProfileBind) {
+        console.error(`[collect] ${key} rebinding the same browser window after: ${String(err && err.message || err).split(/\r?\n/)[0]}`);
+        const rebound = await rebindSingleProfileWindow();
+        if (!rebound.ok) break;
+        continue;
+      }
+      console.error(`[collect] ${key} browser session recovered after: ${String(err && err.message || err).split(/\r?\n/)[0]}`);
+      await closeActiveBrowserSessions().catch(() => []);
+      await ensureOpenCliProfile(platform).catch(() => null);
+      await wait(1500);
     }
   }
   throw lastError;
 }
 
 async function browserState(session, page) {
-  return opencli(['browser', session, 'state', '--tab', page], 30000);
+  const activeSession = singleProfileBind ? singleProfileSession : session;
+  return opencli(['browser', activeSession, 'state', '--tab', page], 30000);
 }
 
 async function browserClick(session, page, target, timeoutMs = browserClickTimeoutMs) {
-  return extractJson(await opencli(['browser', session, 'click', '--tab', page, String(target)], timeoutMs));
+  const activeSession = singleProfileBind ? singleProfileSession : session;
+  return extractJson(await opencli(['browser', activeSession, 'click', '--tab', page, String(target)], timeoutMs));
 }
 
 async function clickVisibleText(session, page, texts, options = {}) {
   const words = Array.isArray(texts) ? texts : [texts];
-  const selector = options.selector || 'button,[role=button],a,label,span,div';
+  const selector = options.selector || 'button,[role=button],a,label';
   const exact = options.exact !== false;
   return browserEval(session, page, `(() => {
     const words = ${JSON.stringify(words)};
@@ -518,10 +811,22 @@ async function clickTextByWalkingDom(session, page, text) {
       return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
     };
     const textOf = el => (el && (el.innerText || el.textContent || '') || '').trim().replace(/\s+/g, ' ');
+    const isNotificationSurface = el => {
+      for (let node = el; node && node !== document.body; node = node.parentElement) {
+        const cls = String(node.className || '');
+        const role = node.getAttribute && node.getAttribute('role') || '';
+        const label = node.getAttribute && (node.getAttribute('aria-label') || node.title || '') || '';
+        const text = textOf(node).slice(0, 300);
+        if (/message|notice|notification|notify|inbox/i.test(cls + ' ' + role + ' ' + label)) return true;
+        if (/通知|消息中心|全部消息|互动消息|系统通知/.test(text)) return true;
+      }
+      return false;
+    };
     const nodes = Array.from(document.querySelectorAll('body *'))
       .filter(visible)
       .map(el => ({ el, text: textOf(el) }))
       .filter(item => item.text && item.text.includes(wanted))
+      .filter(item => !isNotificationSurface(item.el))
       .sort((a, b) => a.text.length - b.text.length);
     const hit = nodes[0];
     if (!hit) return { clicked: false };
@@ -560,8 +865,20 @@ async function dismissKnownPopups(session, page) {
         }
         return false;
       };
-      const candidates = Array.from(document.querySelectorAll('button,[role=button],a,span,div,i,svg'))
+      const isNotificationSurface = el => {
+        for (let node = el; node && node !== document.body; node = node.parentElement) {
+          const cls = String(node.className || '');
+          const role = node.getAttribute && node.getAttribute('role') || '';
+          const label = node.getAttribute && (node.getAttribute('aria-label') || node.title || '') || '';
+          const text = textOf(node).slice(0, 300);
+          if (/message|notice|notification|notify|inbox/i.test(cls + ' ' + role + ' ' + label)) return true;
+          if (/通知|消息中心|全部消息|互动消息|系统通知/.test(text)) return true;
+        }
+        return false;
+      };
+      const candidates = Array.from(document.querySelectorAll('button,[role=button],a'))
         .filter(visible)
+        .filter(el => !isNotificationSurface(el))
         .map((el, index) => {
           const rect = el.getBoundingClientRect();
           return { el, index, text: textOf(el), cls: String(el.className || ''), x: rect.x, y: rect.y, w: rect.width, h: rect.height, modal: isModalish(el) };
@@ -578,18 +895,54 @@ async function dismissKnownPopups(session, page) {
       await wait(900);
       continue;
     }
-    const state = await browserState(session, page).catch(() => '');
-    let clicked = false;
-    for (const keyword of keywords) {
-      const ref = findRefNearText(state, keyword, { back: 8, forward: 4, occurrence: 1 });
-      if (!ref) continue;
-      await browserClick(session, page, ref).catch(() => null);
-      clicked = true;
-      await wait(800);
-      break;
-    }
-    if (!clicked) break;
+    break;
   }
+}
+
+async function ensureDouyinContentAnalysisPage(session, page, contentPageUrl) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await dismissKnownPopups(session, page);
+    const check = await browserEval(session, page, `(() => {
+      const text = (document.body && document.body.innerText || '').replace(/\\s+/g, ' ');
+      const micro = document.querySelector('#micro');
+      const mainText = (micro && micro.innerText || text).replace(/\\s+/g, ' ');
+      const inMessage = /\\/creator-micro\\/message/.test(location.href) || /\\u901a\\u77e5\\s*\\u5168\\u90e8/.test(mainText);
+      if (inMessage) {
+        location.assign(${JSON.stringify(contentPageUrl)});
+        return { href: location.href, ok: false, redirected: true, inMessage: true, text: mainText.slice(0, 300) };
+      }
+      return {
+        href: location.href,
+        ok: /\\u6295\\u7a3f\\u5217\\u8868|\\u5bfc\\u51fa\\u6570\\u636e/.test(mainText),
+        inMessage: false,
+        text: mainText.slice(0, 500)
+      };
+    })()`).catch(() => null);
+    if (check && check.ok) return check;
+    await browserEval(session, page, `(() => {
+      const textOf = el => (el && (el.innerText || el.textContent || el.getAttribute('aria-label') || el.title || '') || '').trim().replace(/\\s+/g, ' ');
+      const visible = el => {
+        if (!el) return false;
+        const rect = el.getBoundingClientRect();
+        const style = getComputedStyle(el);
+        return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+      };
+      if (/\\/creator-micro\\/message/.test(location.href)) {
+        location.assign(${JSON.stringify(contentPageUrl)});
+        return { redirected: true, reason: 'message-url', href: location.href };
+      }
+      const buttons = Array.from(document.querySelectorAll('button,[role=button],a,span,div'))
+        .filter(visible)
+        .map(el => ({ el, text: textOf(el), cls: String(el.className || '') }));
+      const close = buttons.find(item => /^(\\u7a0d\\u540e\\u518d\\u770b|\\u7a0d\\u540e\\u518d\\u8bf4|\\u53d6\\u6d88|\\u5173\\u95ed)$/.test(item.text))
+        || buttons.find(item => /close|cancel/i.test(item.cls) && item.text !== '\\u53bb\\u661f\\u56fe\\u67e5\\u770b');
+      if (close) close.el.click();
+      location.assign(${JSON.stringify(contentPageUrl)});
+      return { clicked: false, assigned: true, reason: 'force-content-url-without-menu-click', href: location.href };
+    })()`, 30000).catch(() => null);
+    await wait(attempt === 0 ? 2500 : 4000);
+  }
+  return browserEval(session, page, `(() => ({ href: location.href, text: (document.body && document.body.innerText || '').replace(/\\s+/g, ' ').slice(0, 800) }))()`).catch(() => null);
 }
 
 function refFromLine(line) {
@@ -636,6 +989,35 @@ function inspectTableFile(file) {
   return { rows: rows.length, columns: rows[0] ? Object.keys(rows[0]) : [], first: rows[0] || null };
 }
 
+function tableHasColumns(file, patterns) {
+  const table = inspectTableFile(file);
+  const columns = table.columns || [];
+  return {
+    ...table,
+    missing: patterns
+      .filter(pattern => !columns.some(column => pattern.test(String(column || ''))))
+      .map(pattern => String(pattern))
+  };
+}
+
+function classifyDouyinWorksExport(file) {
+  const quality = tableHasColumns(file, [/\u70b9\u8d5e\u91cf/, /\u8bc4\u8bba\u91cf/, /\u6536\u85cf\u91cf/]);
+  const columnsText = (quality.columns || []).join(',');
+  const hasPublishTime = (quality.columns || []).some(column => /\u53d1\u5e03\u65f6\u95f4|\u6295\u7a3f\u65f6\u95f4|\u53d1\u5e03\u65e5\u671f/.test(String(column || '')));
+  const looksLikeSummary = [
+    /\u5468\u671f\u5185\u6295\u7a3f\u91cf/,
+    /\u6761\u5747/,
+    /\u4e2d\u4f4d\u6570/,
+    /\u5782\u7c7b/
+  ].some(pattern => pattern.test(columnsText));
+  return {
+    ...quality,
+    completeInteraction: quality.missing.length === 0,
+    exportShape: quality.missing.length ? (looksLikeSummary ? 'summary' : 'unknown') : 'works',
+    usable: quality.rows > 0 && (hasPublishTime || looksLikeSummary)
+  };
+}
+
 function latestExcelSince(startMs) {
   if (!fs.existsSync(DOWNLOADS)) return null;
   return fs.readdirSync(DOWNLOADS)
@@ -654,12 +1036,28 @@ async function waitForDownload(startMs, timeoutMs = downloadTimeoutMs) {
   while (Date.now() < deadline) {
     const hit = latestExcelSince(startMs);
     if (hit) {
-      await wait(800);
+      await wait(400);
       return hit;
     }
-    await wait(800);
+    await wait(400);
   }
   throw new Error('download timeout');
+}
+
+async function waitForPageText(session, page, patterns, timeoutMs = 8000) {
+  const checks = (Array.isArray(patterns) ? patterns : [patterns]).filter(Boolean);
+  const deadline = Date.now() + timeoutMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await browserEval(session, page, `(() => {
+      const text = (document.body && document.body.innerText || '').replace(/\\s+/g, ' ');
+      return { href: location.href, text: text.slice(0, 1000) };
+    })()`).catch(() => null);
+    const text = String(last && last.text || '');
+    if (checks.some(pattern => new RegExp(pattern).test(text))) return { ok: true, state: last };
+    await wait(500);
+  }
+  return { ok: false, state: last };
 }
 
 function copyDownload(downloaded, prefix) {
@@ -718,10 +1116,15 @@ function dateLabel(raw) {
 
 async function collectDouyinFans() {
   const startedAt = Date.now();
-  const session = `${sessionPrefix}-dy-fans`;
+  const session = singleProfileBind ? singleProfileSession : `${sessionPrefix}-dy-fans`;
   const page = await browserOpen(session, 'https://creator.douyin.com/creator-micro/data-center/operation');
   await wait(postOpenWaitMs);
   await dismissKnownPopups(session, page);
+  const loginState = await browserEval(session, page, `(() => {
+    const text = (document.body && document.body.innerText || '').replace(/\\s+/g, ' ');
+    return { needsLogin: /扫码登录|验证码登录|密码登录|创作者登录|登录\\/注册/.test(text) && !/数据中心|作品分析|投稿列表|导出数据/.test(text), text: text.slice(0, 500) };
+  })()`).catch(() => null);
+  if (loginState && loginState.needsLogin) throw new Error('douyin needs login');
   const payload = await browserEval(session, page, `(async()=>{const r=await fetch('/janus/douyin/creator/data/overview/dashboard',{method:'POST',headers:{'content-type':'application/json'},credentials:'include',body:JSON.stringify({recent_days:${JSON.stringify(days)}})});const j=await r.json();return {ok:r.ok,status:r.status,status_code:j.status_code,status_msg:j.status_msg,metrics:j.metrics||[]};})()`);
   if (!payload.ok || payload.status_code !== 0) throw new Error(`douyin fans api failed: ${payload.status_msg || payload.status}`);
   const metrics = new Map((payload.metrics || []).map(item => [item.english_metric_name, item]));
@@ -743,40 +1146,147 @@ async function collectDouyinFans() {
 
 async function collectDouyinWorks() {
   const startedAt = Date.now();
-  const session = `${sessionPrefix}-dy-works`;
-  const page = await browserOpen(session, 'https://creator.douyin.com/creator-micro/data-center/content');
+  const session = singleProfileBind ? singleProfileSession : `${sessionPrefix}-dy-works`;
+  const contentPageUrl = 'https://creator.douyin.com/creator-micro/data-center/content';
+  let page;
+  try {
+    page = await browserOpenNewTab(session, contentPageUrl);
+  } catch (err) {
+    if (!/chrome-error:\/\/|opened wrong page/i.test(String(err && err.message || err || ''))) throw err;
+    page = await browserOpen(session, 'https://creator.douyin.com/creator-micro/data-center/operation');
+    await wait(1500);
+    await browserEval(session, page, `(() => { location.assign(${JSON.stringify(contentPageUrl)}); return location.href; })()`, 30000).catch(() => null);
+    const ready = await waitForExpectedPage(session, page, contentPageUrl, Math.max(pageReadyTimeoutMs, 20000));
+    if (!ready.ok) throw new Error(`opened wrong page for ${contentPageUrl} after operation fallback: ${ready.url || 'unknown url'}`);
+  }
   await wait(postOpenWaitMs);
-  await dismissKnownPopups(session, page);
-  const contentUrl = await waitForUrlMatch(session, page, `href => /\/creator-micro\/data-center\/content/.test(href)`, 1000);
-  if (!contentUrl.ok) {
-    let clickedWorks = await clickVisibleText(session, page, '作品分析', { selector: 'a,button,[role=button],span,div', exact: true });
-    if (!clickedWorks || !clickedWorks.clicked) clickedWorks = await clickTextByWalkingDom(session, page, '作品分析');
-    if (clickedWorks && clickedWorks.clicked) {
-      await waitForUrlMatch(session, page, `href => /\/creator-micro\/data-center\/content|\/creator-micro\/data-center/.test(href)`, 5000);
-      await wait(500);
-      await dismissKnownPopups(session, page);
-    }
+  const loginState = await browserEval(session, page, `(() => {
+    const text = (document.body && document.body.innerText || '').replace(/\\s+/g, ' ');
+    return { needsLogin: /扫码登录|验证码登录|密码登录|创作者登录|登录\\/注册/.test(text) && !/数据中心|作品分析|投稿列表|导出数据/.test(text), text: text.slice(0, 500) };
+  })()`).catch(() => null);
+  if (loginState && loginState.needsLogin) throw new Error('douyin needs login');
+
+  const pageReady = await ensureDouyinContentAnalysisPage(session, page, contentPageUrl);
+  if (pageReady && /\/creator-micro\/message/.test(String(pageReady.href || ''))) {
+    await browserEval(session, page, `(() => { location.assign(${JSON.stringify(contentPageUrl)}); return location.href; })()`).catch(() => null);
+    await wait(2500);
+    await ensureDouyinContentAnalysisPage(session, page, contentPageUrl);
   }
-  const domClicked = await clickVisibleText(session, page, '投稿列表', { selector: 'label,button,[role=tab],[role=button],span,div', exact: true });
-  if (!domClicked || !domClicked.clicked) {
-    const state = await browserState(session, page);
-    const listRef = findRefNearText(state, '投稿列表', { tags: ['label', 'button'], back: 10, forward: 6 })
-      || findRefNearText(state, '投稿列表', { back: 10, forward: 8 });
-    if (!listRef) {
-      const debugFile = await writeDebugSnapshot(session, page, 'douyin-works-list-missing');
-      throw new Error(`douyin 投稿列表 ref not found; debug=${debugFile}`);
+
+  const listClicked = await browserEval(session, page, `(() => {
+    const root = document.querySelector('#micro') || document.querySelector('main') || document.body;
+    const textOf = el => (el && (el.innerText || el.textContent || el.getAttribute('aria-label') || el.title || '') || '').trim().replace(/\\s+/g, ' ');
+    const visible = el => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    const body = (root && root.innerText || '').replace(/\\s+/g, ' ');
+    if (/\\u901a\\u77e5\\s*\\u5168\\u90e8/.test(body) || /\\/creator-micro\\/message/.test(location.href)) {
+      location.assign(${JSON.stringify(contentPageUrl)});
+      return { clicked: false, redirected: true, href: location.href };
     }
-    await browserClick(session, page, listRef);
+    const candidates = Array.from(root.querySelectorAll('button,[role=tab],[role=button],label,div,span'))
+      .filter(visible)
+      .map(el => ({ el, text: textOf(el), rect: el.getBoundingClientRect(), cls: String(el.className || ''), aria: el.getAttribute('aria-selected') || '' }))
+      .filter(item => item.text === '\\u6295\\u7a3f\\u5217\\u8868');
+    const target = candidates.sort((a, b) => {
+      const as = /active|selected|checked/i.test(a.cls) || a.aria === 'true' ? 0 : 1;
+      const bs = /active|selected|checked/i.test(b.cls) || b.aria === 'true' ? 0 : 1;
+      return as - bs || a.rect.y - b.rect.y || a.rect.x - b.rect.x;
+    })[0];
+    if (!target) return { clicked: false, href: location.href, text: body.slice(0, 500) };
+    target.el.click();
+    return { clicked: true, href: location.href, x: target.rect.x, y: target.rect.y };
+  })()`).catch(() => null);
+  if (!listClicked || (!listClicked.clicked && !listClicked.redirected)) {
+    const debugFile = await writeDebugSnapshot(session, page, 'douyin-works-list-missing');
+    throw new Error(`douyin post list ref not found; debug=${debugFile}`);
   }
-  await wait(1000);
-  const state = await browserState(session, page);
-  const exportRef = findRefNearText(state, '导出数据', { tags: ['button'], back: 8, forward: 3, occurrence: 1 });
-  if (!exportRef) throw new Error('douyin 投稿列表导出数据 ref not found');
+  await wait(listClicked.redirected ? 3000 : 1200);
+
+  const listReady = await browserEval(session, page, `(() => {
+    const root = document.querySelector('#micro') || document.querySelector('main') || document.body;
+    const textOf = el => (el && (el.innerText || el.textContent || el.getAttribute('aria-label') || el.title || '') || '').trim().replace(/\\s+/g, ' ');
+    const visible = el => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    const candidates = Array.from(root.querySelectorAll('button,[role=tab],[role=button],label,div,span'))
+      .filter(visible)
+      .map(el => ({ el, text: textOf(el), rect: el.getBoundingClientRect(), cls: String(el.className || ''), aria: el.getAttribute('aria-selected') || '' }))
+      .filter(item => item.text === '\\u6295\\u7a3f\\u5217\\u8868');
+    const target = candidates.sort((a, b) => {
+      const as = /active|selected|checked/i.test(a.cls) || a.aria === 'true' ? 0 : 1;
+      const bs = /active|selected|checked/i.test(b.cls) || b.aria === 'true' ? 0 : 1;
+      return as - bs || a.rect.y - b.rect.y;
+    })[0];
+    if (target) target.el.click();
+    const body = (root && root.innerText || '').replace(/\\s+/g, ' ');
+    return { clicked: Boolean(target), body: body.slice(0, 1000) };
+  })()`).catch(() => null);
+  await wait(listReady && listReady.clicked ? 1500 : 800);
+
   const downloadStart = Date.now();
-  await browserClick(session, page, exportRef);
+  const clickedExport = await browserEval(session, page, `(() => {
+    const root = document.querySelector('#micro') || document.querySelector('main') || document.body;
+    const textOf = el => (el && (el.innerText || el.textContent || el.getAttribute('aria-label') || el.title || '') || '').trim().replace(/\\s+/g, ' ');
+    const visible = el => {
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      return style.display !== 'none' && style.visibility !== 'hidden' && rect.width > 0 && rect.height > 0;
+    };
+    const buttons = Array.from(root.querySelectorAll('button,[role=button]'))
+      .filter(visible)
+      .map(el => ({ el, text: textOf(el), rect: el.getBoundingClientRect() }))
+      .filter(item => item.text.includes('\\u5bfc\\u51fa\\u6570\\u636e'));
+    const labels = Array.from(root.querySelectorAll('*'))
+      .filter(visible)
+      .map(el => ({ el, text: textOf(el), rect: el.getBoundingClientRect() }))
+      .filter(item => item.text === '\\u6295\\u7a3f\\u5217\\u8868' || item.text === '\\u6295\\u7a3f\\u8868\\u73b0');
+    const postListLabels = labels.filter(item => item.text === '\\u6295\\u7a3f\\u5217\\u8868');
+    const label = (postListLabels.length ? postListLabels : labels).sort((a, b) => a.rect.y - b.rect.y)[0];
+    const ranked = buttons.map(item => ({
+      item,
+      score: label
+        ? Math.abs(item.rect.y - label.rect.y)
+          + (item.rect.y < label.rect.y ? 5000 : 0)
+          + (label.text === '\\u6295\\u7a3f\\u5217\\u8868' ? 0 : 3000)
+        : 0
+    })).sort((a, b) => a.score - b.score);
+    const target = (ranked[0] && ranked[0].item) || buttons[1] || buttons[0];
+    if (!target) return { clicked: false, buttonCount: buttons.length, labelFound: Boolean(label) };
+    target.el.click();
+    return { clicked: true, text: target.text, buttonCount: buttons.length, labelFound: Boolean(label), x: target.rect.x, y: target.rect.y };
+  })()`);
+  if (!clickedExport || !clickedExport.clicked) throw new Error('douyin post list export button not found');
   const downloaded = await waitForDownload(downloadStart);
   const file = copyDownload(downloaded, 'douyin-works-export');
-  return datasetResult({ platform: 'douyin', dataset: 'works', source: 'official_export:content/post_list', page, downloaded: downloaded.full }, startedAt, file);
+  const quality = classifyDouyinWorksExport(file);
+  if (!quality.usable) {
+    throw new Error(`douyin works export unusable: rows=${quality.rows}; columns=${quality.columns.join(',')}`);
+  }
+  if (!quality.completeInteraction) {
+    throw new Error(`douyin works export still summary, post list detail not reached; columns=${quality.columns.join(',')}`);
+  }
+  return datasetResult({
+    platform: 'douyin',
+    dataset: 'works',
+    source: 'official_export:content/post_list',
+    page,
+    downloaded: downloaded.full
+  }, startedAt, file, {
+    quality: {
+      exportShape: quality.exportShape,
+      completeInteraction: quality.completeInteraction,
+      missingInteractionColumns: quality.missing,
+      columns: quality.columns
+    }
+  });
 }
 
 async function getKuaishouApiPh(session, page) {
@@ -787,13 +1297,13 @@ async function getKuaishouApiPh(session, page) {
   const near7 = findRefNearText(state, '近7天', { back: 4, forward: 2 }) || findRefNearText(state, '近30天', { back: 4, forward: 2 });
   if (near7) {
     await browserClick(session, page, near7).catch(() => null);
-    await wait(1500);
+    await wait(800);
   }
   const near30State = await browserState(session, page);
   const near30 = findRefNearText(near30State, '近30天', { back: 4, forward: 2 });
   if (near30) {
     await browserClick(session, page, near30).catch(() => null);
-    await wait(2000);
+    await wait(1000);
   }
   const ph = await browserEval(session, page, `(()=>{const reqs=window.__codexKsReqs||[];for(let i=reqs.length-1;i>=0;i--){try{const v=JSON.parse(reqs[i].body||'{}')['kuaishou.web.cp.api_ph'];if(v)return v;}catch(e){}}return '';})()`);
   if (!ph) throw new Error('kuaishou api_ph not captured');
@@ -804,7 +1314,7 @@ async function collectKuaishouFans() {
   const startedAt = Date.now();
   const session = `${sessionPrefix}-ks-fans`;
   const page = await browserOpen(session, 'https://cp.kuaishou.com/profile');
-  await wait(postOpenWaitMs + 2000);
+  await wait(postOpenWaitMs);
   await dismissKnownPopups(session, page);
   const loginState = await browserEval(session, page, `(()=>{const text=(document.body&&document.body.innerText||'').replace(/\\s+/g,' ');const hasConsole=/作品分析|数据概览|粉丝分析|内容管理|互动管理|发布作品/.test(text);return {needsLogin:!hasConsole&&/立即登录|扫码登录|验证码登录|密码登录/.test(text), hasConsole, text:text.slice(0,500)};})()`).catch(() => null);
   if (loginState && loginState.needsLogin) throw new Error('kuaishou needs login');
@@ -834,7 +1344,7 @@ async function collectKuaishouWorks() {
   const startedAt = Date.now();
   const session = `${sessionPrefix}-ks-works`;
   const page = await browserOpen(session, 'https://cp.kuaishou.com/statistics/article');
-  await wait(postOpenWaitMs + 2000);
+  await wait(postOpenWaitMs);
   await dismissKnownPopups(session, page);
   const loginState = await browserEval(session, page, `(()=>{const text=(document.body&&document.body.innerText||'').replace(/\\s+/g,' ');const hasConsole=/作品分析|数据概览|粉丝分析|内容管理|互动管理|发布作品/.test(text);return {needsLogin:!hasConsole&&/立即登录|扫码登录|验证码登录|密码登录/.test(text), hasConsole, text:text.slice(0,500)};})()`).catch(() => null);
   if (loginState && loginState.needsLogin) throw new Error('kuaishou needs login');
@@ -842,7 +1352,7 @@ async function collectKuaishouWorks() {
   if (!state.includes('作品分析')) {
     const worksRef = findRefNearText(state, '作品分析', { back: 8, forward: 3 });
     if (worksRef) await browserClick(session, page, worksRef);
-    await wait(5000);
+    await waitForPageText(session, page, ['\\u5bfc\\u51fa\\u6570\\u636e', '\\u5bfc\\u51fa'], 6000);
     state = await browserState(session, page);
   }
   const exportRef = findRefNearText(state, '导出数据', { back: 8, forward: 4, occurrence: 1 })
@@ -859,7 +1369,7 @@ async function collectKuaishouWorks() {
   const before = await browserEval(session, page, `(async()=>{const body={page:0,count:10};if(${JSON.stringify(Boolean(ph))})body['kuaishou.web.cp.api_ph']=${JSON.stringify(ph)};return fetch('/rest/cp/creator/analysis/export/task/list',{method:'POST',headers:{'content-type':'application/json'},credentials:'include',body:JSON.stringify(body)}).then(r=>r.json()).then(j=>(j.data&&j.data.list||[]).map(x=>x.taskId)).catch(()=>[]);})()`).catch(() => []);
   if (exportRef) {
     await browserClick(session, page, exportRef).catch(() => null);
-    await wait(2500);
+    await wait(1000);
   }
   let latest = null;
   for (let i = 0; i < 30; i += 1) {
@@ -869,7 +1379,7 @@ async function collectKuaishouWorks() {
       (list || []).find(item => /作品/.test(item.filename || '') && item.status === 3);
     if (latest) break;
     if (!exportRef && i >= 2) break;
-    await wait(2000);
+    await wait(1000);
   }
   if (!latest) throw new Error('kuaishou export task did not finish');
   const downloaded = await browserEval(session, page, `(async()=>{
@@ -958,7 +1468,7 @@ async function collectBilibiliFans() {
   const startedAt = Date.now();
   const session = `${sessionPrefix}-bili-fans`;
   const page = await browserOpen(session, 'https://member.bilibili.com/platform/data-up/video?tab=audience');
-  await wait(postOpenWaitMs + 2000);
+  await wait(postOpenWaitMs);
   await dismissKnownPopups(session, page);
   const result = await browserEval(session, page, `(async()=>{const period=1;const r=await fetch('/x/web/data/v3/fans/stat/export?period='+period+'&tmid=&t='+Date.now(),{credentials:'include'});const j=await r.json();return {ok:r.ok,status:r.status,code:j.code,message:j.message,data:j.data};})()`, 60000);
   if (!result.ok || result.code !== 0) throw new Error(`bilibili fans export failed: ${result.status}/${result.code}`);
@@ -984,7 +1494,7 @@ async function collectBilibiliWorks() {
   const startedAt = Date.now();
   const session = `${sessionPrefix}-bili-works`;
   const page = await browserOpen(session, 'https://member.bilibili.com/platform/data-up/video?tab=audience');
-  await wait(postOpenWaitMs + 2000);
+  await wait(postOpenWaitMs);
   await dismissKnownPopups(session, page);
   const result = await browserEval(session, page, `(async()=>{
     const all=[];
@@ -1058,6 +1568,15 @@ const collectors = {
 
 async function main() {
   fs.mkdirSync(outDir, { recursive: true });
+  if (shouldPreCloseProfile) {
+    const profileDirectory = defaultProfileDirectoryToClose();
+    if (profileDirectory) {
+      const preflightClose = await closeChromeProfileDirectory(profileDirectory, 'preflight before data collection');
+      if (preflightClose.killedPids && preflightClose.killedPids.length) {
+        console.error(`[lifecycle] preflight closed stale profile ${profileDirectory}: ${preflightClose.killedPids.join(',')}`);
+      }
+    }
+  }
   const profileState = await ensureOpenCliProfile(platforms[0]).catch(err => ({ ok: false, error: err.message || String(err) }));
   const disconnected = Boolean(profileState && profileState.ok === false && /not connected|profile not connected/i.test(String(profileState.error || '')));
   const skipped = Boolean(skipDisconnected && disconnected);
@@ -1065,6 +1584,7 @@ async function main() {
     ok: false,
     requestedProfile,
     profile,
+    accountName,
     profileMode: profileMode || 'data',
     artifactPrefix,
     profileState,
@@ -1082,10 +1602,7 @@ async function main() {
   if (skipped) {
     const launchedProfileDirectory = profileState && profileState.launched && profileState.launched.profileDirectory;
     const profileDirectoryToClose = launchedProfileDirectory || chromeProfileByOpenCli[requestedProfile] || chromeProfileByOpenCli[profile];
-    if (profileDirectoryToClose && args.closeProfile === 'true') {
-      summary.lifecycle.profileClose = await closeChromeProfileDirectory(profileDirectoryToClose, 'data collection skipped before connection');
-      console.error(`[lifecycle] close profile ${profileDirectoryToClose} ${summary.lifecycle.profileClose.ok ? 'ok' : 'failed'}`);
-    }
+    await cleanupBrowserLifecycle(summary, 'data collection skipped before connection', profileDirectoryToClose);
     summary.finishedAt = new Date().toISOString();
     summary.ok = true;
     summary.summaryFile = path.join(outDir, `platform-data-summary-${artifactPrefix}-${stamp()}.json`);
@@ -1101,18 +1618,15 @@ async function main() {
       const startedAt = Date.now();
       try {
         console.error(`[collect] ${key} start`);
-        const platformState = await ensureOpenCliProfile(platform);
-        if (!platformState || platformState.ok === false) {
-          throw new Error(platformState && platformState.error || `profile not connected before ${key}`);
-        }
-        const result = await collect();
+        const result = await collectWithBrowserRecovery(platform, key, collect);
         summary.datasets.push(result);
         console.error(`[collect] ${key} ok ${result.durationMs}ms rows=${result.rows}`);
       } catch (err) {
         const message = err.message || String(err);
         const needsLogin = /needs login|login required|请先登录|立即登录|扫码登录|passport\.bilibili\.com\/login|opened wrong page.+\/login/i.test(message);
         summary.datasets.push({
-          ok: needsLogin,
+          // A login-expired dataset has no fresh output and must fail the run.
+          ok: false,
           skipped: needsLogin,
           skipReason: needsLogin ? 'needs_login' : '',
           platform,
@@ -1122,11 +1636,13 @@ async function main() {
         });
         console.error(`[collect] ${key} ${needsLogin ? 'skipped' : 'failed'}: ${message}`);
       } finally {
-        const closed = await closeActiveBrowserSessions();
-        if (closed.length) {
-          summary.lifecycle.sessionCloses.push({ after: key, results: closed });
-          for (const item of closed) {
-            console.error(`[lifecycle] close session ${item.session} ${item.ok ? 'ok' : 'failed'}`);
+        if (!singleProfileBind) {
+          const closed = await closeActiveBrowserSessions();
+          if (closed.length) {
+            summary.lifecycle.sessionCloses.push({ after: key, results: closed });
+            for (const item of closed) {
+              console.error(`[lifecycle] close session ${item.session} ${item.ok ? 'ok' : 'failed'}`);
+            }
           }
         }
       }
@@ -1134,16 +1650,7 @@ async function main() {
   }
   const launchedProfileDirectory = profileState && profileState.launched && profileState.launched.profileDirectory;
   const profileDirectoryToClose = launchedProfileDirectory || chromeProfileByOpenCli[requestedProfile] || chromeProfileByOpenCli[profile];
-  if (profileDirectoryToClose && args.closeProfile === 'true') {
-    summary.lifecycle.profileClose = await closeChromeProfileDirectory(profileDirectoryToClose, 'data collection finished');
-    console.error(`[lifecycle] close profile ${profileDirectoryToClose} ${summary.lifecycle.profileClose.ok ? 'ok' : 'failed'}`);
-  } else {
-    summary.lifecycle.profileClose = {
-      ok: true,
-      skipped: true,
-      reason: launchedProfileDirectory ? 'profile kept open by default; pass --closeProfile true to close it' : 'profile was already connected or not launched by this script'
-    };
-  }
+  await cleanupBrowserLifecycle(summary, 'data collection finished', profileDirectoryToClose);
   summary.finishedAt = new Date().toISOString();
   summary.ok = skipped || summary.datasets.every(item => item.ok);
   summary.summaryFile = path.join(outDir, `platform-data-summary-${artifactPrefix}-${stamp()}.json`);
@@ -1152,7 +1659,10 @@ async function main() {
   if (!summary.ok) process.exitCode = 1;
 }
 
-main().catch(err => {
+main().catch(async err => {
   console.error(err.stack || err.message || String(err));
+  await cleanupBrowserLifecycle(null, 'data collection crashed').catch(cleanupErr => {
+    console.error(`[lifecycle] crash cleanup failed: ${cleanupErr && cleanupErr.message ? cleanupErr.message : String(cleanupErr || '')}`);
+  });
   process.exitCode = 1;
 });

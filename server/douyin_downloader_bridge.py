@@ -348,6 +348,39 @@ def read_author(files, base_dir):
     return ""
 
 
+def _caption_from_object(data):
+    if not isinstance(data, dict):
+        return ""
+    aweme = data.get("aweme_info") if isinstance(data.get("aweme_info"), dict) else {}
+    return _pick_text(
+        data.get("desc"),
+        data.get("description"),
+        data.get("title"),
+        data.get("caption"),
+        aweme.get("desc") if isinstance(aweme, dict) else "",
+        aweme.get("title") if isinstance(aweme, dict) else "",
+    )
+
+
+def read_caption(files, base_dir):
+    paths = []
+    for item in files:
+        rel = item.get("path") or ""
+        name = str(item.get("name") or "").lower()
+        if item.get("type") == "metadata" or name.endswith("_data.json"):
+            paths.append(base_dir / rel)
+    paths = sorted([p for p in paths if p.exists()], key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in paths:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        caption = _caption_from_object(data)
+        if caption:
+            return caption[:500]
+    return ""
+
+
 def collect_files(base_dir, since_ts, limit=80):
     if not base_dir.exists():
         return []
@@ -774,6 +807,7 @@ def main():
             all_files = collect_files(out_dir, start_ts)
         transcript_text, transcript_file = read_transcript(all_files, out_dir)
         author = read_author(all_files, out_dir)
+        caption = read_caption(all_files, out_dir)
         files = filter_public_files(all_files, params) if action == "download" else all_files
         items = []
         if action == "hot":
@@ -805,6 +839,8 @@ def main():
             "files": files,
             "items": items,
             "author": author,
+            "title": caption,
+            "caption": caption,
             "transcript_text": transcript_text,
             "transcript_file": transcript_file,
             "log": log,

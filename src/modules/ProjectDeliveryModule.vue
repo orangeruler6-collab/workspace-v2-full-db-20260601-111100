@@ -190,7 +190,7 @@ import {
   updateProjectDeliveryTask
 } from '../api/projectDelivery'
 
-const groupOptions = ['内容一组', '内容二组', '内容三组', '内容四组', '内容五组', '内容六组']
+const groupOptions = ['内容一部', '内容二组', '内容三组', '内容四组', '内容五组', '内容六组', 'MCN经纪组']
 const statusOptions = [
   { value: 'planned', label: '待绑定' },
   { value: 'material_bound', label: '已绑定' },

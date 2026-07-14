@@ -407,7 +407,7 @@ module.exports = function createProjectDeliveryRoutes(deps) {
         const project = await ensureProject(db, body);
         const groups = Array.isArray(body.groups) && body.groups.length
           ? body.groups.map(item => cleanText(item, 80)).filter(Boolean)
-          : ['内容一组', '内容二组', '内容三组', '内容四组', '内容五组', '内容六组'];
+          : ['内容一部', '内容二组', '内容三组', '内容四组', '内容五组', '内容六组', 'MCN经纪组'];
         const days = dateRange(body.start_date || project.start_date, body.end_date || project.end_date);
         const perGroupPerDay = Math.max(1, Math.min(100, toInt(body.daily_count || body.per_group_daily_count || 1)));
         const totalTarget = toInt(body.total_count || body.total_plan);

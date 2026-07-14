@@ -80,13 +80,14 @@ const createAccountMonitorRoutes = require('./routes/accountMonitor.cjs');
 const createAccountStyleRoutes = require('./routes/accountStyles.cjs');
 const createCopygenRoutes = require('./routes/copygen.cjs');
 const createVideoPublishRoutes = require('./routes/videoPublish.cjs');
-const createFeedbackRoutes = require('./routes/feedback.cjs');
+const createCommentReplyRoutes = require('./routes/commentReply.cjs');
 const createAgentRoutes = require('./routes/agent.cjs');
 const createTrafficPlanRoutes = require('./routes/trafficPlan.cjs');
 const createTrafficPlanV2Routes = require('./routes/trafficPlanV2.cjs');
 const createAccountDataRoutes = require('./routes/accountData.cjs');
 const createProjectDeliveryRoutes = require('./routes/projectDelivery.cjs');
 const createSystemHealthRoutes = require('./routes/systemHealth.cjs');
+const createStyleWorkbenchRoutes = require('./routes/styleWorkbench.cjs');
 
 const logger = createLogger('server');
 var pythonRuntime = createPythonRuntime({ serverDir: __dirname });
@@ -144,7 +145,7 @@ var copygenRoutes = createCopygenRoutes({
 var videoPublishRoutes = createVideoPublishRoutes({
   root: RUNTIME_ROOT
 });
-var feedbackRoutes = createFeedbackRoutes({
+var commentReplyRoutes = createCommentReplyRoutes({
   root: RUNTIME_ROOT
 });
 var trafficPlanRoutes = createTrafficPlanRoutes({
@@ -165,6 +166,13 @@ var systemHealthRoutes = createSystemHealthRoutes({
   root: RUNTIME_ROOT,
   repoRoot: ROOT
 });
+var styleWorkbenchRoutes = createStyleWorkbenchRoutes({
+  root: RUNTIME_ROOT,
+  repoRoot: ROOT
+});
+if (profitRoutes && typeof profitRoutes._startWecomAutoPullScheduler === 'function') {
+  profitRoutes._startWecomAutoPullScheduler(Number(process.env.PROFIT_WECOM_PULL_INTERVAL_MS) || 4 * 60 * 60 * 1000);
+}
 if (trafficPlanRoutes && typeof trafficPlanRoutes._startCrmAutoRefresh === 'function') {
   trafficPlanRoutes._startCrmAutoRefresh(Number(process.env.TRAFFIC_CRM_REFRESH_INTERVAL_MS) || 2 * 60 * 60 * 1000);
 }
@@ -213,7 +221,7 @@ var materialRoutes = {
 var downloadRoutes = createDownloadRoutes();
 
 var routes = {};
-Object.assign(routes, authRoutes, adminRoutes, toolsRoutes, vectorRoutes, imagegenRoutes, ideasRoutes, profitRoutes, scheduleRoutes, dailyHotRoutes, materialRoutes, downloadRoutes, smartCollectRoutes, aiEditRoutes, accountMonitorRoutes, accountStyleRoutes, copygenRoutes, videoPublishRoutes, feedbackRoutes, trafficPlanRoutes, trafficPlanV2Routes, projectDeliveryRoutes, systemHealthRoutes);
+Object.assign(routes, authRoutes, adminRoutes, toolsRoutes, vectorRoutes, imagegenRoutes, ideasRoutes, profitRoutes, scheduleRoutes, dailyHotRoutes, materialRoutes, downloadRoutes, smartCollectRoutes, aiEditRoutes, accountMonitorRoutes, accountStyleRoutes, copygenRoutes, videoPublishRoutes, commentReplyRoutes, trafficPlanRoutes, trafficPlanV2Routes, projectDeliveryRoutes, systemHealthRoutes, styleWorkbenchRoutes);
 Object.assign(routes, accountDataRoutes);
 var agentRoutes = createAgentRoutes({
   root: RUNTIME_ROOT,
@@ -268,7 +276,7 @@ function moduleForRoute(routePath) {
   if (routePath.indexOf('/api/account-styles') === 0) return 'copygen';
   if (routePath.indexOf('/api/copygen') === 0) return 'copygen';
   if (routePath.indexOf('/api/video-publish') === 0) return 'videopublish';
-  if (routePath.indexOf('/api/feedback') === 0) return 'feedback';
+  if (routePath.indexOf('/api/comment-reply') === 0) return 'commentReply';
   if (routePath.indexOf('/api/traffic-plan') === 0) return 'trafficPlan';
   if (routePath.indexOf('/api/system-health') === 0) return 'systemHealth';
   if (routePath.indexOf('/api/system/health') === 0) return 'auth';
@@ -300,6 +308,30 @@ function auditBody(body) {
   return out;
 }
 
+function auditBriefBody(body) {
+  var out = {};
+  Object.keys(body || {}).forEach(function(key) {
+    if (key.charAt(0) === '_') return;
+    var value = body[key];
+    if (/image|base64|file|data|blob|buffer/i.test(key)) {
+      if (Array.isArray(value)) out[key + '_count'] = value.length;
+      else if (value) out[key + '_present'] = true;
+      return;
+    }
+    if (typeof value === 'string') {
+      out[key] = value.length > 220 ? value.slice(0, 220) + '...' : value;
+      return;
+    }
+    out[key] = value;
+  });
+  return out;
+}
+
+function shortText(value, fallback, limit) {
+  var text = String(value || fallback || '').replace(/\s+/g, ' ').trim();
+  return text.slice(0, limit || 80);
+}
+
 function auditSummaryFor(routePath, body, data) {
   var method = body._method || 'POST';
   if (data && (data.error || data.ok === false)) return 'request failed: ' + routePath;
@@ -318,6 +350,19 @@ function shouldAuditRoute(routePath) {
   if (routePath === '/api/auth/me') return false;
   if (routePath === '/api/workflow/styles') return false;
   if (routePath === '/api/ideas/click') return false;
+  if (routePath === '/api/schedule/revision') return false;
+  if (routePath === '/api/schedule/load') return false;
+  if (routePath === '/api/schedule/save') return false;
+  if (routePath === '/api/schedule/todos/load') return false;
+  if (routePath === '/api/schedule/todos/history') return false;
+  if (routePath === '/api/schedule/todos/save') return false;
+  if (routePath === '/api/schedule/todos/status') return false;
+  if (routePath === '/api/schedule/todos/delete') return false;
+  if (routePath === '/api/schedule/notify-handoff') return false;
+  if (routePath === '/api/schedule/notifications/unread') return false;
+  if (routePath === '/api/schedule/notifications/read') return false;
+  if (routePath === '/api/account-data/collect/status') return false;
+  if (routePath === '/api/ideas/list') return false;
   return true;
 }
 
@@ -342,14 +387,100 @@ function genericAuditInfo(routePath, body, data, startedAt) {
 }
 
 function auditInfo(routePath, body, data) {
-  if (!data || data.error || data.ok === false) return null;
+  var failed = Boolean(data && (data.error || data.ok === false));
+  var brief = auditBriefBody(body);
+  var errorText = failed ? String(data.error || data.message || '执行失败').slice(0, 180) : '';
+  function statusSuffix() { return failed ? '失败：' + errorText : '成功'; }
+  function imagegenInfo(action, label, type, model) {
+    var prompt = shortText(body.prompt || body.text || body.positive_prompt, '未填写提示词', 80);
+    return {
+      module: 'imagegen',
+      action: failed ? action + '.failed' : action,
+      target_type: 'imagegen',
+      target_id: data && (data.historyId || data.id || data.taskId || data.url) || '',
+      summary: label + '：' + prompt + '（' + statusSuffix() + '）',
+      metadata: Object.assign({}, brief, {
+        type: type,
+        model: body.model || model || '',
+        ratio: body.ratio || body.aspect_ratio || '',
+        size: body.size || body.resolution || '',
+        result_url: data && (data.url || data.image_url || data.result_url) || '',
+        error: errorText
+      })
+    };
+  }
+  function posttoolsInfo(action, label, target) {
+    return {
+      module: 'posttools',
+      action: failed ? action + '.failed' : action,
+      target_type: 'posttools',
+      target_id: target || body.url || body.source || data && (data.id || data.job_id) || '',
+      summary: label + '：' + shortText(target || body.url || body.source || body.text || body.filename, '未命名任务', 80) + '（' + statusSuffix() + '）',
+      metadata: Object.assign({}, brief, { error: errorText })
+    };
+  }
+  function videoPublishInfo(action, label, target) {
+    var account = body.accountName || body.account_name || body.accountId || body.account_id || body.account || '';
+    var platform = body.platform || body.platformId || '';
+    var subject = [account, platform, target || body.id || body.jobId || body.title || body.video_name].filter(Boolean).join(' / ');
+    return {
+      module: 'videopublish',
+      action: failed ? action + '.failed' : action,
+      target_type: 'video_publish',
+      target_id: body.id || body.jobId || data && (data.id || data.jobId) || '',
+      summary: label + '：' + shortText(subject, '未命名发布任务', 100) + '（' + statusSuffix() + '）',
+      metadata: Object.assign({}, brief, { error: errorText })
+    };
+  }
+  function commentReplyInfo(action, label) {
+    var account = body.accountName || body.account_name || body.accountId || body.account_id || body.account || '';
+    return {
+      module: 'commentReply',
+      action: failed ? action + '.failed' : action,
+      target_type: 'comment_reply',
+      target_id: body.id || body.accountId || data && (data.id || data.jobId) || '',
+      summary: label + '：' + shortText(account || body.videoUrl || body.comment || body.content, '评论回复任务', 80) + '（' + statusSuffix() + '）',
+      metadata: Object.assign({}, brief, { error: errorText })
+    };
+  }
+
+  if (!data) return null;
+  if (routePath === '/api/gpt-image2/text2image') return imagegenInfo('imagegen.text2image', 'GPT-Image2 文生图', 'text2image', 'gpt-image2');
+  if (routePath === '/api/gpt-image2/image2image') return imagegenInfo('imagegen.image2image', 'GPT-Image2 图生图', 'image2image', 'gpt-image2');
+  if (routePath === '/api/dreamina/text2image') return imagegenInfo('imagegen.text2image', '即梦文生图', 'text2image', 'dreamina');
+  if (routePath === '/api/dreamina/image2image') return imagegenInfo('imagegen.image2image', '即梦图生图', 'image2image', 'dreamina');
+  if (routePath === '/api/minimax/image') return imagegenInfo('imagegen.text2image', 'MiniMax 生图', 'text2image', 'minimax');
+  if (routePath === '/api/gpt-image2/tasks' && body.action !== 'list') return imagegenInfo('imagegen.task.create', '创建生图队列', body.type || 'task', 'gpt-image2');
+  if (/^\/api\/imagegen\/history\/\d+$/.test(routePath) && body._method === 'DELETE') return { module: 'imagegen', action: failed ? 'imagegen.history.delete.failed' : 'imagegen.history.delete', target_type: 'imagegen_history', target_id: body.id || '', summary: '删除生图历史：' + (body.id || '') + '（' + statusSuffix() + '）', metadata: brief };
+
+  if (routePath === '/api/posttools/video-download') return posttoolsInfo('posttools.video_download', '视频下载', body.url);
+  if (routePath === '/api/posttools/video-download-batch-start') return posttoolsInfo('posttools.video_download_batch', '批量视频下载', Array.isArray(body.urls) ? body.urls.length + ' 条链接' : body.url);
+  if (routePath === '/api/posttools/media-convert') return posttoolsInfo('posttools.media_convert', '媒体转换', body.source || body.action);
+  if (routePath === '/api/posttools/ncm-convert') return posttoolsInfo('posttools.ncm_convert', 'NCM 转换', body._originalName || body.name);
+  if (routePath === '/api/posttools/video-analyze') return posttoolsInfo('posttools.video_analyze', '视频转写/分析', body.url || body.provider);
+  if (routePath === '/api/posttools/ai-recommend') return posttoolsInfo('posttools.ai_recommend', 'AI 推荐文案', body.text);
+
+  if (routePath === '/api/video-publish/jobs/create') return videoPublishInfo('videopublish.job.create', '创建发布任务', body.title || body.video_name);
+  if (routePath === '/api/video-publish/jobs/update-status') return videoPublishInfo('videopublish.job.status', '修改发布任务状态', body.status);
+  if (routePath === '/api/video-publish/jobs/cancel') return videoPublishInfo('videopublish.job.cancel', '取消发布任务', body.id);
+  if (routePath === '/api/video-publish/jobs/run') return videoPublishInfo('videopublish.job.run', '执行发布任务', body.id);
+  if (routePath === '/api/video-publish/jobs/run-batch') return videoPublishInfo('videopublish.job.run_batch', '启动发布队列', Array.isArray(body.ids) ? body.ids.length + ' 条任务' : body.id);
+  if (routePath === '/api/video-publish/jobs/delete') return videoPublishInfo('videopublish.job.delete', '删除发布任务', body.id);
+  if (routePath === '/api/video-publish/accounts/save') return videoPublishInfo('videopublish.account.save', '保存发布账号', body.name || body.accountName || body.id);
+  if (routePath === '/api/video-publish/accounts/open-login' || routePath === '/api/video-publish/accounts/launch-profile') return videoPublishInfo('videopublish.account.login', '打开发布账号登录态', body.profileAlias || body.accountId || body.id);
+  if (routePath === '/api/video-publish/videos/transcribe') return videoPublishInfo('videopublish.video.transcribe', '发布视频转写', body.videoName || body.video_url || body.path);
+
+  if (routePath === '/api/comment-reply/collect') return commentReplyInfo('comment_reply.collect', '采集评论');
+  if (routePath === '/api/comment-reply/plan') return commentReplyInfo('comment_reply.plan', '生成评论回复方案');
+  if (routePath === '/api/comment-reply/send') return commentReplyInfo('comment_reply.send', '发送评论回复');
+
+  if (failed) return null;
   if (routePath === '/api/profits' && body._method === 'POST') return { module: 'ops', action: 'profit.create', target_type: 'profit', target_id: data.id, summary: 'create profit record', metadata: auditBody(body) };
   if (/^\/api\/profits\/\d+$/.test(routePath) && (body._method === 'PATCH' || body._method === 'PUT')) return { module: 'ops', action: 'profit.update', target_type: 'profit', target_id: body.id, summary: 'update profit record', metadata: auditBody(body) };
   if (/^\/api\/profits\/\d+$/.test(routePath) && body._method === 'DELETE') return { module: 'ops', action: 'profit.delete', target_type: 'profit', target_id: body.id, summary: 'delete profit record', metadata: auditBody(body) };
   if (routePath === '/api/profit/add') return { module: 'ops', action: 'profit.create', target_type: 'profit', target_id: data.id, summary: 'create profit record', metadata: auditBody(body) };
   if (routePath === '/api/profit/update') return { module: 'ops', action: 'profit.update', target_type: 'profit', target_id: body.id, summary: 'update profit record', metadata: auditBody(body) };
   if (routePath === '/api/profit/delete') return { module: 'ops', action: 'profit.delete', target_type: 'profit', target_id: body.id, summary: 'delete profit record', metadata: auditBody(body) };
-  if (routePath === '/api/schedule/save') return { module: 'schedule', action: 'schedule.save', target_type: 'schedule', summary: 'save schedule board', metadata: { tasks: Array.isArray(body.tasks) ? body.tasks.length : 0, members: Array.isArray(body.members) ? body.members.length : 0 } };
   if (routePath === '/api/materials/upload') return { module: 'material', action: 'material.upload', target_type: 'material', target_id: data.id, summary: 'upload material: ' + (body.original || body.filename || ''), metadata: auditBody(body) };
   if (routePath === '/api/materials/update') return { module: 'material', action: 'material.update', target_type: 'material', target_id: body.id, summary: 'update material', metadata: auditBody(body) };
   if (routePath === '/api/materials/delete') return { module: 'material', action: 'material.delete', target_type: 'material', target_id: body.id, summary: 'delete material', metadata: auditBody(body) };
@@ -453,6 +584,103 @@ function routeRequest(req, res) {
     return;
   }
 
+  if (routePath === '/api/transcribe/audio' && req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
+    var audioBusboy = Busboy({ headers: req.headers, limits: { fileSize: 1024 * 1024 * 1024 } });
+    var audioUploadData = {};
+    var audioUploadFilePath = null;
+    var audioUploadErrored = false;
+    var audioFileWritePromise = null;
+    var audioResponseSent = false;
+
+    function sendAudioJSON(statusCode, data) {
+      if (audioResponseSent) return;
+      audioResponseSent = true;
+      sendJSON(res, statusCode, data);
+    }
+
+    function cleanupAudioTemp() {
+      if (audioUploadFilePath) {
+        try { fs.unlinkSync(audioUploadFilePath); } catch(e) {}
+      }
+    }
+
+    audioBusboy.on('file', function(fieldname, file, info) {
+      var filename = info.filename || 'audio';
+      var uploadDir = path.join(RUNTIME_ROOT, 'temp', 'transcribe-audio');
+      try { fs.mkdirSync(uploadDir, { recursive: true }); } catch(e) {}
+      audioUploadFilePath = path.join(uploadDir, Date.now() + '_' + filename.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_'));
+      audioUploadData._originalName = filename;
+      var writeStream = fs.createWriteStream(audioUploadFilePath);
+      file.pipe(writeStream);
+      audioFileWritePromise = new Promise(function(resolve, reject) {
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+        file.on('error', reject);
+      });
+      file.on('limit', function() {
+        audioUploadErrored = true;
+        try { writeStream.destroy(); } catch(e) {}
+      });
+    });
+
+    audioBusboy.on('field', function(fieldname, value) {
+      audioUploadData[fieldname] = value;
+    });
+
+    audioBusboy.on('error', function(err) {
+      if (audioUploadErrored) return;
+      audioUploadErrored = true;
+      cleanupAudioTemp();
+      sendAudioJSON(400, { error: err.message });
+    });
+
+    audioBusboy.on('finish', async function() {
+      if (audioUploadErrored) {
+        cleanupAudioTemp();
+        sendAudioJSON(400, { error: 'file too large or upload interrupted' });
+        return;
+      }
+      if (audioFileWritePromise) {
+        try { await audioFileWritePromise; }
+        catch(e) {
+          cleanupAudioTemp();
+          sendAudioJSON(400, { error: 'failed to save uploaded file: ' + e.message });
+          return;
+        }
+      }
+      if (!audioUploadFilePath || !fs.existsSync(audioUploadFilePath)) {
+        sendAudioJSON(400, { error: 'missing uploaded file' });
+        return;
+      }
+      var token = extractToken(req, audioUploadData);
+      var authUser = null;
+      if (AUTH_DISABLED) {
+        authUser = authDisabledUser;
+      } else {
+        try { authUser = await authStore.authenticate(token); }
+        catch(e) { cleanupAudioTemp(); sendAudioJSON(500, { error: e.message }); return; }
+        if (!authUser) { cleanupAudioTemp(); sendAudioJSON(401, { error: 'Unauthorized' }); return; }
+        if (!authStore.canAccess(authUser, 'tools')) { cleanupAudioTemp(); sendAudioJSON(403, { error: 'Forbidden' }); return; }
+      }
+      audioUploadData._auth = authUser;
+      audioUploadData._token = token;
+      audioUploadData._tempPath = audioUploadFilePath;
+      var route = routes['/api/transcribe/audio'];
+      if (!route) { cleanupAudioTemp(); sendAudioJSON(404, { error: 'unknown endpoint' }); return; }
+      try {
+        route(audioUploadData, function(data) {
+          sendAudioJSON(data && data.error ? 400 : 200, data);
+        });
+      } catch(e) {
+        cleanupAudioTemp();
+        sendAudioJSON(500, { error: e.message });
+      }
+    });
+
+    req.pipe(audioBusboy);
+    return;
+  }
+
   // Handle multipart form data for ncm-convert
   if (routePath === '/api/posttools/ncm-convert' && req.headers['content-type'] && req.headers['content-type'].includes('multipart/form-data')) {
     var busboy = Busboy({ headers: req.headers, limits: { fileSize: 100 * 1024 * 1024 } }); // 100MB limit
@@ -505,6 +733,21 @@ function routeRequest(req, res) {
     var videoBusboy = Busboy({ headers: req.headers, limits: { fileSize: 8 * 1024 * 1024 * 1024 } });
     var videoUploadData = {};
     var videoUploadFilePath = null;
+    var videoUploadErrored = false;
+    var videoFileWritePromise = null;
+    var videoResponseSent = false;
+
+    function sendVideoJSON(statusCode, data) {
+      if (videoResponseSent) return;
+      videoResponseSent = true;
+      sendJSON(res, statusCode, data);
+    }
+
+    function cleanupVideoTemp() {
+      if (videoUploadFilePath) {
+        try { fs.unlinkSync(videoUploadFilePath); } catch(e) {}
+      }
+    }
 
     videoBusboy.on('file', function(fieldname, file, info) {
       var filename = info.filename || 'video';
@@ -514,8 +757,14 @@ function routeRequest(req, res) {
       videoUploadData._originalName = filename;
       var writeStream = fs.createWriteStream(videoUploadFilePath);
       file.pipe(writeStream);
-      file.on('end', function() {
-        writeStream.end();
+      videoFileWritePromise = new Promise(function(resolve, reject) {
+        writeStream.on('finish', resolve);
+        writeStream.on('error', reject);
+        file.on('error', reject);
+      });
+      file.on('limit', function() {
+        videoUploadErrored = true;
+        try { writeStream.destroy(); } catch(e) {}
       });
     });
 
@@ -523,28 +772,74 @@ function routeRequest(req, res) {
       videoUploadData[fieldname] = value;
     });
 
+    videoBusboy.on('error', function(err) {
+      if (videoUploadErrored) return;
+      videoUploadErrored = true;
+      cleanupVideoTemp();
+      sendVideoJSON(400, { error: err.message });
+    });
+
     videoBusboy.on('finish', async function() {
+      if (videoUploadErrored) {
+        cleanupVideoTemp();
+        sendVideoJSON(400, { error: 'file too large or upload interrupted' });
+        return;
+      }
+      if (videoFileWritePromise) {
+        try { await videoFileWritePromise; }
+        catch(e) {
+          cleanupVideoTemp();
+          sendVideoJSON(400, { error: 'failed to save uploaded file: ' + e.message });
+          return;
+        }
+      }
+      if (!videoUploadFilePath || !fs.existsSync(videoUploadFilePath)) {
+        sendVideoJSON(400, { error: 'missing uploaded file' });
+        return;
+      }
       var token = extractToken(req, videoUploadData);
       var authUser = null;
       if (AUTH_DISABLED) {
         authUser = authDisabledUser;
       } else {
         try { authUser = await authStore.authenticate(token); }
-        catch(e) { sendJSON(res, 500, { error: e.message }); return; }
-        if (!authUser) { sendJSON(res, 401, { error: 'Unauthorized' }); return; }
-        if (!authStore.canAccess(authUser, 'videopublish')) { sendJSON(res, 403, { error: 'Forbidden' }); return; }
+        catch(e) { cleanupVideoTemp(); sendVideoJSON(500, { error: e.message }); return; }
+        if (!authUser) { cleanupVideoTemp(); sendVideoJSON(401, { error: 'Unauthorized' }); return; }
+        if (!authStore.canAccess(authUser, 'videopublish')) { cleanupVideoTemp(); sendVideoJSON(403, { error: 'Forbidden' }); return; }
       }
       videoUploadData._auth = authUser;
       videoUploadData._token = token;
       videoUploadData._tempPath = videoUploadFilePath;
       var route = routes['/api/video-publish/videos/upload'];
-      if (!route) { sendJSON(res, 404, { error: 'unknown endpoint' }); return; }
+      if (!route) { cleanupVideoTemp(); sendVideoJSON(404, { error: 'unknown endpoint' }); return; }
       try {
         route(videoUploadData, function(data) {
-          sendJSON(res, data && data.error ? 400 : 200, data);
+          if (authUser) {
+            var failed = Boolean(data && (data.error || data.ok === false));
+            authStore.logOperation({
+              auth: authUser,
+              req: req,
+              module: 'videopublish',
+              action: failed ? 'videopublish.video.upload.failed' : 'videopublish.video.upload',
+              target_type: 'video_publish',
+              target_id: data && (data.id || data.video_id || data.url) || '',
+              summary: '上传发布视频：' + shortText(videoUploadData._originalName || videoUploadData.name || '未命名视频', '', 100) + '（' + (failed ? '失败：' + String(data.error || data.message || '上传失败').slice(0, 160) : '成功') + '）',
+              metadata: {
+                filename: videoUploadData._originalName || videoUploadData.name || '',
+                size: videoUploadData.size || '',
+                accountId: videoUploadData.accountId || videoUploadData.account_id || '',
+                platform: videoUploadData.platform || '',
+                error: failed ? String(data.error || data.message || '').slice(0, 200) : ''
+              }
+            }).catch(function(e) {
+              logger.warn('audit log failed', e);
+            });
+          }
+          sendVideoJSON(data && data.error ? 400 : 200, data);
         });
       } catch(e) {
-        sendJSON(res, 500, { error: e.message });
+        cleanupVideoTemp();
+        sendVideoJSON(500, { error: e.message });
       }
     });
 

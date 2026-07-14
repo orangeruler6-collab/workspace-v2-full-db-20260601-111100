@@ -22,6 +22,7 @@ const DEFAULT_MEMBER_PERMISSIONS = [
   'styleWriter',
   'styleAssets',
   'styleGrossMargin',
+  'styleDouyinHotlist',
   'styleDrafts',
   'tools',
   'accountStyle',
@@ -33,11 +34,10 @@ const DEFAULT_MEMBER_PERMISSIONS = [
   'projectDelivery',
   'ideaboard',
   'videopublish',
-  'feedback',
   'posttools',
   'vector'
 ];
-const SENSITIVE_MEMBER_MODULES = ['ops'];
+const SENSITIVE_MEMBER_MODULES = ['ops', 'commentReply'];
 const ADMIN_ONLY_MODULES = ['adminUsers', 'operationLogs'];
 const ALL_MODULES = DEFAULT_MEMBER_PERMISSIONS.concat(SENSITIVE_MEMBER_MODULES, ADMIN_ONLY_MODULES);
 const LEGACY_DEFAULT_MEMBER_PERMISSION_SETS = [
@@ -61,7 +61,7 @@ const LEGACY_DEFAULT_MEMBER_PERMISSION_SETS = [
 const SECRET_KEYS = /pass|password|token|authorization|api.?key|secret|cookie|session|credential|video_base64|file_data|image_base64|pwd|hash|salt/i;
 // 邀请码必须从环境变量读取，不允许硬编码
 const CHINESE_REAL_NAME = /^[\u4e00-\u9fa5]{2,20}$/;
-const VALID_GROUPS = ['\u5185\u5bb9\u4e00\u7ec4', '\u5185\u5bb9\u4e8c\u7ec4', '\u5185\u5bb9\u4e09\u7ec4', '\u5185\u5bb9\u56db\u7ec4', '\u5185\u5bb9\u4e94\u7ec4', '\u5185\u5bb9\u516d\u7ec4'];
+const VALID_GROUPS = ['内容一部', '\u5185\u5bb9\u4e00\u7ec4', '\u5185\u5bb9\u4e8c\u7ec4', '\u5185\u5bb9\u4e09\u7ec4', '\u5185\u5bb9\u56db\u7ec4', '\u5185\u5bb9\u4e94\u7ec4', '\u5185\u5bb9\u516d\u7ec4', 'MCN\u7ecf\u7eaa\u7ec4'];
 const VALID_EMPLOYEE_TYPES = ['\u6b63\u5f0f\u5458\u5de5', '\u5b9e\u4e60\u751f'];
 
 function now() {
@@ -633,6 +633,10 @@ function createAuthStore(options) {
       where.push('(summary LIKE ? OR target_id LIKE ? OR metadata LIKE ?)');
       params.push(keyword, keyword, keyword);
     }
+    if (filters.importantOnly) {
+      where.push("action NOT LIKE 'api.%'");
+      where.push("action <> 'schedule.save'");
+    }
     if (filters.from) { where.push('created_at>=?'); params.push(Number(filters.from)); }
     if (filters.to) { where.push('created_at<=?'); params.push(Number(filters.to)); }
     const limit = Math.max(1, Math.min(200, Number(filters.limit) || 50));
@@ -656,7 +660,7 @@ function createAuthStore(options) {
     if (moduleId === 'auth') return true;
     if (moduleId === 'accountmonitor' && parsePermissions(user.permissions).indexOf('dailyhot') >= 0) return true;
 
-    if (moduleId === 'ops') {
+    if (moduleId === 'ops' || moduleId === 'commentReply') {
       const title = user.title || '';
       return title === '部长' || title === '组长' || parsePermissions(user.permissions).indexOf(moduleId) >= 0;
     }

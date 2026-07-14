@@ -15,16 +15,33 @@ const datasets = args.datasets || 'fans,works';
 const sessionPrefix = args.sessionPrefix || `account-data-batch-${Date.now()}`;
 const profileMode = args.profileMode || 'direct';
 const closeProfile = args.closeProfile === undefined ? 'true' : args.closeProfile;
+const singleProfileBindEnabled = args.singleProfileBind === undefined
+  ? process.env.ACCOUNT_DATA_SINGLE_PROFILE_BIND !== 'false'
+  : args.singleProfileBind === 'true';
+const singleProfilePlatforms = new Set(['douyin', 'kuaishou', 'bilibili']);
 const childTimeoutMs = Number(args.childTimeoutMs || process.env.ACCOUNT_DATA_CHILD_TIMEOUT_MS || 20 * 60 * 1000);
-const batchSize = Math.max(1, Number(args.batchSize || process.env.ACCOUNT_DATA_BATCH_SIZE || 2) || 2);
+const requestedBatchSize = Math.max(1, Number(args.batchSize || process.env.ACCOUNT_DATA_BATCH_SIZE || 1) || 1);
+const batchSize = 1;
 const batchPauseMs = Math.max(0, Number(args.batchPauseMs || process.env.ACCOUNT_DATA_BATCH_PAUSE_MS || 5000) || 0);
 const cleanupBetweenBatches = args.cleanupBetweenBatches !== 'false' && process.env.ACCOUNT_DATA_CLEANUP_BETWEEN_BATCHES !== 'false';
 const skipDisconnected = args.skipDisconnected !== 'false' && process.env.ACCOUNT_DATA_SKIP_DISCONNECTED !== 'false';
+const abortAfterInfrastructureFailures = Math.max(0, Number(args.abortAfterInfrastructureFailures || process.env.ACCOUNT_DATA_ABORT_AFTER_INFRA_FAILURES || 5) || 0);
+const profileCloseVerifyTimeoutMs = Math.max(1000, Number(args.profileCloseVerifyTimeoutMs || process.env.ACCOUNT_DATA_PROFILE_CLOSE_VERIFY_TIMEOUT_MS || 12000) || 12000);
+const profileCloseVerifyIntervalMs = Math.max(300, Number(args.profileCloseVerifyIntervalMs || process.env.ACCOUNT_DATA_PROFILE_CLOSE_VERIFY_INTERVAL_MS || 1000) || 1000);
+const childNodeOptions = mergeNodeOptions(process.env.NODE_OPTIONS || '', process.env.ACCOUNT_DATA_CHILD_NODE_OPTIONS || '--max-old-space-size=4096');
 const forceAllPlatforms = args.forceAllPlatforms === 'true' || process.env.ACCOUNT_DATA_FORCE_ALL_PLATFORMS === '1';
 const loginReportFile = args.loginReport ? path.resolve(ROOT, args.loginReport) : '';
 const onlyLoggedInPlatforms = args.onlyLoggedInPlatforms === 'true' || process.env.ACCOUNT_DATA_ONLY_LOGGED_IN_PLATFORMS === '1';
 const stateFile = path.resolve(ROOT, args.stateFile || path.join('data', 'account-data-collect-state.json'));
 const writeState = args.writeState !== 'false' && process.env.ACCOUNT_DATA_WRITE_STATE !== 'false';
+const collectTrigger = String(args.trigger || 'cli');
+const queueOffset = Math.max(0, Number(args.queueOffset || 0) || 0);
+const queueTotal = Math.max(0, Number(args.queueTotal || 0) || 0);
+const queueExplicit = args.queueExplicit === 'true';
+const explicitUpdatePlatformStatus = args.updatePlatformStatus !== undefined || process.env.ACCOUNT_DATA_UPDATE_PLATFORM_STATUS !== undefined;
+const updatePlatformStatusEnabled = explicitUpdatePlatformStatus
+  ? args.updatePlatformStatus !== 'false' && process.env.ACCOUNT_DATA_UPDATE_PLATFORM_STATUS !== 'false'
+  : profiles.length >= 10;
 const profileMeta = dashboardProfileMeta();
 const chromeProfiles = chromeProfileDirectoryMap();
 const loginPlatformMap = buildLoginPlatformMap();
@@ -123,9 +140,30 @@ function safeReadJson(file) {
 
 function safeWriteJson(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  const temp = file + '.tmp';
+  const temp = `${file}.${process.pid}.tmp`;
   fs.writeFileSync(temp, JSON.stringify(value, null, 2), 'utf8');
   fs.renameSync(temp, file);
+}
+
+function mergeNodeOptions(current, addition) {
+  const parts = String(current || '').split(/\s+/).filter(Boolean);
+  for (const part of String(addition || '').split(/\s+/).filter(Boolean)) {
+    if (!parts.includes(part)) parts.push(part);
+  }
+  return parts.join(' ');
+}
+
+function infrastructureFailureText(value) {
+  return /Fatal process out of memory|heap out of memory|out of memory|chrome-error:\/\/chromewebdata|Browser connection dropped|Browser Bridge session may have restarted|Target tab .*not part of the current browser session|command_result_unknown|Target closed|Page crashed|RESULT_CODE_KILLED|WebSocket.*closed|Session closed|browser has been closed/i.test(String(value || ''));
+}
+
+function isInfrastructureFailure(result) {
+  if (!result || result.ok || result.skipped) return false;
+  return infrastructureFailureText([
+    result.error,
+    result.stderrTail,
+    result.stdoutTail
+  ].filter(Boolean).join('\n'));
 }
 
 function collectSourceSnapshot() {
@@ -277,7 +315,8 @@ function run(command, argv, options = {}) {
     const child = spawn(command, argv, {
       cwd: ROOT,
       windowsHide: true,
-      stdio: ['ignore', 'pipe', 'pipe']
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: options.env || process.env
     });
     let stdout = '';
     let stderr = '';
@@ -306,6 +345,19 @@ function chunks(values, size) {
 function profileDirectoryFor(profile) {
   const wanted = String(profile || '').trim();
   return chromeProfiles[wanted] || '';
+}
+
+function accountNameForProfile(profile) {
+  const meta = profileMeta[String(profile || '').trim()] || {};
+  return String(meta.account || meta.name || '').trim();
+}
+
+function safeNamePart(value) {
+  return String(value || '')
+    .trim()
+    .replace(/[\\/:*?"<>|\s]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 48);
 }
 
 async function closeChromeProfileDirectories(directories, reason) {
@@ -337,6 +389,53 @@ async function closeChromeProfileDirectories(directories, reason) {
   }];
 }
 
+async function listChromeProfilePids(directories) {
+  const uniqueDirs = unique((directories || []).filter(Boolean));
+  if (!uniqueDirs.length) return [];
+  const quotedDirs = uniqueDirs.map(dir => "'" + String(dir).replace(/'/g, "''") + "'").join(',');
+  const script = [
+    '$dirs=@(' + quotedDirs + ');',
+    '$rows=@();',
+    'foreach($dir in $dirs){',
+    "$needle='--profile-directory=' + $dir;",
+    "$needleQuoted='--profile-directory=\"' + $dir + '\"';",
+    "$matches=Get-CimInstance Win32_Process -Filter \"name = 'chrome.exe'\" | Where-Object { $cmd=($_.CommandLine -replace '\"',''); $cmd -like \"*$needle*\" -or $_.CommandLine -like \"*$needleQuoted*\" };",
+    '$matches | ForEach-Object { $rows += [pscustomobject]@{ profileDirectory=$dir; pid=$_.ProcessId } };',
+    '}',
+    '$rows | ConvertTo-Json -Compress'
+  ].join(' ');
+  const result = await run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script], { timeoutMs: 30000 });
+  const text = String(result.stdout || '').trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [parsed];
+  } catch (_) {
+    return [];
+  }
+}
+
+async function verifyChromeProfilesClosed(directories, reason) {
+  const uniqueDirs = unique((directories || []).filter(Boolean));
+  if (!uniqueDirs.length) return { ok: true, skipped: true, directories: [], remaining: [] };
+  const started = Date.now();
+  let cleanup = [];
+  let remaining = await listChromeProfilePids(uniqueDirs);
+  if (remaining.length) cleanup = await closeChromeProfileDirectories(uniqueDirs, reason || 'before next batch');
+  while (remaining.length && Date.now() - started < profileCloseVerifyTimeoutMs) {
+    await wait(profileCloseVerifyIntervalMs);
+    remaining = await listChromeProfilePids(uniqueDirs);
+    if (remaining.length) cleanup = await closeChromeProfileDirectories(uniqueDirs, reason || 'before next batch');
+  }
+  return {
+    ok: remaining.length === 0,
+    skipped: false,
+    directories: uniqueDirs,
+    cleanup,
+    remaining
+  };
+}
+
 async function closeAllChrome(reason) {
   if (process.env.ACCOUNT_DATA_FORCE_KILL_CHROME_AFTER_BATCH !== '1') return { ok: true, skipped: true, reason: reason || '' };
   const script = [
@@ -357,11 +456,13 @@ async function closeAllChrome(reason) {
 async function collectOneProfile(profile, batchIndex, platformOverride) {
   const startedMs = Date.now();
   const profilePlatforms = platformsForProfile(profile, platformOverride);
+  const accountName = accountNameForProfile(profile);
   if (!profilePlatforms) {
     console.error(`[batch] ${profile}${platformOverride ? ':' + platformOverride : ''} skipped no matching platforms`);
     return {
       ok: true,
       profile,
+      accountName,
       batch: batchIndex + 1,
       skipped: true,
       skipReason: 'no_logged_in_platforms',
@@ -374,8 +475,9 @@ async function collectOneProfile(profile, batchIndex, platformOverride) {
     };
   }
   const safeProfile = profile.replace(/[^\w.-]+/g, '-');
+  const safeAccount = safeNamePart(accountName);
   const safePlatform = String(platformOverride || profilePlatforms).replace(/[^\w.-]+/g, '-');
-  const artifactPrefix = `${sessionPrefix}-${safeProfile}-${safePlatform}`;
+  const artifactPrefix = [sessionPrefix, safeProfile, safeAccount, safePlatform].filter(Boolean).join('-');
   const argv = [
     collectScript,
     '--profile', profile,
@@ -387,8 +489,14 @@ async function collectOneProfile(profile, batchIndex, platformOverride) {
     '--artifactPrefix', artifactPrefix
   ];
   if (args.launchProfile !== undefined) argv.push('--launchProfile', args.launchProfile);
+  const profilePlatformList = splitArg(profilePlatforms);
+  if (singleProfileBindEnabled && profilePlatformList.length === 1 && singleProfilePlatforms.has(profilePlatformList[0])) {
+    argv.push('--singleProfileBind', 'true');
+  }
   argv.push('--closeProfile', closeProfile);
   if (args.profileConnectTimeoutMs !== undefined) argv.push('--profileConnectTimeoutMs', args.profileConnectTimeoutMs);
+  forwardArg(argv, 'profileReadyPollMs');
+  forwardArg(argv, 'profileRebindTimeoutMs');
   forwardArg(argv, 'browserOpenTimeoutMs');
   forwardArg(argv, 'browserEvalTimeoutMs');
   forwardArg(argv, 'browserClickTimeoutMs');
@@ -398,16 +506,25 @@ async function collectOneProfile(profile, batchIndex, platformOverride) {
   forwardArg(argv, 'allowNewContextFallback');
   forwardArg(argv, 'reconnectOnDisconnect');
   console.error(`[batch] ${profile}${platformOverride ? ':' + platformOverride : ''} start`);
-  const child = await run(process.execPath, argv, { timeoutMs: childTimeoutMs });
+  const child = await run(process.execPath, argv, {
+    timeoutMs: childTimeoutMs,
+    env: Object.assign({}, process.env, childNodeOptions ? { NODE_OPTIONS: childNodeOptions } : {})
+  });
   const latest = latestSummaryAfter(startedMs, artifactPrefix);
   const summary = latest ? latest.summary : null;
   const summaryFile = summary ? latest.full : '';
-  const disconnected = Boolean(summary?.profileState?.ok === false && /not connected|profile not connected/i.test(String(summary?.profileState?.error || '')));
+  const disconnectText = [
+    summary?.profileState?.error,
+    ...(summary?.datasets || []).filter(item => item && item.ok === false).map(item => item.error),
+    child.stderr
+  ].filter(Boolean).join('\n');
+  const disconnected = /not connected|profile not connected|Browser profile/i.test(disconnectText);
   const skipped = Boolean(skipDisconnected && disconnected);
   const ok = skipped || (child.code === 0 && Boolean(summary && summary.ok !== false));
   const result = {
     ok,
     profile,
+    accountName,
     target: platformOverride ? `${profile}:${platformOverride}` : '',
     batch: batchIndex + 1,
     skipped,
@@ -429,43 +546,118 @@ async function main() {
   const startedAt = new Date().toISOString();
   const results = [];
   const batchResults = [];
+  let aborted = false;
+  let abortReason = '';
+  let consecutiveInfrastructureFailureBatches = 0;
   const workItems = uniqueTargets(targets).length
     ? uniqueTargets(targets)
     : profiles.map(profile => ({ profile, platform: '' }));
   const profileBatches = chunks(workItems, batchSize);
+  let previousProfileDirectories = [];
+  function persistProgress(extra = {}) {
+    if (!writeState) return;
+    const completedTargets = results.map(item => item.target || item.profile).filter(Boolean);
+    const nextOffset = queueTotal ? ((queueOffset + completedTargets.length) % queueTotal) : 0;
+    const current = safeReadJson(stateFile) || {};
+    const patch = {
+      ok: true,
+      running: true,
+      trigger: current.trigger || collectTrigger,
+      collectorPid: process.pid,
+      completedTargets,
+      skippedProfiles: unique(results.filter(item => item.skipped).map(item => item.profile)),
+      batchProgress: {
+        completed: completedTargets.length,
+        total: workItems.length,
+        currentTarget: extra.currentTarget || '',
+        lastCompletedTarget: completedTargets.at(-1) || '',
+        checkpointAt: new Date().toISOString()
+      },
+      updatedAt: new Date().toISOString()
+    };
+    if (!queueExplicit && queueTotal) patch.nextCollectTargetOffset = nextOffset;
+    safeWriteJson(stateFile, Object.assign({}, current, patch));
+  }
+  persistProgress();
   for (let batchIndex = 0; batchIndex < profileBatches.length; batchIndex += 1) {
     const batch = profileBatches[batchIndex];
     const batchStartedAt = new Date().toISOString();
-    console.error(`[batch] group ${batchIndex + 1}/${profileBatches.length} start targets=${batch.map(item => item.platform ? `${item.profile}:${item.platform}` : item.profile).join(',')}`);
-    const settled = await Promise.all(batch.map(item => collectOneProfile(item.profile, batchIndex, item.platform)));
+    const preflight = cleanupBetweenBatches
+      ? await verifyChromeProfilesClosed(previousProfileDirectories, `before batch ${batchIndex + 1}`)
+      : { ok: true, skipped: true };
+    if (!preflight.ok) {
+      aborted = true;
+      abortReason = `上一个浏览器 Profile 未关闭干净，已停止继续打开新 Profile`;
+      batchResults.push({
+        index: batchIndex + 1,
+        profiles: unique(batch.map(item => item.profile)),
+        targets: batch.map(item => item.platform ? `${item.profile}:${item.platform}` : item.profile),
+        startedAt: batchStartedAt,
+        finishedAt: new Date().toISOString(),
+        preflight,
+        cleanup: [],
+        hardCleanup: { ok: true, skipped: true }
+      });
+      console.error(`[batch] aborted: ${abortReason}`);
+      break;
+    }
+    const batchTarget = batch.map(item => item.platform ? `${item.profile}:${item.platform}` : item.profile).join(',');
+    persistProgress({ currentTarget: batchTarget });
+    console.error(`[batch] group ${batchIndex + 1}/${profileBatches.length} start targets=${batchTarget}`);
+    const settled = [];
+    for (const item of batch) {
+      settled.push(await collectOneProfile(item.profile, batchIndex, item.platform));
+    }
     results.push(...settled);
+    const activeFailures = settled.filter(item => !item.ok && !item.skipped);
+    const infrastructureOnly = activeFailures.length > 0 && activeFailures.every(isInfrastructureFailure);
+    consecutiveInfrastructureFailureBatches = infrastructureOnly ? consecutiveInfrastructureFailureBatches + 1 : 0;
     const cleanup = cleanupBetweenBatches
       ? await closeChromeProfileDirectories(batch.map(item => profileDirectoryFor(item.profile)), `after batch ${batchIndex + 1}`)
       : [];
+    const postflight = cleanupBetweenBatches
+      ? await verifyChromeProfilesClosed(batch.map(item => profileDirectoryFor(item.profile)), `after batch ${batchIndex + 1} verify`)
+      : { ok: true, skipped: true };
     const hardCleanup = cleanupBetweenBatches
       ? await closeAllChrome(`after batch ${batchIndex + 1}`)
       : { ok: true, skipped: true };
+    previousProfileDirectories = batch.map(item => profileDirectoryFor(item.profile)).filter(Boolean);
     batchResults.push({
       index: batchIndex + 1,
       profiles: unique(batch.map(item => item.profile)),
       targets: batch.map(item => item.platform ? `${item.profile}:${item.platform}` : item.profile),
       startedAt: batchStartedAt,
       finishedAt: new Date().toISOString(),
+      preflight,
       cleanup,
+      postflight,
       hardCleanup
     });
     console.error(`[batch] group ${batchIndex + 1}/${profileBatches.length} done`);
+    persistProgress();
+    if (abortAfterInfrastructureFailures && consecutiveInfrastructureFailureBatches >= abortAfterInfrastructureFailures) {
+      aborted = true;
+      abortReason = `连续 ${consecutiveInfrastructureFailureBatches} 批浏览器/opencli 基础设施失败，已提前止损`;
+      console.error(`[batch] aborted: ${abortReason}`);
+      break;
+    }
     if (batchPauseMs && batchIndex < profileBatches.length - 1) await wait(batchPauseMs);
   }
   const summary = {
-    ok: results.every(item => item.ok || item.skipped),
+    ok: !aborted && results.every(item => item.ok || item.skipped),
+    aborted,
+    abortReason,
     startedAt,
     finishedAt: new Date().toISOString(),
     profiles,
     targets: workItems.map(item => item.platform ? `${item.profile}:${item.platform}` : item.profile),
     batchSize,
+    requestedBatchSize,
+    executionMode: 'serial',
     cleanupBetweenBatches,
     skipDisconnected,
+    abortAfterInfrastructureFailures,
+    childNodeOptions,
     platforms,
     datasets,
     profileMode,
@@ -480,23 +672,37 @@ async function main() {
   fs.writeFileSync(summary.summaryFile, JSON.stringify(summary, null, 2), 'utf8');
   if (writeState) {
     const now = new Date().toISOString();
-    const nextState = Object.assign({}, safeReadJson(stateFile) || {}, {
+    const currentState = safeReadJson(stateFile) || {};
+    const completedTargets = results.map(item => item.target || item.profile).filter(Boolean);
+    const nextOffset = queueTotal ? ((queueOffset + completedTargets.length) % queueTotal) : 0;
+    const nextState = Object.assign({}, currentState, {
       ok: summary.ok,
       running: false,
-      trigger: 'cli',
+      trigger: currentState.trigger || collectTrigger,
+      collectorPid: 0,
       startedAt,
       finishedAt: now,
       lastRun: now,
       lastSummaryFile: summary.summaryFile,
       profiles,
       targets: workItems.map(item => item.platform ? `${item.profile}:${item.platform}` : item.profile),
-      profileQueue: { explicit: true, unit: targets.length ? 'account_platform' : 'profile', total: workItems.length, offset: 0, nextOffset: 0, max: workItems.length },
+      profileQueue: currentState.profileQueue || { explicit: queueExplicit, unit: targets.length ? 'account_platform' : 'profile', total: queueTotal || workItems.length, offset: queueOffset, nextOffset, max: workItems.length },
       platforms,
       datasets,
       batchSize,
+      requestedBatchSize,
+      executionMode: 'serial',
       cleanupBetweenBatches,
       skipDisconnected,
       skippedProfiles: results.filter(item => item.skipped).map(item => item.profile),
+      completedTargets,
+      batchProgress: {
+        completed: completedTargets.length,
+        total: workItems.length,
+        currentTarget: '',
+        lastCompletedTarget: completedTargets.at(-1) || '',
+        checkpointAt: now
+      },
       error: summary.ok ? '' : 'batch collection failed',
       failures: results.filter(item => !item.ok && !item.skipped).map(item => ({
         profile: item.profile,
@@ -511,18 +717,17 @@ async function main() {
       command: process.argv.slice(),
       updatedAt: now
     });
+    if (!queueExplicit && queueTotal) nextState.nextCollectTargetOffset = nextOffset;
     safeWriteJson(stateFile, nextState);
   }
-  try {
-    refreshCollectIndex();
-  } catch (err) {
-    console.error(`[index] refresh failed: ${err.message || err}`);
-  }
-  try {
-    summary.platformStatus = await updateAccountPlatformStatus();
-  } catch (err) {
-    summary.platformStatus = { ok: false, error: err && err.message ? err.message : String(err || 'platform status update failed') };
-    console.error(`[platform-status] update failed: ${summary.platformStatus.error}`);
+  console.error('[index] skipped local simplified index refresh; dashboard service will rebuild quality index');
+  if (updatePlatformStatusEnabled) {
+    try {
+      summary.platformStatus = await updateAccountPlatformStatus();
+    } catch (err) {
+      summary.platformStatus = { ok: false, error: err && err.message ? err.message : String(err || 'platform status update failed') };
+      console.error(`[platform-status] update failed: ${summary.platformStatus.error}`);
+    }
   }
   console.log(JSON.stringify(summary, null, 2));
   if (!summary.ok) process.exitCode = 1;

@@ -142,6 +142,7 @@
                 </div>
                 <div class="media-task-title">{{ task.title }}</div>
                 <div class="media-task-source">{{ task.sourceLabel }}</div>
+                <div v-if="task.caption" class="media-task-caption">{{ task.caption }}</div>
                 <div v-if="task.status === 'running'" class="media-task-progress">
                   <span></span>
                 </div>
@@ -155,7 +156,7 @@
                     class="download-result-row">
                     <div class="download-file-meta">
                       <span class="file-name">{{ file.name || '处理结果' }}</span>
-                      <span class="file-size">{{ [file.type, formatFileSize(file.size), file.url ? '保存：' + file.url : ''].filter(Boolean).join(' · ') }}</span>
+                      <span class="file-size">{{ fileMetaText(file) }}</span>
                     </div>
                     <div class="download-result-actions">
                       <template v-if="file.type !== 'zip'">
@@ -611,7 +612,7 @@ const mediaTasks = ref([])
 const selectedMediaAction = ref('download-video')
 const selectedMediaQuality = ref('1080')
 let mediaTaskSeq = 0
-let mediaBatchPollTimer = null
+const mediaBatchPollTimers = new Map()
 
 const mediaQueueSummary = computed(() => {
   if (!mediaTasks.value.length) return '等待新任务'
@@ -690,6 +691,45 @@ function detectDownloadPlatform(value) {
   return ''
 }
 
+function mediaPlatformLabel(value) {
+  const platform = detectDownloadPlatform(value)
+  if (platform === 'bilibili') return 'B站链接'
+  if (platform === 'douyin') return '抖音链接'
+  return '本地输入'
+}
+
+function compactMediaText(value, max = 120) {
+  const text = String(value || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!text) return ''
+  return text.length > max ? `${text.slice(0, max - 1)}…` : text
+}
+
+function extractPastedCaption(rawInput, link) {
+  const text = String(rawInput || '')
+    .replace(new RegExp(String(link || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), ' ')
+    .replace(/https?:\/\/[^\s"'“”‘’<>，。！？!?；;、)）\]}】]+/gi, ' ')
+    .replace(/\bBV[0-9A-Za-z]{8,}\b/gi, ' ')
+    .replace(/(复制此链接|打开抖音|看看|分享|链接|视频|原声|已保存|下载)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return compactMediaText(text, 180)
+}
+
+function resultCaption(result, fallback = '') {
+  return compactMediaText(
+    result?.caption ||
+    result?.desc ||
+    result?.description ||
+    result?.title ||
+    result?.item?.desc ||
+    result?.item?.title ||
+    fallback,
+    180
+  )
+}
+
 function normalizeResultFiles(result) {
   const files = Array.isArray(result.files) ? result.files : (result.file ? [result.file] : [])
   return files.map(file => {
@@ -697,6 +737,10 @@ function normalizeResultFiles(result) {
     if (file.download_url || !file.url || !file.mtime) return file
     return { ...file, download_url: `${file.url}${file.url.includes('?') ? '&' : '?'}v=${file.mtime}` }
   })
+}
+
+function fileMetaText(file) {
+  return [file?.type, formatFileSize(file?.size)].filter(Boolean).join(' · ')
 }
 
 function mediaActionLabel(actionId) {
@@ -716,6 +760,7 @@ function createMediaTask(actionId, sourceLabel, title) {
     actionId,
     title: title || mediaActionLabel(actionId),
     sourceLabel: sourceLabel || '本地输入',
+    caption: '',
     status: 'pending',
     statusText: '等待处理',
     error: '',
@@ -731,6 +776,7 @@ function updateMediaTask(task, patch = {}) {
 
 function clearMediaTasks() {
   if (mediaBusy.value) return
+  clearMediaBatchPoll()
   mediaTasks.value = []
 }
 
@@ -747,11 +793,24 @@ function normalizeMediaInputToken(value) {
   return token
 }
 
+function bilibiliPartKey(value) {
+  const text = String(value || '')
+  try {
+    const parsed = new URL(text)
+    const p = parsed.searchParams.get('p') || parsed.searchParams.get('page')
+    const cid = parsed.searchParams.get('cid')
+    if (p && Number(p) > 0) return `p=${Math.floor(Number(p))}`
+    if (cid && Number(cid) > 0) return `cid=${Math.floor(Number(cid))}`
+  } catch(e) {}
+  return ''
+}
+
 function splitMediaLinks(value) {
   const text = String(value || '')
   const results = []
   const seen = new Set()
-  const seenBvid = new Set()
+  const seenBvidParts = new Set()
+  const seenBvidFromUrl = new Set()
   const add = item => {
     const normalized = normalizeMediaInputToken(item)
     const platform = detectDownloadPlatform(normalized)
@@ -759,8 +818,13 @@ function splitMediaLinks(value) {
     const bvid = normalized.match(/\bBV[0-9A-Za-z]{8,}\b/i)?.[0]
     if (platform === 'bilibili' && bvid) {
       const bvidKey = bvid.toLowerCase()
-      if (seenBvid.has(bvidKey)) return
-      seenBvid.add(bvidKey)
+      const isUrl = /^https?:\/\//i.test(normalized)
+      const partKey = isUrl ? bilibiliPartKey(normalized) : ''
+      if (!isUrl && seenBvidFromUrl.has(bvidKey)) return
+      const bvidPartKey = `${bvidKey}:${partKey}`
+      if (seenBvidParts.has(bvidPartKey)) return
+      seenBvidParts.add(bvidPartKey)
+      if (isUrl) seenBvidFromUrl.add(bvidKey)
     }
     const key = normalized.toLowerCase()
     if (seen.has(key)) return
@@ -781,6 +845,53 @@ function splitMediaLinks(value) {
       .forEach(add)
   }
   return results
+}
+
+function hasExplicitBilibiliPage(value) {
+  return Boolean(bilibiliPartKey(value))
+}
+
+function bvidFromValue(value) {
+  return String(value || '').match(/\bBV[0-9A-Za-z]{8,}\b/i)?.[0] || ''
+}
+
+async function expandBilibiliPagesForDownload(links) {
+  const expanded = []
+  const seen = new Set()
+  const add = link => {
+    const normalized = normalizeMediaInputToken(link)
+    const bvid = bvidFromValue(normalized)
+    const partKey = bvid ? bilibiliPartKey(normalized) : ''
+    const key = bvid ? `bili:${bvid.toLowerCase()}:${partKey}` : normalized.toLowerCase()
+    if (!normalized || seen.has(key)) return
+    seen.add(key)
+    expanded.push(normalized)
+  }
+
+  for (const link of links) {
+    const platform = detectDownloadPlatform(link)
+    const bvid = bvidFromValue(link)
+    if (platform !== 'bilibili' || !bvid || hasExplicitBilibiliPage(link)) {
+      add(link)
+      continue
+    }
+    try {
+      const result = await request('/api/posttools/bilibili-pages', {
+        method: 'POST',
+        body: { url: link }
+      })
+      const pages = Array.isArray(result.pages) ? result.pages : []
+      if (pages.length > 1) {
+        pages.forEach(page => add(page.url || `${link}?p=${page.page}`))
+      } else {
+        add(link)
+      }
+    } catch (e) {
+      add(link)
+      showToast(e.message || 'B站分P识别失败，已按原链接处理', 'warn')
+    }
+  }
+  return expanded
 }
 
 async function uploadMediaSourceIfNeeded() {
@@ -807,7 +918,14 @@ async function downloadVideoSource(url, task) {
   })
   const files = normalizeResultFiles(result)
   if (!result.ok || !files.length) throw new Error(result.error || '视频下载失败')
-  return files
+  const caption = resultCaption(result)
+  const rawTitle = compactMediaText(result.title || result.desc || result.description || '', 80)
+  return {
+    files,
+    caption,
+    title: rawTitle && rawTitle !== caption ? rawTitle : '',
+    platform
+  }
 }
 
 async function convertMediaSource(actionId, sourceUrl, task) {
@@ -826,11 +944,22 @@ async function convertMediaSource(actionId, sourceUrl, task) {
   return files
 }
 
-function clearMediaBatchPoll() {
-  if (mediaBatchPollTimer) {
-    clearTimeout(mediaBatchPollTimer)
-    mediaBatchPollTimer = null
+function clearMediaBatchPoll(jobId) {
+  if (jobId) {
+    const timer = mediaBatchPollTimers.get(jobId)
+    if (timer) clearTimeout(timer)
+    mediaBatchPollTimers.delete(jobId)
+    return
   }
+  for (const timer of mediaBatchPollTimers.values()) {
+    clearTimeout(timer)
+  }
+  mediaBatchPollTimers.clear()
+}
+
+function scheduleMediaBatchPoll(jobId, tick, delay) {
+  clearMediaBatchPoll(jobId)
+  mediaBatchPollTimers.set(jobId, setTimeout(tick, delay))
 }
 
 function mediaBatchZipFile(job) {
@@ -849,12 +978,15 @@ function applyMediaBatchJob(task, job) {
   const currentIndex = job.currentIndex || (job.status === 'running' ? Math.min((job.done || 0) + 1, total) : 0)
   const current = job.current && job.current !== 'zipping' ? `；当前：${job.current}` : ''
   const liveFiles = job.liveFiles ? `；已落盘 ${job.liveFiles} 个文件${job.liveBytes ? ` / ${formatFileSize(job.liveBytes)}` : ''}` : ''
+  const zipProgress = job.phase === 'zipping' && job.zipTotalBytes
+    ? `；打包 ${formatFileSize(job.zipBytes || 0)} / ${formatFileSize(job.zipTotalBytes)}`
+    : ''
   const phase = job.phase === 'zipping'
     ? '正在生成 zip'
     : (currentIndex ? `正在第 ${currentIndex}/${total} 条` : '队列处理中')
   const statusText = job.status === 'done'
     ? `已完成 ${job.done || 0}/${total}，成功 ${job.success || 0}，失败 ${job.failed || 0}${liveFiles}`
-    : `${phase}；已完成 ${job.done || 0}/${total}，成功 ${job.success || 0}，失败 ${job.failed || 0}${liveFiles}${current}`
+    : `${phase}；已完成 ${job.done || 0}/${total}，成功 ${job.success || 0}，失败 ${job.failed || 0}${liveFiles}${zipProgress}${current}`
   const zipFile = mediaBatchZipFile(job)
   updateMediaTask(task, {
     status: job.status === 'done' ? 'done' : (job.status === 'error' ? 'error' : 'running'),
@@ -901,7 +1033,7 @@ async function loadLatestMediaBatchZip(options = {}) {
 }
 
 function pollMediaDownloadBatch(task, jobId) {
-  clearMediaBatchPoll()
+  clearMediaBatchPoll(jobId)
   const tick = async () => {
     try {
       const result = await request('/api/posttools/video-download-batch-status', {
@@ -912,10 +1044,10 @@ function pollMediaDownloadBatch(task, jobId) {
       const job = result.job
       applyMediaBatchJob(task, job)
       if (job.status === 'queued' || job.status === 'running') {
-        mediaBatchPollTimer = setTimeout(tick, 3000)
+        scheduleMediaBatchPoll(jobId, tick, 1500)
         return
       }
-      clearMediaBatchPoll()
+      clearMediaBatchPoll(jobId)
       if (job.zip_url) {
         showToast('批量下载完成，zip 已生成', 'success')
       } else if (job.success) {
@@ -930,11 +1062,11 @@ function pollMediaDownloadBatch(task, jobId) {
       } else {
         updateMediaTask(task, { status: 'error', statusText: '', error: e.message || '查询批量任务失败' })
       }
-      clearMediaBatchPoll()
+      clearMediaBatchPoll(jobId)
       showToast(recovered ? '已找回最近打包文件' : (e.message || '查询批量任务失败'), recovered ? 'success' : 'error')
     }
   }
-  mediaBatchPollTimer = setTimeout(tick, 1200)
+  scheduleMediaBatchPoll(jobId, tick, 500)
 }
 
 async function startMediaDownloadBatch(links) {
@@ -1007,8 +1139,13 @@ async function runMediaAction(actionId) {
       return
     }
 
-    const links = splitMediaLinks(mediaInput.value)
+    let links = splitMediaLinks(mediaInput.value)
     if (!links.length) throw new Error('请先粘贴链接或拖入文件')
+
+    if (actionId === 'download-video') {
+      mediaStatus.value = '正在识别 B站 分P...'
+      links = await expandBilibiliPagesForDownload(links)
+    }
 
     if (actionId === 'download-video' && links.length > 1) {
       await startMediaDownloadBatch(links)
@@ -1016,14 +1153,30 @@ async function runMediaAction(actionId) {
     }
 
     let doneCount = 0
+    const rawMediaInput = mediaInput.value
     for (const link of links) {
-      const task = createMediaTask(actionId, link, link)
+      const pastedCaption = extractPastedCaption(rawMediaInput, link)
+      const task = createMediaTask(actionId, mediaPlatformLabel(link), `${mediaPlatformLabel(link).replace('链接', '')}视频`)
+      if (pastedCaption) updateMediaTask(task, { caption: pastedCaption })
       try {
         if (actionId === 'download-video') {
-          const files = await downloadVideoSource(link, task)
-          updateMediaTask(task, { status: 'done', statusText: '原视频已保存', files })
+          const download = await downloadVideoSource(link, task)
+          updateMediaTask(task, {
+            status: 'done',
+            statusText: '已保存',
+            title: download.title || task.title,
+            caption: download.caption || task.caption,
+            files: download.files
+          })
         } else if (detectDownloadPlatform(link)) {
-          const downloadedFiles = await downloadVideoSource(link, task)
+          const download = await downloadVideoSource(link, task)
+          if (download.title || download.caption) {
+            updateMediaTask(task, {
+              title: download.title || task.title,
+              caption: download.caption || task.caption
+            })
+          }
+          const downloadedFiles = download.files
           const firstVideo = downloadedFiles.find(file => file.url) || downloadedFiles[0]
           const sourceUrl = firstVideo?.url || ''
           if (!sourceUrl) throw new Error('下载完成但没有拿到可处理文件')
@@ -1103,6 +1256,14 @@ async function downloadPlatformVideo(platform) {
   state.error = ''
   state.files = []
   try {
+    if (platform === 'bilibili' && !hasExplicitBilibiliPage(url)) {
+      const expanded = await expandBilibiliPagesForDownload([url])
+      if (expanded.length > 1) {
+        await startMediaDownloadBatch(expanded)
+        showToast(`已识别 ${expanded.length} 个分 P，转入后台慢队列`, 'success')
+        return
+      }
+    }
     const result = await request('/api/posttools/video-download', {
       method: 'POST',
       body: { platform, url, quality: selectedMediaQuality.value }
@@ -1965,11 +2126,23 @@ async function getRecommendations() {
   font-size: 13px;
   font-weight: 700;
   line-height: 1.35;
-  word-break: break-all;
+  word-break: break-word;
 }
 
 .media-task-source {
-  word-break: break-all;
+  word-break: break-word;
+}
+
+.media-task-caption {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  border-left: 2px solid color-mix(in srgb, var(--accent, #7c5cff) 58%, transparent);
+  padding-left: 8px;
+  color: var(--text-secondary, #bdb4d8);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .media-task-progress {

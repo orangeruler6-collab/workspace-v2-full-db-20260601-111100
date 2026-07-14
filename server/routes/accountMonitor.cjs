@@ -15,6 +15,13 @@ module.exports = function createAccountMonitorRoutes(deps) {
   const root = deps.root || path.join(__dirname, '..', '..');
   const dataDir = path.join(root, 'data');
   const storePath = path.join(dataDir, 'account_monitor.json');
+  const dataMonitorProfile = accountCatalog.dataMaintenanceProfile || {
+    alias: 'collector-link-crawl',
+    chromeProfileDirectory: 'Profile 1',
+    name: '数据采集专用'
+  };
+  const openCliExtensionDir = process.env.OPENCLI_EXTENSION_DIR
+    || path.join(process.env.USERPROFILE || '', '.opencli', 'chrome-extension', 'opencli-webstore-unpacked');
   const scheduleHours = [9, 13, 16];
   let scheduleTimer = null;
   let scheduledCollecting = false;
@@ -348,11 +355,21 @@ module.exports = function createAccountMonitorRoutes(deps) {
       .concat(splitProfileEnv(process.env.PLATFORM_DATA_OPENCLI_PROFILE))
       .concat(splitProfileEnv(process.env.OPENCLI_PROFILE));
     return uniqueStrings(fromEnv.concat(
+      [dataMonitorProfile.alias],
       latestAccountDataProfiles(),
       ['tianji-mei-publish', 'vpu8aysj', 'yuufe9m8']
     )).filter(function(profile) {
       return !/^(none|false|off|default)$/i.test(profile);
     });
+  }
+
+  function isDataMonitorProfile(profile) {
+    const value = String(profile || '').trim();
+    return Boolean(value && (
+      value === dataMonitorProfile.alias ||
+      value === dataMonitorProfile.name ||
+      value === 'collector-link-crawl'
+    ));
   }
 
   function parseOpenCliProfileList(text) {
@@ -439,18 +456,22 @@ module.exports = function createAccountMonitorRoutes(deps) {
     const map = typeof accountCatalog.chromeProfileDirectoryMap === 'function'
       ? accountCatalog.chromeProfileDirectoryMap()
       : {};
-    const profileDirectory = map[profile];
+    const profileDirectory = map[profile] || (isDataMonitorProfile(profile) ? dataMonitorProfile.chromeProfileDirectory : '');
     if (!profileDirectory) return Promise.resolve({ ok: false, skipped: true, error: '没有找到 Chrome profile 映射：' + profile });
     return new Promise(function(resolve) {
       try {
-        const child = spawn(chromeBin(), [
+        const args = [
           '--new-window',
           '--no-first-run',
           '--no-default-browser-check',
           '--user-data-dir=' + chromeUserDataDir(),
-          '--profile-directory=' + profileDirectory,
-          platformHomeUrl(platform)
-        ], {
+          '--profile-directory=' + profileDirectory
+        ];
+        if (fs.existsSync(path.join(openCliExtensionDir, 'manifest.json'))) {
+          args.push('--load-extension=' + openCliExtensionDir);
+        }
+        args.push(platformHomeUrl(platform));
+        const child = spawn(chromeBin(), args, {
           windowsHide: true,
           detached: true,
           stdio: 'ignore'
@@ -524,13 +545,18 @@ module.exports = function createAccountMonitorRoutes(deps) {
       const direct = profiles.find(function(item) { return item.connected && profileMatches(item, profile); });
       if (direct) return { ok: true, profile: profile, connected: true };
       const connectedProfiles = profiles.filter(function(item) { return item.connected; });
-      if (connectedProfiles.length) {
+      if (connectedProfiles.length && !isDataMonitorProfile(profile)) {
         return { ok: false, skipped: true, connectedProfiles: connectedProfiles };
       }
-      if (process.env.ACCOUNT_MONITOR_LAUNCH_PROFILE !== '1') {
+      if (/^(0|false|off|no)$/i.test(String(process.env.ACCOUNT_MONITOR_LAUNCH_PROFILE || ''))) {
         return { ok: false, skipped: true, error: '没有检测到已连接的 OpenCLI profile，已停止自动打开空 Chrome。' };
       }
-      return launchChromeProfile(profile, platform).then(function(launch) {
+      return spawnOpenCli(['daemon', 'status'], 15000).then(function(status) {
+        if (status && status.ok) return null;
+        return spawnOpenCli(['daemon', 'restart'], 30000).catch(function() { return null; });
+      }).then(function() {
+        return launchChromeProfile(profile, platform);
+      }).then(function(launch) {
         if (!launch.ok) return Object.assign({ ok: false }, launch);
         const beforeIds = new Set((beforeProfiles || profiles).map(function(item) { return item.context_id; }));
         const deadline = Date.now() + Math.max(5000, Math.min(90000, Number(process.env.ACCOUNT_MONITOR_PROFILE_CONNECT_TIMEOUT_MS) || 45000));
@@ -588,9 +614,11 @@ module.exports = function createAccountMonitorRoutes(deps) {
         connectedNames.push(item.alias || item.context_id);
         connectedNames.push(item.context_id);
       });
-      const launchable = connected.length || process.env.ACCOUNT_MONITOR_LAUNCH_PROFILE !== '1' ? [] : preferred.slice(0, 1);
+      const allowLaunch = !/^(0|false|off|no)$/i.test(String(process.env.ACCOUNT_MONITOR_LAUNCH_PROFILE || ''));
+      const monitorConnected = connected.some(function(item) { return profileMatches(item, dataMonitorProfile.alias) || profileMatches(item, dataMonitorProfile.name); });
+      const launchable = allowLaunch && !monitorConnected ? [dataMonitorProfile.alias] : [];
       return {
-        profiles: uniqueStrings(connectedNames.concat(launchable)),
+        profiles: uniqueStrings(launchable.concat(connectedNames)),
         listed: profiles,
         platform: platform
       };
@@ -1194,7 +1222,7 @@ module.exports = function createAccountMonitorRoutes(deps) {
   }
 
   function collectConcurrency(options) {
-    return Math.max(1, Math.min(6, Number(options && options.concurrency) || Number(process.env.ACCOUNT_MONITOR_COLLECT_CONCURRENCY) || 3));
+    return Math.max(1, Math.min(2, Number(options && options.concurrency) || Number(process.env.ACCOUNT_MONITOR_COLLECT_CONCURRENCY) || 1));
   }
 
   function collectAllEnabledAccounts(options) {
@@ -1372,7 +1400,10 @@ module.exports = function createAccountMonitorRoutes(deps) {
     },
 
     '/api/account-monitor/collect': function(body, cb) {
-      collectAndSave(body.id || '').then(cb).catch(function(e) { cb({ error: e.message || String(e) }); });
+      collectAndSave(body.id || '')
+        .finally(function() { return closeLaunchedProfiles('account monitor single collect finished').catch(function() {}); })
+        .then(cb)
+        .catch(function(e) { cb({ error: e.message || String(e) }); });
     },
 
     '/api/account-monitor/collect-all': function(body, cb) {

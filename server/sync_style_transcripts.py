@@ -90,7 +90,7 @@ def sync_one(params):
         'hook': str(video.get('title') or '').strip(),
         'golden_line': '',
         'progression': '',
-        'source': 'account-style-library',
+        'source': 'style-workbench-native',
         'marketing_target': platform,
         'content_direction': str(video.get('title') or '').strip(),
         'case_tags': '账号库,转写,{}'.format(platform),

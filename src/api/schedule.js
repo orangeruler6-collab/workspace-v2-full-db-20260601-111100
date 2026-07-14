@@ -28,6 +28,13 @@ export function loadScheduleTodos() {
   })
 }
 
+export function loadScheduleTodoHistory(limit = 200) {
+  return request('/api/schedule/todos/history', {
+    method: 'POST',
+    body: { limit }
+  })
+}
+
 export function saveScheduleTodo(todo) {
   return request('/api/schedule/todos/save', {
     method: 'POST',

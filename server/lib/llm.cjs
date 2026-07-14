@@ -159,7 +159,15 @@ module.exports = function createLlmRuntime(options) {
             try {
               var json = JSON.parse(data);
               var message = json.choices && json.choices[0] && json.choices[0].message;
-              resolve(stripThinking(message ? extractChatMessageContent(message.content) : ''));
+              var content = stripThinking(message ? extractChatMessageContent(message.content) : '');
+              if (!content && message) {
+                logger.warn('model returned empty message content', {
+                  model: body.model,
+                  finish: json.choices && json.choices[0] && json.choices[0].finish_reason,
+                  messagePreview: JSON.stringify(message).slice(0, 800)
+                });
+              }
+              resolve(content);
             } catch(e) {
               reject(new Error('model JSON parse error: ' + data.substring(0, 200)));
             }

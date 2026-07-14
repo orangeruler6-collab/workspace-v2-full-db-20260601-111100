@@ -1,5 +1,5 @@
 <template>
-  <div class="account-data-module">
+  <div ref="dashboardRootRef" class="account-data-module">
     <header class="board-top">
       <div class="board-title">
         <i></i>
@@ -69,13 +69,35 @@
           </button>
         </div>
       </div>
-      <button type="button" class="dashboard-refresh-btn" :disabled="dashboardLoading" @click="loadRealDashboard">
-        {{ dashboardLoading ? '读取中' : '刷新数据' }}
+      <div class="history-period-controls">
+        <label class="history-period-toggle">
+          <input v-model="historyPeriodEnabled" type="checkbox">
+          <span>历史月份</span>
+        </label>
+        <select v-model.number="selectedHistoryYear" class="inp history-period-select" :disabled="!historyPeriodEnabled">
+          <option v-for="year in historyYearOptions" :key="year" :value="year">{{ year }}年</option>
+        </select>
+        <select v-model.number="selectedHistoryMonth" class="inp history-period-select" :disabled="!historyPeriodEnabled">
+          <option v-for="month in historyMonthOptions" :key="month" :value="month">{{ month }}月</option>
+        </select>
+      </div>
+      <button type="button" class="dashboard-refresh-btn" :disabled="dashboardLoading" @click="loadRealDashboard({ forceRefresh: true })">
+        {{ dashboardLoading ? (dashboardUsingReal ? '后台更新中' : '读取中') : '刷新数据' }}
       </button>
       <span class="snapshot-note">{{ dashboardStatusText }} · 当前 {{ filteredAccounts.length }} 个账号</span>
     </section>
 
-    <section v-if="activeView === 'overview'" class="overview-layout">
+    <section v-if="dashboardError" class="dashboard-error-state">
+      <div>
+        <strong>数据看板读取失败</strong>
+        <span>{{ dashboardError }}</span>
+      </div>
+      <button type="button" class="dashboard-refresh-btn" :disabled="dashboardLoading" @click="loadRealDashboard({ forceRefresh: true })">
+        重试
+      </button>
+    </section>
+
+    <section v-if="dashboardUsingReal && activeView === 'overview'" class="overview-layout">
       <section class="kpi-grid" aria-label="核心数据">
         <article
           v-for="item in kpiCards"
@@ -162,17 +184,20 @@
               </div>
             </div>
             <div class="wide-bar-chart" :class="{ weekly: postGranularity === 'week' }">
-              <div
+              <button
                 v-for="bar in overviewPostBars"
                 :key="bar.label"
+                type="button"
                 class="wide-bar-item"
                 :class="{ empty: !bar.value }"
                 :style="{ '--bar-height': `${bar.height}%` }"
-                :title="bar.tooltip">
+                :title="bar.tooltip"
+                @click="openPostBarModal(bar)"
+                @keydown.enter.prevent="openPostBarModal(bar)">
                 <strong>{{ bar.value }}</strong>
                 <i></i>
                 <span>{{ bar.label }}</span>
-              </div>
+              </button>
             </div>
           </article>
 
@@ -330,7 +355,7 @@
         </div>
         <div class="account-table">
           <div class="account-table-head">
-            <span>账号</span>
+            <span>账号 / 类型</span>
             <span>小组</span>
             <span>平台</span>
             <span>总播放</span>
@@ -355,13 +380,13 @@
             <span class="metric-text likes">{{ formatCompactNumber(item.yesterdayLikes) }}</span>
             <span>{{ completionRate(item) }}%</span>
             <span>{{ contentType(item) }}</span>
-            <em>+{{ formatCompactNumber(item.followerDelta) }}</em>
+            <em :class="deltaClass(item.followerDelta)">{{ signedDeltaText(item.followerDelta) }}</em>
           </div>
         </div>
       </article>
     </section>
 
-    <section v-else-if="activeView === 'single'" class="single-layout">
+    <section v-else-if="dashboardUsingReal && activeView === 'single'" class="single-layout">
       <aside class="single-profile-card">
         <div class="panel-head">
           <strong>单账号维度</strong>
@@ -387,7 +412,7 @@
             <span>账号</span>
             <select v-model="selectedAccountId" class="inp account-select" :disabled="!singleFilteredAccounts.length">
               <option v-for="account in singleFilteredAccounts" :key="account.id" :value="account.id">
-                {{ account.account }} · {{ account.owner || '未填负责人' }}
+                {{ account.account }}
               </option>
             </select>
           </label>
@@ -407,14 +432,14 @@
               <img v-if="platformIcon(selectedAccount.platform)" :src="platformIcon(selectedAccount.platform)" alt="" />
               <span v-else>{{ platformShortLabel(selectedAccount.platform) }}</span>
             </i>
-            {{ selectedAccount.platformLabel }} / {{ selectedAccount.owner || '未填负责人' }}
+            {{ selectedAccount.platformLabel }}
           </span>
           <em>{{ selectedAccount.profile || '暂未绑定 profile' }}</em>
         </div>
         <div v-if="selectedAccount" class="single-kpis">
           <span><b>{{ formatCompactNumber(selectedAccount.totalViews) }}</b>总播放</span>
           <span><b>{{ formatCompactNumber(selectedAccount.totalLikes) }}</b>总点赞</span>
-          <span><b>+{{ formatCompactNumber(selectedAccount.followerDelta) }}</b>粉丝变化</span>
+          <span><b :class="deltaClass(selectedAccount.followerDelta)">{{ signedDeltaText(selectedAccount.followerDelta) }}</b>粉丝变化</span>
         </div>
       </aside>
 
@@ -484,7 +509,7 @@
       </main>
     </section>
 
-    <section v-else-if="activeView === 'battle'" class="battle-layout">
+    <section v-else-if="dashboardUsingReal && activeView === 'battle'" class="battle-layout">
       <section class="battle-summary-grid" aria-label="战力分析概览">
         <article
           v-for="item in battleSummaryCards"
@@ -507,7 +532,7 @@
             <div class="tree-root">
               <span>战力树主干</span>
               <strong>{{ battleChampion?.groupName || '等待数据' }}</strong>
-              <em>{{ battleChampion ? `当前最能打 · 指数 ${battleChampion.score}` : '占位数据接入中' }}</em>
+              <em>{{ battleChampion ? `当前最能打 · 指数 ${battleChampion.score}` : '等待真实数据' }}</em>
               <b>{{ battleTreeRows[0]?.meme || '开局先看基本盘' }}</b>
             </div>
             <div class="tree-branches">
@@ -601,7 +626,7 @@
       </section>
     </section>
 
-    <section v-else-if="activeView === 'updatePlan'" class="update-plan-layout">
+    <section v-else-if="dashboardUsingReal && activeView === 'updatePlan'" class="update-plan-layout">
       <section class="update-summary-grid" aria-label="更新计划概览">
         <article
           v-for="item in updatePlanSummaryCards"
@@ -628,7 +653,7 @@
             <div class="plan-progress-copy">
               <span>{{ activePlatformLabel }} · {{ activeGroupLabel }}</span>
               <strong>{{ updatePlanSummary.completed }} / {{ updatePlanSummary.target }} 条</strong>
-              <em>本月还差 {{ updatePlanSummary.remaining }} 条，{{ updatePlanSummary.behindCount }} 个账号需要盯进度。</em>
+              <em>本月还差 {{ updatePlanSummary.remaining }} 条，按长视频/短视频口径盯进度。</em>
               <div class="plan-progress-bar">
                 <u :style="{ width: updatePlanSummary.completionRate + '%' }"></u>
               </div>
@@ -655,62 +680,37 @@
         </article>
       </section>
 
-      <section class="update-plan-sub-grid">
-        <article class="update-group-card">
-          <div class="panel-head">
-            <strong>小组完成度</strong>
-            <span>目标、已发和缺口汇总</span>
-          </div>
-          <div class="update-group-list">
-            <div v-for="group in updateGroupRows" :key="group.groupName" class="update-group-row">
-              <div>
-                <strong>{{ group.groupName }}</strong>
-                <em>目标 {{ group.target }} · 已发 {{ group.completed }} · 风险 {{ group.behindCount }}</em>
-              </div>
-              <i><u :style="{ width: group.progress + '%' }"></u></i>
-              <b>{{ group.progress }}%</b>
-            </div>
-          </div>
-        </article>
-
-        <article class="update-owner-card">
-          <div class="panel-head">
-            <strong>负责人负载</strong>
-            <span>看谁手上还有更新缺口</span>
-          </div>
-          <div class="update-owner-grid">
-            <span v-for="owner in updateOwnerRows" :key="owner.owner">
-              <em>{{ owner.owner }}</em>
-              <strong>{{ owner.remaining }}</strong>
-              <small>剩余 / 目标 {{ owner.target }}</small>
-            </span>
-          </div>
-        </article>
-      </section>
-
       <article class="update-plan-table-card">
         <div class="panel-head">
           <strong>账号更新明细</strong>
-          <span>{{ updatePlanDisplayRows.length }} 个计划账号 · 来自月更新量表</span>
+          <span>{{ updatePlanDisplayRows.length }} 个计划账号 · 1-3min 计入长视频</span>
         </div>
         <div class="update-plan-table">
           <div class="update-plan-head">
             <span>账号</span>
             <span>小组 / 平台</span>
             <span>负责人</span>
-            <span>月目标</span>
-            <span>本月已发</span>
+            <span>目标</span>
+            <span>总条数</span>
+            <span>公开</span>
+            <span>隐藏</span>
+            <span>长视频</span>
+            <span>短视频</span>
             <span>缺口</span>
             <span>进度</span>
             <span>状态</span>
-            <span>对标 / 备注</span>
+            <span>备注</span>
           </div>
           <div v-for="row in updatePlanDisplayRows" :key="row.id" class="update-plan-row">
             <strong>{{ row.account }}</strong>
             <span>{{ row.groupName }} · {{ row.platformLabel }}</span>
             <span>{{ row.owner || '-' }}</span>
-            <b>{{ row.target }}</b>
-            <span>{{ row.completed }}</span>
+            <b>{{ updatePlanTargetDisplay(row) }}</b>
+            <b>{{ row.completed }}</b>
+            <span>{{ row.visibleCompleted }}</span>
+            <span>{{ updatePlanHiddenDisplay(row) }}</span>
+            <span>{{ row.longCompleted }}/{{ row.longTarget }}</span>
+            <span>{{ row.shortCompleted }}/{{ row.shortTarget }}</span>
             <em>{{ row.gap }}</em>
             <span class="plan-inline-progress">
               <i><u :style="{ width: row.progress + '%' }"></u></i>
@@ -810,7 +810,7 @@
         <article class="hot-table-card">
           <div class="panel-head">
             <strong>爆款作品明细</strong>
-            <span>{{ hotVideoRows.length }} 条{{ dashboardWorks.length ? '真实作品' : '占位作品' }}</span>
+            <span>{{ hotVideoRows.length }} 条真实作品</span>
           </div>
           <div class="hot-video-table">
             <div class="hot-video-head">
@@ -926,7 +926,7 @@
               <em>{{ formatCompactNumber(row.rawValue) }}</em>
               <span>{{ formatCompactNumber(row.viewsValue) }}</span>
               <span>{{ formatCompactNumber(row.likesValue) }}</span>
-              <span>+{{ formatCompactNumber(row.fansValue) }}</span>
+              <span :class="deltaClass(row.fansValue)">{{ signedDeltaText(row.fansValue) }}</span>
               <span>{{ row.completionValue }}%</span>
             </div>
           </template>
@@ -934,14 +934,74 @@
         <div v-else class="metric-modal-empty">当前筛选范围暂无数据。</div>
       </section>
     </div>
+
+    <div v-if="postBarModalOpen" class="metric-modal-mask" @click.self="closePostBarModal">
+      <section class="metric-modal post-detail-modal" role="dialog" aria-modal="true" :aria-label="postBarModalTitle">
+        <header class="metric-modal-head">
+          <div>
+            <strong>{{ postBarModalTitle }}</strong>
+            <span>{{ postBarModalSubtitle }}</span>
+          </div>
+          <button type="button" class="metric-modal-close" title="关闭" @click="closePostBarModal">×</button>
+        </header>
+        <div class="metric-modal-summary">
+          <span>
+            <em>发布数量</em>
+            <strong>{{ postBarModalRows.length }} 条</strong>
+          </span>
+          <span>
+            <em>播放合计</em>
+            <strong>{{ formatCompactNumber(postBarModalTotals.views) }}</strong>
+          </span>
+          <span>
+            <em>点赞合计</em>
+            <strong>{{ formatCompactNumber(postBarModalTotals.likes) }}</strong>
+          </span>
+          <span>
+            <em>评论合计</em>
+            <strong>{{ formatCompactNumber(postBarModalTotals.comments) }}</strong>
+          </span>
+        </div>
+        <div v-if="postBarModalRows.length" class="metric-modal-table post-detail-table">
+          <div class="metric-modal-row metric-modal-row-head post-detail">
+            <span>#</span>
+            <span>内容</span>
+            <span>账号</span>
+            <span>平台</span>
+            <span>发布时间</span>
+            <span>播放</span>
+            <span>点赞</span>
+            <span>评论</span>
+            <span>互动率</span>
+          </div>
+          <div v-for="row in postBarModalRows" :key="row.id" class="metric-modal-row post-detail">
+            <b>#{{ row.rank }}</b>
+            <strong :title="row.title">{{ row.title }}</strong>
+            <span>{{ row.account }}</span>
+            <span>{{ row.platformLabel || row.platform }}</span>
+            <span>{{ formatDashboardTime(row.publishAt || row.publishDate) }}</span>
+            <em>{{ formatCompactNumber(row.views) }}</em>
+            <span>{{ formatCompactNumber(row.likes) }}</span>
+            <span>{{ formatCompactNumber(row.comments) }}</span>
+            <span>{{ row.interactionRate }}%</span>
+          </div>
+        </div>
+        <div v-else class="metric-modal-empty">{{ postBarModalLoading ? '正在读取该时间段明细…' : '这个时间段没有可展示的发布内容。' }}</div>
+      </section>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { accountDataMock, formatCompactNumber, platformOptions } from './account-data/mockData'
+import { formatCompactNumber, platformOptions } from './account-data/mockData'
 import { updatePlanRows } from './account-data/updatePlan'
-import { loadAccountDataCollectStatus, loadAccountDataDashboard } from '../api/accountData'
+import {
+  loadAccountDataCollectStatus,
+  loadAccountDataDashboard,
+  loadAccountDataDashboardPublishDetail,
+  loadAccountDataDashboardWorks
+} from '../api/accountData'
 import douyinIcon from '../assets/platform-icons/douyin.ico'
 import bilibiliIcon from '../assets/platform-icons/bilibili.ico'
 import kuaishouIcon from '../assets/platform-icons/kuaishou.ico'
@@ -1033,7 +1093,7 @@ const rangeOptions = [
 
 const dimensionOptions = [
   { id: 'account', label: '账号', unit: '个账号' },
-  { id: 'department', label: '部门视角', unit: '个小组' }
+  { id: 'department', label: '部门', unit: '个部门' }
 ]
 
 const rangeMeta = {
@@ -1043,19 +1103,6 @@ const rangeMeta = {
   year: { label: '今年', scale: 30, total: false },
   all: { label: '总体', scale: 1, total: true }
 }
-
-const hotTitlePool = [
-  '逆风翻盘这一段太有记忆点',
-  '十秒内把节奏拉满',
-  '这条互动突然爆了',
-  '结尾反转带动完播',
-  '评论区跟着一起上头',
-  '高能片段集中爆发',
-  '账号近期最强单条',
-  '商单转化表现突出',
-  '日常内容破圈明显',
-  '粉丝新增贡献最高'
-]
 
 const postGranularityOptions = [
   { id: 'day', label: '按日' },
@@ -1086,26 +1133,37 @@ const battleMemePool = [
 ]
 
 const updatePlanAccountAliases = {
-  葵仔不想肝: '魁仔不想肝',
-  畅玩百晓生: '畅玩白晓生',
-  最翁damnnn: '最翁damn',
+  魁仔不想肝: '葵仔不想肝',
+  畅玩白晓生: '畅玩百晓生',
+  最翁damn: '最游话说',
+  最翁damnnn: '最游话说',
+  最翁说游: '最游话说',
+  王路飞cp: '王路飞CP',
   上官北: '上官北丶',
   雷鸭fist: '雷鸭Fist',
+  雷鸭FIST: '雷鸭Fist',
   lee小强: 'Lee小强',
+  LEE小强: 'Lee小强',
   夏天丶cat: '夏天丶Cat'
 }
+
+const updatePlanAccountAliasMap = Object.fromEntries(
+  Object.entries(updatePlanAccountAliases).map(([key, value]) => [normalizeAccountKey(key), value])
+)
 
 const updatePlanStatusMap = {
   done: { label: '已达标', className: 'done' },
   onTrack: { label: '进度正常', className: 'on-track' },
   behind: { label: '需追赶', className: 'behind' },
   unmatched: { label: '待接入', className: 'unmatched' },
-  paused: { label: '暂不更新', className: 'paused' }
+  paused: { label: '无需目标', className: 'paused' }
 }
+
+const updatePlanMainPlatforms = new Set(['douyin', 'bilibili'])
 
 const activeView = ref('overview')
 const activePlatform = ref('all')
-const activeRange = ref('all')
+const activeRange = ref('month')
 const activeGroup = ref('all')
 const activeDimension = ref('account')
 const playRankPlatform = ref('all')
@@ -1120,32 +1178,47 @@ const singlePlatform = ref('all')
 const selectedAccountId = ref('')
 const detailMetric = ref('views')
 const metricModalKey = ref('')
+const postBarModalKey = ref('')
+const postBarModalLoadedWorks = ref([])
+const postBarModalLoading = ref(false)
 const realDashboard = ref(null)
 const dashboardLoading = ref(false)
 const dashboardError = ref('')
+const historyPeriodEnabled = ref(false)
+const selectedHistoryYear = ref(new Date().getFullYear())
+const selectedHistoryMonth = ref(new Date().getMonth() + 1)
+const dashboardRootRef = ref(null)
 let dashboardPollTimer = null
 let lastCollectionRunning = false
 let lastIndexDigest = ''
+let dashboardRequestSeq = 0
 const chartTicks = [32, 58, 84]
 const lineTicks = [36, 78, 120, 162]
 const overviewPostDayLabels = ['1日', '3日', '5日', '7日', '9日', '11日', '13日', '15日', '17日', '19日', '21日', '23日', '25日', '27日']
 const overviewPostWeekLabels = ['第1周', '第2周', '第3周', '第4周', '第5周', '第6周', '第7周', '第8周']
 const activeRangeMeta = computed(() => rangeMeta[activeRange.value] || rangeMeta.all)
+const historyYearOptions = computed(() => {
+  const year = new Date().getFullYear()
+  return [year, year - 1, year - 2]
+})
+const historyMonthOptions = Array.from({ length: 12 }, (_, index) => index + 1)
+const selectedHistoryMonthKey = computed(() => selectedHistoryYear.value + '-' + String(selectedHistoryMonth.value).padStart(2, '0'))
+const dashboardRangeBaseDate = computed(() => historyPeriodEnabled.value
+  ? new Date(selectedHistoryYear.value, selectedHistoryMonth.value - 1, 1)
+  : new Date())
 const dashboardAccounts = computed(() => {
   const rows = Array.isArray(realDashboard.value?.accounts) ? realDashboard.value.accounts : []
-  return rows.length ? rows : accountDataMock
+  return rows
 })
 const dashboardWorks = computed(() => Array.isArray(realDashboard.value?.works) ? realDashboard.value.works : [])
 const dashboardUsingReal = computed(() => Array.isArray(realDashboard.value?.accounts) && realDashboard.value.accounts.length > 0)
 const dashboardSourceCount = computed(() => Array.isArray(realDashboard.value?.sources) ? realDashboard.value.sources.length : 0)
 const dashboardStatusText = computed(() => {
-  if (dashboardLoading.value) return '正在读取真实采集数据'
-  if (dashboardError.value) return `真实数据读取失败，已使用占位数据：${dashboardError.value}`
-  if (dashboardUsingReal.value) {
-    const generatedAt = realDashboard.value?.generatedAt ? new Date(realDashboard.value.generatedAt).toLocaleString('zh-CN', { hour12: false }) : ''
-    return `真实采集数据 · 按平台口径 · ${dashboardSourceCount.value} 个采集源${generatedAt ? ' · ' + generatedAt : ''}`
-  }
-  return '占位数据 · 等待采集结果'
+  if (dashboardError.value) return '读取失败：' + dashboardError.value
+  if (realDashboard.value?.historyMode) return '历史月份 ' + (realDashboard.value.historyMonth || selectedHistoryMonthKey.value) + ' · ' + dashboardWorks.value.length + ' 条作品'
+  if (dashboardUsingReal.value) return dashboardLoading.value ? '最新采集数据 · 后台更新中' : '最新采集数据'
+  if (dashboardLoading.value) return '读取中'
+  return '等待采集结果'
 })
 
 const platformFiltered = computed(() => {
@@ -1225,8 +1298,10 @@ function addDashboardDays(date, days) {
   return next
 }
 
-function dashboardRangeWindow(range, now = new Date()) {
-  const today = startOfDashboardDay(now)
+function dashboardRangeWindow(range, now = dashboardRangeBaseDate.value) {
+  const today = historyPeriodEnabled.value && range === 'month'
+    ? new Date(selectedHistoryYear.value, selectedHistoryMonth.value, 0)
+    : startOfDashboardDay(now)
   if (range === 'yesterday') {
     const start = addDashboardDays(today, -1)
     return { start, end: today }
@@ -1236,10 +1311,17 @@ function dashboardRangeWindow(range, now = new Date()) {
     return { start: addDashboardDays(today, 1 - day), end: addDashboardDays(today, 1) }
   }
   if (range === 'month') {
-    return { start: new Date(today.getFullYear(), today.getMonth(), 1), end: addDashboardDays(today, 1) }
+    const monthStart = historyPeriodEnabled.value
+      ? new Date(selectedHistoryYear.value, selectedHistoryMonth.value - 1, 1)
+      : new Date(today.getFullYear(), today.getMonth(), 1)
+    return { start: monthStart, end: addDashboardDays(today, 1) }
   }
   if (range === 'year') {
-    return { start: new Date(today.getFullYear(), 0, 1), end: addDashboardDays(today, 1) }
+    const yearStart = new Date(today.getFullYear(), 0, 1)
+    const yearEnd = historyPeriodEnabled.value
+      ? new Date(today.getFullYear() + 1, 0, 1)
+      : addDashboardDays(today, 1)
+    return { start: yearStart, end: yearEnd }
   }
   return null
 }
@@ -1251,14 +1333,35 @@ function workInDashboardRange(work, range = activeRange.value) {
   return Boolean(date && window && date >= window.start && date < window.end)
 }
 
+function postChartRangeWindow() {
+  const window = dashboardRangeWindow(activeRange.value)
+  if (activeRange.value !== 'month' || historyPeriodEnabled.value || !window || !dashboardWorks.value.length) return window
+  const currentMonthWorks = dashboardWorks.value.filter((work) => {
+    const date = parseDashboardDate(work?.publishDate || work?.publishAt)
+    return date && date >= window.start && date < window.end
+  })
+  if (currentMonthWorks.length >= 8) return window
+  const previousEnd = new Date(window.start)
+  const previousStart = new Date(previousEnd.getFullYear(), previousEnd.getMonth() - 1, 1)
+  return { start: previousStart, end: previousEnd }
+}
+
+function workInPostChartRange(work) {
+  if (activeRange.value === 'all') return true
+  const date = parseDashboardDate(work?.publishDate || work?.publishAt)
+  const window = postChartRangeWindow()
+  return Boolean(date && window && date >= window.start && date < window.end)
+}
+
 function postChartDaySlots(limit) {
   const today = startOfDashboardDay(new Date())
-  const window = dashboardRangeWindow(activeRange.value)
+  const window = postChartRangeWindow()
   let start = addDashboardDays(today, 1 - limit)
   let end = today
   if (window) {
     start = window.start
     end = addDashboardDays(window.end, -1)
+    if (!historyPeriodEnabled.value && end > today) end = today
     const minStart = addDashboardDays(end, 1 - limit)
     if (start < minStart) start = minStart
   }
@@ -1274,12 +1377,13 @@ function postChartDaySlots(limit) {
 
 function postChartWeekSlots(limit) {
   const today = startOfDashboardDay(new Date())
-  const window = dashboardRangeWindow(activeRange.value)
+  const window = postChartRangeWindow()
   let start = addDashboardDays(startOfDashboardWeek(today), -7 * (limit - 1))
   let end = startOfDashboardWeek(today)
   if (window) {
     start = startOfDashboardWeek(window.start)
     end = startOfDashboardWeek(addDashboardDays(window.end, -1))
+    if (!historyPeriodEnabled.value && end > startOfDashboardWeek(today)) end = startOfDashboardWeek(today)
     const minStart = addDashboardDays(end, -7 * (limit - 1))
     if (start < minStart) start = minStart
   }
@@ -1302,11 +1406,16 @@ function normalizeWorkTitle(title) {
     .slice(0, 64)
 }
 
+function normalizePlatform(value) {
+  return String(value || '').trim().toLowerCase()
+}
+
 function uniqueContentKey(work) {
   const accountKey = normalizeAccountKey(work?.account || work?.profile || work?.accountId)
+  const platformKey = normalizePlatform(work?.platform)
   const titleKey = normalizeWorkTitle(work?.title)
   const dayKey = work?.publishDate || dashboardDateKey(work?.publishAt)
-  return [accountKey, titleKey || work?.id || '', dayKey || 'unknown-date'].join('|')
+  return [accountKey, platformKey, titleKey || work?.id || '', dayKey || 'unknown-date'].join('|')
 }
 
 
@@ -1329,6 +1438,34 @@ function dedupeContentWorks(rows) {
   return Array.from(map.values())
 }
 
+const mainPlatformByAccount = computed(() => {
+  const result = new Map()
+  const priority = { douyin: 3, bilibili: 2, kuaishou: 1 }
+  dashboardAccounts.value.forEach((account) => {
+    if (account?.publishVolumeExcluded) return
+    const key = normalizeAccountKey(account?.account || account?.profile || account?.accountId)
+    if (!key) return
+    const platform = String(account?.platform || '').trim()
+    const explicitPlatform = String(account?.primaryPlatform || '').trim()
+    if (explicitPlatform) {
+      result.set(key, { platform: explicitPlatform, score: Number.POSITIVE_INFINITY })
+      return
+    }
+    const score = (Number(account?.postTotal) || 0) + (Number(account?.hiddenTotal) || 0)
+    const current = result.get(key)
+    if (!current || score > current.score || (score === current.score && (priority[platform] || 0) > (priority[current.platform] || 0))) {
+      result.set(key, { platform, score })
+    }
+  })
+  return new Map(Array.from(result, ([key, value]) => [key, value.platform]))
+})
+
+function isMainPlatformWork(work) {
+  const accountKey = normalizeAccountKey(work?.account || work?.profile || work?.accountId)
+  const mainPlatform = mainPlatformByAccount.value.get(accountKey)
+  return !mainPlatform || String(work?.platform || '').trim() === mainPlatform
+}
+
 const filteredRangeWorks = computed(() => {
   return filterWorksByPlatform(activePlatform.value)
 })
@@ -1340,14 +1477,30 @@ function filterWorksByPlatform(platform = activePlatform.value) {
     .filter(item => !accountIds.size || accountIds.has(item.accountId))
     .filter(item => platform === 'all' || item.platform === platform)
     .filter(item => !item.publishVolumeExcluded)
-    .filter(item => workInDashboardRange(item))
+    .filter(item => workInPostChartRange(item))
 }
 
 const displayPostWorks = computed(() => {
   return activePlatform.value === 'all'
-    ? dedupeContentWorks(filteredRangeWorks.value)
+    ? dedupeContentWorks(filteredRangeWorks.value.filter(work => isMainPlatformWork(work) || (Number(work?.views) || 0) >= 100000))
     : filteredRangeWorks.value
 })
+
+const dashboardPublishStats = computed(() => realDashboard.value?.publishStats || null)
+
+function filterPublishStatRows(rows, platform = activePlatform.value) {
+  const accountIds = new Set(filterAccountsByPlatform(platform).map(item => String(item.id || '')))
+  return (Array.isArray(rows) ? rows : [])
+    .filter(row => !accountIds.size || accountIds.has(String(row?.accountId || '')))
+    .filter(row => platform === 'all' || row?.platform === platform)
+    .filter(row => workInPostChartRange({ publishDate: row?.date }))
+}
+
+const publishRecordStatRows = computed(() => filterPublishStatRows(dashboardPublishStats.value?.records))
+const publishDisplayStatRows = computed(() => activePlatform.value === 'all'
+  ? filterPublishStatRows(dashboardPublishStats.value?.displayRecords, 'all')
+  : publishRecordStatRows.value)
+const hasPublishStats = computed(() => Array.isArray(dashboardPublishStats.value?.records))
 
 const recentPostRows = computed(() => {
   return [...displayPostWorks.value]
@@ -1368,13 +1521,15 @@ const recentPostRows = computed(() => {
 })
 
 const postRecordTotal = computed(() => {
+  if (hasPublishStats.value) return sumBy(publishRecordStatRows.value, row => Number(row?.count) || 0)
   if (dashboardWorks.value.length) return filteredRangeWorks.value.length
   return sumBy(filteredAccounts.value, rangePosts)
 })
 
 const displayPostTotal = computed(() => {
+  if (hasPublishStats.value) return sumBy(publishDisplayStatRows.value, row => Number(row?.count) || 0)
   if (dashboardWorks.value.length) return displayPostWorks.value.length
-  return sumBy(filteredAccounts.value, rangePosts)
+  return 0
 })
 
 const postScopeLabel = computed(() => activePlatform.value === 'all' ? '去重发文' : `${activePlatformLabel.value}发布`)
@@ -1416,6 +1571,11 @@ function postCount(item) {
   if (item?.publishVolumeExcluded) return 0
   if (Number.isFinite(item.postTotal)) return item.postTotal
   return Math.max(6, Math.round(item.totalViews / 4200 + item.hitWorks * 2))
+}
+
+function hiddenPostCount(item) {
+  if (item?.publishVolumeExcluded) return 0
+  return Number.isFinite(Number(item?.hiddenTotal)) ? Number(item.hiddenTotal) : 0
 }
 
 function departmentName(item) {
@@ -1524,6 +1684,7 @@ function mergeMetricsByRange(base = {}, next = {}) {
       favorites: (Number(current.favorites) || 0) + (Number(metrics.favorites) || 0),
       shares: (Number(current.shares) || 0) + (Number(metrics.shares) || 0),
       posts: (Number(current.posts) || 0) + (Number(metrics.posts) || 0),
+      hiddenPosts: (Number(current.hiddenPosts) || 0) + (Number(metrics.hiddenPosts) || 0),
       fans: (Number(current.fans) || 0) + (Number(metrics.fans) || 0)
     }
   })
@@ -1565,7 +1726,17 @@ function rangePosts(item) {
 function monthlyPostCount(item) {
   if (!item) return 0
   if (item.publishVolumeExcluded) return 0
+  const metric = rangeMetric(item, 'month', 'posts')
+  if (metric !== null) return metric
   return Math.max(0, Math.round(postCount(item) * rangeMeta.month.scale / 18))
+}
+
+function monthlyHiddenPostCount(item) {
+  if (!item) return 0
+  if (item.publishVolumeExcluded) return 0
+  const metric = rangeMetric(item, 'month', 'hiddenPosts')
+  if (metric !== null) return metric
+  return hiddenPostCount(item)
 }
 
 function normalizeAccountKey(name) {
@@ -1576,6 +1747,7 @@ function normalizeAccountKey(name) {
 }
 
 function updateMonthProgressRatio() {
+  if (historyPeriodEnabled.value) return 1
   const now = new Date()
   const days = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate()
   return Math.min(1, Math.max(0.03, now.getDate() / Math.max(1, days)))
@@ -1584,7 +1756,7 @@ function updateMonthProgressRatio() {
 function findUpdatePlanAccount(plan) {
   const candidates = dashboardAccounts.value.filter(item => item.platform === plan.platform)
   const planKey = normalizeAccountKey(plan.account)
-  const targetName = updatePlanAccountAliases[planKey] || plan.account
+  const targetName = updatePlanAccountAliasMap[planKey] || plan.account
   const targetKey = normalizeAccountKey(targetName)
   return candidates.find(item => normalizeAccountKey(item.account) === targetKey) ||
     candidates.find((item) => {
@@ -1592,6 +1764,180 @@ function findUpdatePlanAccount(plan) {
       return accountKey && targetKey && (accountKey.includes(targetKey) || targetKey.includes(accountKey))
     }) ||
     null
+}
+
+function updatePlanAccountKeys(plan, matchedAccount) {
+  const keys = new Set()
+  const addKey = (value) => {
+    const key = normalizeAccountKey(value)
+    if (key) keys.add(key)
+  }
+  const planKey = normalizeAccountKey(plan?.account)
+  addKey(plan?.account)
+  const aliasName = updatePlanAccountAliasMap[planKey]
+  addKey(aliasName)
+  addKey(matchedAccount?.account)
+  addKey(matchedAccount?.accountId)
+  addKey(matchedAccount?.id)
+  addKey(matchedAccount?.profile)
+  return keys
+}
+
+function activeBusinessMonthKey() {
+  if (historyPeriodEnabled.value) return selectedHistoryMonthKey.value
+  const now = new Date()
+  return now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0')
+}
+
+const businessOrderCountMap = computed(() => {
+  const rows = Array.isArray(realDashboard.value?.businessOrderCounts)
+    ? realDashboard.value.businessOrderCounts
+    : []
+  const map = new Map()
+  rows.forEach((item) => {
+    const month = String(item?.month || '').trim()
+    const platform = String(item?.platform || '').trim()
+    const accountKey = normalizeAccountKey(item?.account || item?.accountKey)
+    if (!month || !accountKey) return
+    const key = [month, platform, accountKey].join('|')
+    map.set(key, (map.get(key) || 0) + (Number(item?.count) || 0))
+  })
+  return map
+})
+
+function updatePlanWorkIndexKey(platform, accountKey, lengthType, hidden) {
+  return [
+    String(platform || '').trim(),
+    String(accountKey || '').trim(),
+    normalizeVideoLengthType(lengthType),
+    hidden ? 'hidden' : 'visible'
+  ].join('|')
+}
+
+function addUpdatePlanWorkIndexItem(map, key, workId) {
+  if (!key || !workId) return
+  if (!map.has(key)) map.set(key, new Set())
+  map.get(key).add(workId)
+}
+
+const updatePlanWorkCountMap = computed(() => {
+  const map = new Map()
+  if (!Array.isArray(dashboardWorks.value) || !dashboardWorks.value.length) return map
+  dashboardWorks.value.forEach((work, index) => {
+    if (work?.publishVolumeExcluded) return
+    if (!workInCurrentMonth(work)) return
+    const platform = work?.platform
+    if (!updatePlanMainPlatforms.has(platform)) return
+    const accountKeys = workAccountKeys(work)
+    if (!accountKeys.length) return
+    const lengthType = normalizeVideoLengthType(work?.videoLengthType)
+    const hidden = Boolean(work?.hiddenByZeroViews)
+    const workId = work?.id || work?.key || [
+      platform,
+      work?.account || '',
+      work?.profile || '',
+      work?.title || '',
+      work?.publishAt || work?.publishDate || '',
+      index
+    ].join('|')
+    accountKeys.forEach((accountKey) => {
+      addUpdatePlanWorkIndexItem(map, updatePlanWorkIndexKey(platform, accountKey, lengthType, hidden), workId)
+      addUpdatePlanWorkIndexItem(map, updatePlanWorkIndexKey(platform, accountKey, 'all', hidden), workId)
+    })
+  })
+  return map
+})
+
+function businessOrderCountForPlan(plan, matchedAccount) {
+  const month = activeBusinessMonthKey()
+  const platform = String(plan?.platform || matchedAccount?.platform || '').trim()
+  const accountKeys = Array.from(updatePlanAccountKeys(plan, matchedAccount))
+  for (const accountKey of accountKeys) {
+    const exact = businessOrderCountMap.value.get([month, platform, accountKey].join('|'))
+    if (Number(exact) > 0) return Number(exact)
+  }
+  for (const accountKey of accountKeys) {
+    const loose = businessOrderCountMap.value.get([month, '', accountKey].join('|'))
+    if (Number(loose) > 0) return Number(loose)
+  }
+  return 0
+}
+
+function workAccountKeys(work) {
+  return [
+    work?.account,
+    work?.profile,
+    work?.accountId
+  ].map(normalizeAccountKey).filter(Boolean)
+}
+
+function accountKeyMatches(workKeys, accountKeys) {
+  for (const workKey of workKeys) {
+    for (const accountKey of accountKeys) {
+      if (!workKey || !accountKey) continue
+      if (workKey === accountKey) return true
+      if (workKey.length >= 2 && accountKey.length >= 2 && (workKey.includes(accountKey) || accountKey.includes(workKey))) return true
+    }
+  }
+  return false
+}
+
+function normalizeVideoLengthType(value) {
+  const text = String(value || '').trim().toLowerCase()
+  if (text === 'long' || text === '长视频') return 'long'
+  if (text === 'short' || text === '短视频') return 'short'
+  return 'unknown'
+}
+
+function workMatchesPlanLength(work, plan) {
+  const planType = normalizeVideoLengthType(plan?.videoLengthType)
+  if (planType === 'unknown') return true
+  return normalizeVideoLengthType(work?.videoLengthType) === planType
+}
+
+function updatePlanWorkCountForPlan(plan, matchedAccount, hidden) {
+  const platform = String(plan?.platform || matchedAccount?.platform || '').trim()
+  const planType = normalizeVideoLengthType(plan?.videoLengthType)
+  const lengthType = planType === 'unknown' ? 'all' : planType
+  const accountKeys = Array.from(updatePlanAccountKeys(plan, matchedAccount))
+  const seen = new Set()
+  accountKeys.forEach((accountKey) => {
+    const rows = updatePlanWorkCountMap.value.get(updatePlanWorkIndexKey(platform, accountKey, lengthType, hidden))
+    if (!rows) return
+    rows.forEach((id) => seen.add(id))
+  })
+  return seen.size
+}
+
+function workInCurrentMonth(work) {
+  const date = parseDashboardDate(work?.publishDate || work?.publishAt)
+  if (!date) return false
+  const now = historyPeriodEnabled.value ? dashboardRangeBaseDate.value : new Date()
+  return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth()
+}
+
+function updatePlanCompleted(plan, matchedAccount) {
+  if (!updatePlanMainPlatforms.has(plan?.platform)) return 0
+  const hasLengthTarget = normalizeVideoLengthType(plan?.videoLengthType) !== 'unknown'
+  const preferWorkRows = Boolean(realDashboard.value?.historyMode) || hasLengthTarget
+  const aggregated = preferWorkRows ? 0 : monthlyPostCount(matchedAccount)
+  if (aggregated > 0) return aggregated
+  if (Array.isArray(dashboardWorks.value) && dashboardWorks.value.length) {
+    return updatePlanWorkCountForPlan(plan, matchedAccount, false)
+  }
+  return updatePlanEligibleCompleted(matchedAccount)
+}
+
+function updatePlanHiddenCompleted(plan, matchedAccount) {
+  if (!updatePlanMainPlatforms.has(plan?.platform)) return 0
+  const hasLengthTarget = normalizeVideoLengthType(plan?.videoLengthType) !== 'unknown'
+  const preferWorkRows = Boolean(realDashboard.value?.historyMode) || hasLengthTarget
+  const aggregated = preferWorkRows ? 0 : monthlyHiddenPostCount(matchedAccount)
+  if (aggregated > 0) return aggregated
+  if (Array.isArray(dashboardWorks.value) && dashboardWorks.value.length) {
+    return updatePlanWorkCountForPlan(plan, matchedAccount, true)
+  }
+  return monthlyHiddenPostCount(matchedAccount)
 }
 
 function updatePlanEligibleCompleted(item) {
@@ -1605,6 +1951,19 @@ function updatePlanStatus(plan, matchedAccount, completed, expected) {
   if (completed >= plan.monthlyTarget) return 'done'
   if (completed >= expected) return 'onTrack'
   return 'behind'
+}
+
+function updatePlanHiddenDisplay(row) {
+  return Number(row?.hiddenCompleted) || 0
+}
+
+function updatePlanTargetDisplay(row) {
+  const target = Number(row?.target) || 0
+  return target > 0 ? target : '无需目标'
+}
+
+function updatePlanCompletedDisplay(row) {
+  return Number(row?.completed) || 0
 }
 
 function sumBy(rows, getter) {
@@ -1705,7 +2064,7 @@ function fullAccountMetricRows(metric) {
       rawValue: metricValue(item, metric),
       viewsValue: rangeViews(item),
       likesValue: rangeLikes(item),
-      fansValue: Math.max(0, rangeFans(item)),
+      fansValue: rangeFans(item),
       completionValue: completionRate(item)
     }))
     .sort((a, b) => b.rawValue - a.rawValue || b.viewsValue - a.viewsValue)
@@ -1754,6 +2113,45 @@ function closeMetricModal() {
   metricModalKey.value = ''
 }
 
+async function openPostBarModal(bar) {
+  if (!bar?.value) return
+  postBarModalKey.value = bar?.key || bar?.label || ''
+  postBarModalLoadedWorks.value = []
+  if (Array.isArray(bar?.works) && bar.works.length) return
+  const start = parseDashboardDate(bar?.key)
+  if (!start) return
+  const end = postGranularity.value === 'week' ? addDashboardDays(start, 6) : start
+  const modalKey = postBarModalKey.value
+  postBarModalLoading.value = true
+  try {
+    let works = await loadAccountDataDashboardPublishDetail({
+      historyMonth: historyPeriodEnabled.value ? selectedHistoryMonthKey.value : '',
+      workScope: (activeRange.value === 'year' || activeRange.value === 'all') ? 'all' : 'month',
+      startDate: dashboardDateKey(start),
+      endDate: dashboardDateKey(end)
+    })
+    const accountIds = new Set(filterAccountsByPlatform(activePlatform.value).map(item => item.id))
+    works = works
+      .filter(item => !accountIds.size || accountIds.has(item.accountId))
+      .filter(item => activePlatform.value === 'all' || item.platform === activePlatform.value)
+      .filter(item => !item.publishVolumeExcluded)
+    if (activePlatform.value === 'all') {
+      works = dedupeContentWorks(works.filter(work => isMainPlatformWork(work) || (Number(work?.views) || 0) >= 100000))
+    }
+    if (postBarModalKey.value === modalKey) postBarModalLoadedWorks.value = works
+  } catch (error) {
+    if (postBarModalKey.value === modalKey) dashboardError.value = error?.message || '发文明细读取失败'
+  } finally {
+    if (postBarModalKey.value === modalKey) postBarModalLoading.value = false
+  }
+}
+
+function closePostBarModal() {
+  postBarModalKey.value = ''
+  postBarModalLoadedWorks.value = []
+  postBarModalLoading.value = false
+}
+
 const kpiCards = computed(() => {
   const rows = filteredAccounts.value
   const range = activeRangeMeta.value
@@ -1797,10 +2195,90 @@ const playRankRows = computed(() => {
   return rows
 })
 
+function mergeTextList(values) {
+  return Array.from(new Set((values || [])
+    .map(value => String(value || '').trim())
+    .filter(Boolean))).join(' / ')
+}
+
+function groupedUpdatePlanRows(sourcePlans) {
+  const map = new Map()
+  sourcePlans.forEach((plan) => {
+    const accountKey = normalizeAccountKey(plan.account)
+    const key = [plan.platform, accountKey || plan.account].join('|')
+    if (!map.has(key)) {
+      map.set(key, {
+        ...plan,
+        id: `update-plan-account-${plan.platform}-${accountKey || map.size}`,
+        monthlyTarget: 0,
+        monthlyTotal: 0,
+        longTarget: 0,
+        shortTarget: 0,
+        planParts: [],
+        durationTexts: [],
+        contentDirections: [],
+        notes: [],
+        benchmarkList: []
+      })
+    }
+    const row = map.get(key)
+    const target = Number(plan.monthlyTarget) || 0
+    const lengthType = normalizeVideoLengthType(plan.videoLengthType)
+    row.monthlyTarget += target
+    row.monthlyTotal += Number(plan.monthlyTotal) || 0
+    if (lengthType === 'long') row.longTarget += target
+    if (lengthType === 'short') row.shortTarget += target
+    row.planParts.push(plan)
+    row.durationTexts.push(plan.durationText)
+    row.contentDirections.push(plan.contentDirection)
+    row.notes.push(plan.note)
+    row.benchmarkList.push(plan.benchmarkAccounts)
+  })
+  return Array.from(map.values()).map((row) => ({
+    ...row,
+    durationSummary: mergeTextList(row.durationTexts),
+    contentDirection: mergeTextList(row.contentDirections),
+    note: mergeTextList(row.notes),
+    benchmarkAccounts: mergeTextList(row.benchmarkList),
+    videoLengthType: row.longTarget && row.shortTarget ? 'mixed' : (row.longTarget ? 'long' : (row.shortTarget ? 'short' : 'unknown'))
+  }))
+}
+
 const updatePlanDisplayRows = computed(() => {
   const word = keyword.value.toLowerCase()
   const monthProgress = updateMonthProgressRatio()
-  return updatePlanRows
+  const sourcePlans = groupedUpdatePlanRows(updatePlanRows.filter(item => updatePlanMainPlatforms.has(item.platform)))
+  const plannedAccountKeys = new Set()
+  sourcePlans.forEach((plan) => {
+    const matchedAccount = findUpdatePlanAccount(plan)
+    const accountKey = normalizeAccountKey(matchedAccount?.account || plan.account)
+    if (accountKey) plannedAccountKeys.add(`${plan.platform}:${accountKey}`)
+  })
+  const noTargetPlans = dashboardAccounts.value
+    .filter(item => updatePlanMainPlatforms.has(item.platform))
+    .filter(item => !item.publishVolumeExcluded)
+    .filter((item) => {
+      const accountKey = normalizeAccountKey(item.account)
+      return accountKey && !plannedAccountKeys.has(`${item.platform}:${accountKey}`)
+    })
+    .map((item, index) => ({
+      id: `update-plan-no-target-${item.platform}-${normalizeAccountKey(item.account) || index}`,
+      groupName: item.groupName || '未分组',
+      platform: item.platform,
+      platformLabel: item.platformLabel || item.platform,
+      accountType: item.accountType || '',
+      owner: item.owner || '',
+      account: item.account,
+      benchmarkAccounts: '',
+      monthlyTarget: 0,
+      longTarget: 0,
+      shortTarget: 0,
+      durationSummary: '',
+      note: '账号池未设置更新目标',
+      sourceAccount: item
+    }))
+  return sourcePlans
+    .concat(noTargetPlans)
     .filter(item => activePlatform.value === 'all' || item.platform === activePlatform.value)
     .filter(item => activeGroup.value === 'all' || item.groupName === activeGroup.value)
     .filter((item) => {
@@ -1808,8 +2286,19 @@ const updatePlanDisplayRows = computed(() => {
       return `${item.account} ${item.owner} ${item.groupName} ${item.platformLabel}`.toLowerCase().includes(word)
     })
     .map((plan) => {
-      const matchedAccount = findUpdatePlanAccount(plan)
-      const completed = matchedAccount ? updatePlanEligibleCompleted(matchedAccount) : 0
+      const matchedAccount = plan.sourceAccount || findUpdatePlanAccount(plan)
+      const longPlan = { ...plan, videoLengthType: 'long', monthlyTarget: Number(plan.longTarget) || 0 }
+      const shortPlan = { ...plan, videoLengthType: 'short', monthlyTarget: Number(plan.shortTarget) || 0 }
+      const longVisibleCompleted = updatePlanCompleted(longPlan, matchedAccount)
+      const longHiddenCompleted = updatePlanHiddenCompleted(longPlan, matchedAccount)
+      const shortVisibleCompleted = updatePlanCompleted(shortPlan, matchedAccount)
+      const shortHiddenCompleted = updatePlanHiddenCompleted(shortPlan, matchedAccount)
+      const longCompleted = longVisibleCompleted + longHiddenCompleted
+      const shortCompleted = shortVisibleCompleted + shortHiddenCompleted
+      const visibleCompleted = longVisibleCompleted + shortVisibleCompleted
+      const hiddenCompleted = longHiddenCompleted + shortHiddenCompleted
+      const completed = visibleCompleted + hiddenCompleted
+      const businessOrderCount = businessOrderCountForPlan(plan, matchedAccount)
       const target = Number(plan.monthlyTarget) || 0
       const expected = Math.ceil(target * monthProgress)
       const gap = Math.max(0, target - completed)
@@ -1817,26 +2306,40 @@ const updatePlanDisplayRows = computed(() => {
       const status = updatePlanStatus(plan, matchedAccount, completed, expected)
       const statusMeta = updatePlanStatusMap[status] || updatePlanStatusMap.behind
       const matchNote = matchedAccount && matchedAccount.account !== plan.account ? `匹配：${matchedAccount.account}` : ''
+      const collectNote = matchedAccount?.collectStatusReason || ''
       return {
         ...plan,
+        groupName: matchedAccount?.groupName || plan.groupName || '未分组',
+        owner: matchedAccount?.owner || plan.owner || '',
         matched: Boolean(matchedAccount),
         matchedAccountName: matchedAccount?.account || '',
+        followers: Number(matchedAccount?.followers) || 0,
         target,
         completed,
+        visibleCompleted,
+        hiddenCompleted,
+        longTarget: Number(plan.longTarget) || 0,
+        shortTarget: Number(plan.shortTarget) || 0,
+        longCompleted,
+        shortCompleted,
+        longVisibleCompleted,
+        shortVisibleCompleted,
+        longHiddenCompleted,
+        shortHiddenCompleted,
+        businessOrderCount,
         expected,
         gap,
         progress,
         status,
         statusLabel: statusMeta.label,
         statusClass: statusMeta.className,
-        contextNote: [plan.benchmarkAccounts ? `对标：${plan.benchmarkAccounts}` : '', plan.note, matchNote || (!matchedAccount && target ? '待接入账号池' : '')]
+        contextNote: [plan.benchmarkAccounts ? `对标：${plan.benchmarkAccounts}` : '', plan.note, matchNote, collectNote || (!matchedAccount && target ? '待接入账号池' : '')]
           .filter(Boolean)
           .join('；') || '正常推进'
       }
     })
     .sort((a, b) => {
-      const statusWeight = { behind: 0, unmatched: 1, onTrack: 2, done: 3, paused: 4 }
-      return (statusWeight[a.status] ?? 9) - (statusWeight[b.status] ?? 9) || b.gap - a.gap || b.target - a.target
+      return b.followers - a.followers || b.gap - a.gap || b.target - a.target
     })
 })
 
@@ -1860,36 +2363,63 @@ const updatePlanSummary = computed(() => {
   }
 })
 
+const updateLengthRows = computed(() => {
+  const map = new Map([
+    ['long', { key: 'long', label: '长视频', target: 0, completed: 0, remaining: 0 }],
+    ['short', { key: 'short', label: '短视频', target: 0, completed: 0, remaining: 0 }]
+  ])
+  updatePlanDisplayRows.value.forEach((item) => {
+    const longRow = map.get('long')
+    const shortRow = map.get('short')
+    const longTarget = Number(item.longTarget) || 0
+    const shortTarget = Number(item.shortTarget) || 0
+    const longCompleted = Math.min(Number(item.longCompleted) || 0, longTarget)
+    const shortCompleted = Math.min(Number(item.shortCompleted) || 0, shortTarget)
+    longRow.target += longTarget
+    longRow.completed += longCompleted
+    longRow.remaining += Math.max(0, longTarget - longCompleted)
+    shortRow.target += shortTarget
+    shortRow.completed += shortCompleted
+    shortRow.remaining += Math.max(0, shortTarget - shortCompleted)
+  })
+  return Array.from(map.values()).map(item => ({
+    ...item,
+    progress: item.target ? Math.min(100, Math.round(item.completed / item.target * 100)) : 100
+  }))
+})
+
 const updatePlanSummaryCards = computed(() => {
   const summary = updatePlanSummary.value
+  const longRow = updateLengthRows.value.find(item => item.key === 'long') || { target: 0, completed: 0, remaining: 0, progress: 0 }
+  const shortRow = updateLengthRows.value.find(item => item.key === 'short') || { target: 0, completed: 0, remaining: 0, progress: 0 }
   return [
     {
       key: 'target',
       label: '月更新目标',
       value: `${summary.target}条`,
-      note: `${summary.activeCount} 个账号有目标`,
+      note: `长视频 ${longRow.target} · 短视频 ${shortRow.target}`,
       color: metricColors.plan
     },
     {
-      key: 'completed',
-      label: '本月已发',
-      value: `${summary.completed}条`,
-      note: `完成率 ${summary.completionRate}%`,
+      key: 'long',
+      label: '长视频',
+      value: `${longRow.completed}/${longRow.target}`,
+      note: `完成率 ${longRow.progress}%`,
       color: metricColors.posts
+    },
+    {
+      key: 'short',
+      label: '短视频',
+      value: `${shortRow.completed}/${shortRow.target}`,
+      note: `完成率 ${shortRow.progress}%`,
+      color: metricColors.views
     },
     {
       key: 'remaining',
       label: '剩余缺口',
       value: `${summary.remaining}条`,
-      note: `${summary.behindCount} 个账号需跟进`,
-      color: summary.behindCount ? metricColors.warn : metricColors.completion
-    },
-    {
-      key: 'matched',
-      label: '账号接入',
-      value: `${summary.matchedCount}/${summary.rowCount}`,
-      note: `${summary.pausedCount} 个暂不更新`,
-      color: metricColors.views
+      note: `${summary.behindCount} 个账号需要跟进`,
+      color: summary.remaining ? metricColors.warn : metricColors.completion
     }
   ]
 })
@@ -1925,20 +2455,40 @@ const updateGroupRows = computed(() => {
     .sort((a, b) => b.remaining - a.remaining || b.target - a.target)
 })
 
-const updateOwnerRows = computed(() => {
+const updatePlanGroupSections = computed(() => {
   const map = new Map()
   updatePlanDisplayRows.value.forEach((item) => {
-    const owner = item.owner || '未填负责人'
-    const current = map.get(owner) || { owner, target: 0, completed: 0, remaining: 0 }
-    current.target += item.target
-    current.completed += item.target ? Math.min(item.completed, item.target) : 0
-    current.remaining += item.gap
-    map.set(owner, current)
+    const groupName = item.groupName || '未分组'
+    const current = map.get(groupName) || {
+      groupName,
+      target: 0,
+      completed: 0,
+      remaining: 0,
+      hiddenCompleted: 0,
+      longTarget: 0,
+      longCompleted: 0,
+      shortTarget: 0,
+      shortCompleted: 0,
+      rows: []
+    }
+    current.target += Number(item.target) || 0
+    current.completed += item.target ? Math.min(Number(item.completed) || 0, Number(item.target) || 0) : 0
+    current.remaining += Number(item.gap) || 0
+    current.hiddenCompleted += Number(item.hiddenCompleted) || 0
+    current.longTarget += Number(item.longTarget) || 0
+    current.longCompleted += Math.min(Number(item.longCompleted) || 0, Number(item.longTarget) || 0)
+    current.shortTarget += Number(item.shortTarget) || 0
+    current.shortCompleted += Math.min(Number(item.shortCompleted) || 0, Number(item.shortTarget) || 0)
+    current.rows.push(item)
+    map.set(groupName, current)
   })
   return Array.from(map.values())
-    .filter(item => item.target > 0)
-    .sort((a, b) => b.remaining - a.remaining || b.target - a.target)
-    .slice(0, 8)
+    .map((group) => ({
+      ...group,
+      progress: group.target ? Math.min(100, Math.round(group.completed / group.target * 100)) : 100,
+      rows: group.rows.slice().sort((a, b) => b.gap - a.gap || b.target - a.target || b.hiddenCompleted - a.hiddenCompleted)
+    }))
+    .sort((a, b) => b.remaining - a.remaining || b.target - a.target || b.hiddenCompleted - a.hiddenCompleted)
 })
 
 const chartPanels = computed(() => {
@@ -2016,6 +2566,44 @@ const metricModalRows = computed(() => {
 })
 const metricModalTotal = computed(() => sumBy(metricModalRows.value, item => Number(item.rawValue) || 0))
 
+const postBarModalOpen = computed(() => Boolean(postBarModalKey.value))
+const selectedPostBar = computed(() => {
+  if (!postBarModalKey.value) return null
+  return overviewPostBars.value.find(item => item.key === postBarModalKey.value || item.label === postBarModalKey.value) || null
+})
+const postBarModalRows = computed(() => {
+  const barWorks = Array.isArray(selectedPostBar.value?.works) ? selectedPostBar.value.works : []
+  const works = barWorks.length ? barWorks : postBarModalLoadedWorks.value
+  return works
+    .map((work) => ({
+      ...work,
+      title: work.title || '未命名作品',
+      views: Number(work.views) || 0,
+      likes: Number(work.likes) || 0,
+      comments: Number(work.comments) || 0,
+      interactionRate: Number(work.interactionRate) || 0
+    }))
+    .sort((a, b) => {
+      const at = parseDashboardDate(a.publishAt || a.publishDate)?.getTime() || 0
+      const bt = parseDashboardDate(b.publishAt || b.publishDate)?.getTime() || 0
+      return bt - at || b.views - a.views || b.likes - a.likes
+    })
+    .map((item, index) => ({ ...item, rank: index + 1 }))
+})
+const postBarModalTitle = computed(() => {
+  const label = selectedPostBar.value?.label || '发布明细'
+  return `${label}发布内容`
+})
+const postBarModalSubtitle = computed(() => {
+  const granularity = postGranularity.value === 'week' ? '按周统计' : '按日统计'
+  return `${activeRangeMeta.value.label}口径 · ${activePlatformLabel.value} · ${activeGroupLabel.value} · ${granularity}`
+})
+const postBarModalTotals = computed(() => ({
+  views: sumBy(postBarModalRows.value, item => Number(item.views) || 0),
+  likes: sumBy(postBarModalRows.value, item => Number(item.likes) || 0),
+  comments: sumBy(postBarModalRows.value, item => Number(item.comments) || 0)
+}))
+
 const constellationRows = computed(() => {
   const palette = ['#ff6b00', '#2f9bf0', '#8b6be8', '#f94d6a', '#18a058', '#ffa000']
   const positions = [
@@ -2062,14 +2650,14 @@ const overviewPlayRankRows = computed(() => {
 })
 
 const overviewPostBars = computed(() => {
-  if (dashboardWorks.value.length) {
+  if (hasPublishStats.value) {
     const limit = postGranularity.value === 'week' ? 8 : 14
     const slots = postGranularity.value === 'week'
       ? postChartWeekSlots(limit)
       : postChartDaySlots(limit)
     const buckets = new Map(slots.map(slot => [slot.key, { ...slot, value: 0, works: [] }]))
-    displayPostWorks.value.forEach((work) => {
-      const date = parseDashboardDate(work.publishDate || work.publishAt)
+    publishDisplayStatRows.value.forEach((row) => {
+      const date = parseDashboardDate(row?.date)
       if (!date) return
       let key = dashboardDateKey(date)
       if (postGranularity.value === 'week') {
@@ -2078,44 +2666,43 @@ const overviewPostBars = computed(() => {
       }
       const current = buckets.get(key)
       if (!current) return
-      current.value += 1
+      current.value += Number(row?.count) || 0
+      buckets.set(key, current)
+    })
+    displayPostWorks.value.forEach((work) => {
+      const date = parseDashboardDate(work.publishDate || work.publishAt)
+      if (!date) return
+      let key = dashboardDateKey(date)
+      if (postGranularity.value === 'week') key = dashboardDateKey(startOfDashboardWeek(date))
+      const current = buckets.get(key)
+      if (!current) return
       current.works.push(work)
       buckets.set(key, current)
     })
     const bars = slots.map(slot => buckets.get(slot.key) || { ...slot, value: 0, works: [] })
     const max = Math.max(1, ...bars.map(item => item.value))
     return bars.map(item => ({
+      key: item.key,
       label: item.label,
       value: item.value,
       height: item.value ? Math.max(8, Math.round(item.value / max * 100)) : 0,
+      works: [...(item.works || [])].sort((a, b) => {
+        const at = parseDashboardDate(a.publishAt || a.publishDate)?.getTime() || 0
+        const bt = parseDashboardDate(b.publishAt || b.publishDate)?.getTime() || 0
+        return bt - at || (Number(b.views) || 0) - (Number(a.views) || 0)
+      }),
       tooltip: item.value
         ? [
             `${item.label} · ${item.value}篇`,
             ...item.works
               .slice(0, 12)
-              .map(work => `${cleanTooltipText(work.account)} / ${cleanTooltipText(work.platformLabel || work.platform)} / ${cleanTooltipText(work.title) || '?????'}`),
+              .map(work => `${cleanTooltipText(work.account)} / ${cleanTooltipText(work.platformLabel || work.platform)} / ${cleanTooltipText(work.title) || '未知标题'}`),
             item.works.length > 12 ? `还有 ${item.works.length - 12} 条未展示` : ''
           ].filter(Boolean).join('\n')
         : `${item.label} · 0篇`
     }))
   }
-  const rows = dashboardRows.value
-  const labels = postGranularity.value === 'week' ? overviewPostWeekLabels : overviewPostDayLabels
-  const divisor = postGranularity.value === 'week' ? 2.8 : 6
-  const bars = labels.map((label, index) => {
-    const value = rows.reduce((sum, item) => {
-      const seed = stableNumber(`${item.id}-${label}`)
-      const base = Math.max(1, rangePosts(item) / divisor)
-      const wave = 0.55 + ((seed + index * 13) % 76) / 100
-      return sum + Math.max(1, Math.round(base * wave))
-    }, 0)
-    return { label, value, tooltip: `${label} · ${value}篇` }
-  })
-  const max = Math.max(1, ...bars.map(item => item.value))
-  return bars.map(item => ({
-    ...item,
-    height: Math.max(8, Math.round(item.value / max * 100))
-  }))
+  return []
 })
 
 const postPeakRows = computed(() => {
@@ -2213,7 +2800,7 @@ const battleSummaryCards = computed(() => {
     ? workRows.filter(item => item.contentType !== '商单').length
     : sumBy(rows.filter(item => contentType(item) === '日常'), rangePosts)
   const avgCompletion = rows.length ? Math.round(sumBy(rows, completionRate) / rows.length) : 0
-  const fanDelta = sumBy(rows, item => Math.max(0, rangeFans(item)))
+  const fanDelta = sumBy(rows, item => rangeFans(item))
   return [
     {
       key: 'champion',
@@ -2233,13 +2820,13 @@ const battleSummaryCards = computed(() => {
       key: 'completion',
       label: '平均完播率',
       value: `${avgCompletion}%`,
-      note: '账号均值占位',
+      note: rows.length ? '账号均值' : '等待数据',
       color: metricColors.completion
     },
     {
       key: 'fans',
       label: '粉丝变化',
-      value: `+${formatCompactNumber(fanDelta)}`,
+      value: signedDeltaText(fanDelta),
       note: `${activeRangeMeta.value.label}口径`,
       color: metricColors.fans
     }
@@ -2298,6 +2885,8 @@ const hotVideoRows = computed(() => {
     const accountIds = new Set(filteredAccounts.value.map(item => item.id))
     const rows = dashboardWorks.value
       .filter(item => !accountIds.size || accountIds.has(item.accountId))
+      .filter(item => !item.publishVolumeExcluded)
+      .filter(item => workInDashboardRange(item))
       .map(item => ({
         ...item,
         contentType: item.contentType || '日常',
@@ -2310,42 +2899,7 @@ const hotVideoRows = computed(() => {
     const max = Math.max(1, ...rows.map(item => item.hotIndex || item.views || 0))
     return rows.map(item => ({ ...item, width: Math.max(8, Math.round((item.hotIndex || item.views || 0) / max * 100)) }))
   }
-  const rows = filteredAccounts.value.flatMap((account, accountIndex) => {
-    return Array.from({ length: 3 }, (_, index) => {
-      const seed = stableNumber(`${account.id}-${account.account}-${index}`)
-      const content = videoContentType(account, seed, index)
-      const factor = content === '商单' ? 1.5 : 1
-      const views = Math.max(1200, Math.round(rangeViews(account) * (0.22 + index * 0.11 + (seed % 18) / 48)))
-      const likes = Math.max(20, Math.round(views * (0.018 + (seed % 24) / 1000)))
-      const comments = Math.round(likes * (0.08 + (seed % 10) / 90))
-      const shares = Math.round(likes * (0.04 + (seed % 8) / 90))
-      const fanGain = Math.max(0, Math.round(rangeFans(account) * (0.05 + (seed % 20) / 120)))
-      const completion = Math.min(96, Math.max(32, completionRate(account) + (seed % 21) - 10))
-      const interaction = Number((((likes + comments + shares) / Math.max(1, views)) * 100).toFixed(1))
-      const hotIndex = Math.round(views / 850 * factor + likes * 0.42 + comments * 3.6 + shares * 3.2 + fanGain * 15 + completion * 28)
-      return {
-        id: `${account.id}-hot-${index}`,
-        title: hotTitlePool[(seed + index + accountIndex) % hotTitlePool.length],
-        account: account.account,
-        groupName: account.groupName,
-        platform: account.platform,
-        platformLabel: account.platformLabel,
-        contentType: content,
-        publishAt: `2026-06-${String(9 - index).padStart(2, '0')} ${index === 0 ? '18:00' : '10:00'}`,
-        views,
-        likes,
-        comments,
-        shares,
-        fanGain,
-        completionRate: completion,
-        interactionRate: interaction,
-        hotIndex,
-        level: hotIndex >= 22000 ? 'S级' : hotIndex >= 14000 ? 'A级' : hotIndex >= 7600 ? 'B级' : '潜力'
-      }
-    })
-  }).sort((a, b) => b.hotIndex - a.hotIndex)
-  const max = Math.max(1, ...rows.map(item => item.hotIndex))
-  return rows.map(item => ({ ...item, width: Math.max(8, Math.round(item.hotIndex / max * 100)) }))
+  return []
 })
 
 const topHotVideo = computed(() => hotVideoRows.value[0] || null)
@@ -2410,6 +2964,20 @@ function metricValue(item, metric) {
   return Number(item?.[metric]) || 0
 }
 
+function signedDeltaText(value) {
+  const number = Number(value) || 0
+  if (number > 0) return `+${formatCompactNumber(number)}`
+  if (number < 0) return `-${formatCompactNumber(Math.abs(number))}`
+  return '0'
+}
+
+function deltaClass(value) {
+  const number = Number(value) || 0
+  if (number > 0) return 'delta-up'
+  if (number < 0) return 'delta-down'
+  return 'delta-flat'
+}
+
 const detailMetricLabel = computed(() => {
   const map = {
     fans: activeRangeMeta.value.total ? '总粉丝数排序' : `${activeRangeMeta.value.label}粉丝增量排序`,
@@ -2460,7 +3028,7 @@ const singleTrendMetrics = computed(() => {
     {
       key: 'fans',
       label: '粉丝趋势',
-      value: `+${formatCompactNumber(account.followerDelta)}`,
+      value: signedDeltaText(account.followerDelta),
       note: '最近快照变化',
       color: metricColors.fans,
       points: trendPoints(account.fanTrend)
@@ -2496,19 +3064,50 @@ const selectedAccountWorks = computed(() => {
     })
 })
 
-async function loadRealDashboard() {
-  dashboardLoading.value = true
+async function loadRealDashboard(options = {}) {
+  const requestSeq = ++dashboardRequestSeq
+  const useHistory = options.historyPeriodEnabled !== undefined
+    ? Boolean(options.historyPeriodEnabled)
+    : Boolean(historyPeriodEnabled.value)
+  const historyMonth = useHistory ? String(options.historyMonth || selectedHistoryMonthKey.value) : ''
+  const workScope = options.workScope || ((activeRange.value === 'year' || activeRange.value === 'all') ? 'all' : 'month')
+  // Background refreshes must not put an already usable dashboard back into
+  // the blocking loading state while publication details are being hydrated.
+  dashboardLoading.value = !realDashboard.value
   dashboardError.value = ''
   try {
-    const data = await loadAccountDataDashboard()
+    const data = await loadAccountDataDashboard({
+      historyMonth,
+      workScope,
+      forceRefresh: Boolean(options.forceRefresh)
+    })
+    if (requestSeq !== dashboardRequestSeq) return
+    const stillSameHistoryState = useHistory === Boolean(historyPeriodEnabled.value)
+    const stillSameHistoryMonth = !useHistory || historyMonth === selectedHistoryMonthKey.value
+    if (!stillSameHistoryState || !stillSameHistoryMonth) return
     realDashboard.value = data || null
     const digest = data?.collectionIndex?.sourceStats?.digest || data?.collectionIndex?.generatedAt || ''
     if (digest) lastIndexDigest = digest
+    if (data?.worksDeferred && Number(data?.worksTotal) > 0) {
+      dashboardLoading.value = false
+      loadAccountDataDashboardWorks({
+        historyMonth,
+        workScope,
+        worksTotal: data.worksTotal
+      }).then((works) => {
+        if (requestSeq !== dashboardRequestSeq) return
+        const sameHistoryState = useHistory === Boolean(historyPeriodEnabled.value)
+        const sameHistoryMonth = !useHistory || historyMonth === selectedHistoryMonthKey.value
+        if (!sameHistoryState || !sameHistoryMonth) return
+        realDashboard.value = { ...data, works, worksDeferred: false }
+      }).catch(() => {})
+    }
   } catch (e) {
+    if (requestSeq !== dashboardRequestSeq) return
     dashboardError.value = e?.message || String(e || '读取失败')
     realDashboard.value = null
   } finally {
-    dashboardLoading.value = false
+    if (requestSeq === dashboardRequestSeq) dashboardLoading.value = false
   }
 }
 
@@ -2521,14 +3120,30 @@ async function syncDashboardAfterCollect() {
     const justFinished = lastCollectionRunning && !running
     lastCollectionRunning = running
     if (digest) lastIndexDigest = digest
-    if ((changed || justFinished) && !dashboardLoading.value) {
-      await loadRealDashboard()
+    if ((changed || justFinished) && !dashboardLoading.value && !historyPeriodEnabled.value) {
+      await loadRealDashboard({ historyPeriodEnabled: false })
     }
   } catch (e) {}
 }
 
+watch([historyPeriodEnabled, selectedHistoryYear, selectedHistoryMonth], () => {
+  loadRealDashboard({
+    historyPeriodEnabled: historyPeriodEnabled.value,
+    historyMonth: selectedHistoryMonthKey.value
+  })
+})
+
+watch(activeRange, (range) => {
+  if (!historyPeriodEnabled.value && (range === 'year' || range === 'all')) {
+    loadRealDashboard({ historyPeriodEnabled: false, workScope: 'all' })
+  }
+})
+
 onMounted(() => {
-  loadRealDashboard()
+  window.requestAnimationFrame(() => {
+    dashboardRootRef.value?.scrollIntoView({ block: 'start' })
+  })
+  loadRealDashboard({ historyPeriodEnabled: false })
   syncDashboardAfterCollect()
   dashboardPollTimer = window.setInterval(syncDashboardAfterCollect, 30000)
 })
@@ -2889,6 +3504,43 @@ onUnmounted(() => {
   height: 32px;
 }
 
+.history-period-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+}
+
+.history-period-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #d9dee8;
+  border-radius: 4px;
+  background: #fff;
+  color: #586070;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.history-period-toggle input {
+  margin: 0;
+}
+
+.history-period-select {
+  width: 78px;
+  height: 32px;
+  padding: 0 8px;
+}
+
+.history-period-select:disabled {
+  opacity: .48;
+  cursor: not-allowed;
+}
+
 .dashboard-refresh-btn {
   height: 32px;
   padding: 0 12px;
@@ -2911,6 +3563,37 @@ onUnmounted(() => {
 .dashboard-refresh-btn:disabled {
   cursor: not-allowed;
   opacity: .58;
+}
+
+.dashboard-error-state {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  margin: 0 0 14px;
+  border: 1px solid #f2c6bd;
+  border-radius: 8px;
+  background: #fff7f4;
+  color: #924236;
+}
+
+.dashboard-error-state div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.dashboard-error-state strong {
+  font-size: 13px;
+}
+
+.dashboard-error-state span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #a96155;
+  font-size: 12px;
 }
 
 .snapshot-note,
@@ -2951,8 +3634,6 @@ onUnmounted(() => {
 .update-summary-card,
 .update-plan-progress-card,
 .update-risk-card,
-.update-group-card,
-.update-owner-card,
 .update-plan-table-card,
 .hot-summary-card,
 .hot-hero-card,
@@ -3123,13 +3804,6 @@ onUnmounted(() => {
   align-items: stretch;
 }
 
-.update-plan-sub-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(320px, .72fr);
-  gap: 18px;
-  align-items: stretch;
-}
-
 .hot-main-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.08fr) minmax(320px, .92fr);
@@ -3153,8 +3827,6 @@ onUnmounted(() => {
 .battle-chart-card,
 .update-plan-progress-card,
 .update-risk-card,
-.update-group-card,
-.update-owner-card,
 .update-plan-table-card,
 .hot-hero-card,
 .hot-factor-card,
@@ -3534,7 +4206,6 @@ onUnmounted(() => {
 }
 
 .plan-progress-bar,
-.plan-inline-progress i,
 .update-group-row i {
   overflow: hidden;
   border-radius: 999px;
@@ -3547,7 +4218,6 @@ onUnmounted(() => {
 }
 
 .plan-progress-bar u,
-.plan-inline-progress u,
 .update-group-row u {
   display: block;
   height: 100%;
@@ -3692,43 +4362,6 @@ onUnmounted(() => {
   color: #00a67e;
   font-size: 12px;
   text-align: right;
-}
-
-.update-owner-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.update-owner-grid span {
-  min-width: 0;
-  display: grid;
-  gap: 6px;
-  padding: 12px;
-  border-radius: 8px;
-  background: #f8f9fb;
-}
-
-.update-owner-grid em {
-  min-width: 0;
-  overflow: hidden;
-  color: #596172;
-  font-size: 12px;
-  font-style: normal;
-  font-weight: 900;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-
-.update-owner-grid strong {
-  color: #ef4444;
-  font-size: 22px;
-  line-height: 1;
-}
-
-.update-owner-grid small {
-  color: #8b92a0;
-  font-size: 12px;
 }
 
 .hot-factor-list,
@@ -4489,6 +5122,14 @@ onUnmounted(() => {
   grid-template-columns: 48px minmax(120px, 1fr) minmax(100px, .8fr) 84px 94px 94px 82px 82px 70px;
 }
 
+.metric-modal.post-detail-modal {
+  width: min(1180px, 96vw);
+}
+
+.metric-modal-row.post-detail {
+  grid-template-columns: 44px minmax(260px, 1.8fr) minmax(90px, .75fr) 76px 116px 82px 74px 66px 66px;
+}
+
 .metric-modal-row-head {
   position: sticky;
   top: -12px;
@@ -5191,6 +5832,30 @@ onUnmounted(() => {
   gap: 5px;
   align-items: end;
   justify-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+  transition: background .16s ease, transform .16s ease;
+}
+
+.wide-bar-item:hover,
+.wide-bar-item:focus-visible {
+  background: rgba(139, 107, 232, .08);
+  outline: none;
+  transform: translateY(-2px);
+}
+
+.wide-bar-item.empty {
+  cursor: default;
+}
+
+.wide-bar-item.empty:hover,
+.wide-bar-item.empty:focus-visible {
+  background: transparent;
+  transform: none;
 }
 
 .wide-bar-item strong {
@@ -5322,11 +5987,11 @@ onUnmounted(() => {
 .update-plan-head,
 .update-plan-row {
   display: grid;
-  grid-template-columns: minmax(120px, 1.05fr) minmax(112px, .92fr) .62fr .42fr .54fr .44fr .72fr .62fr minmax(180px, 1.3fr);
+  grid-template-columns: minmax(120px, 1.05fr) minmax(112px, .92fr) .62fr .5fr .54fr .5fr .5fr .62fr .62fr .44fr .72fr .62fr minmax(160px, 1.18fr);
   gap: 10px;
   align-items: center;
   min-height: 38px;
-  min-width: 1120px;
+  min-width: 1320px;
   padding: 0 10px;
 }
 
@@ -5443,6 +6108,18 @@ onUnmounted(() => {
   color: #00a67e;
   font-style: normal;
   font-weight: 900;
+}
+
+.delta-up {
+  color: #00a67e !important;
+}
+
+.delta-down {
+  color: #e14b3b !important;
+}
+
+.delta-flat {
+  color: #8b92a0 !important;
 }
 
 .single-work-head,
@@ -5657,8 +6334,6 @@ onUnmounted(() => {
   .update-summary-card,
   .update-plan-progress-card,
   .update-risk-card,
-  .update-group-card,
-  .update-owner-card,
   .update-plan-table-card,
   .hot-summary-card,
   .hot-hero-card,
@@ -5795,9 +6470,9 @@ onUnmounted(() => {
   .plan-progress-copy em,
   .update-risk-row em,
   .update-group-row em,
-  .update-owner-grid span,
-  .update-owner-grid em,
-  .update-owner-grid small,
+  .update-plan-head,
+  .update-plan-row span,
+  .update-plan-row small,
   .hot-factor-row span,
   .hot-rank-row em,
   .battle-row em,
@@ -5828,7 +6503,7 @@ onUnmounted(() => {
   .post-hot-days b,
   .wide-bar-item span,
   .hot-video-head,
-  .update-plan-head,
+  .update-plan-group-head,
   .account-table-head,
   .snapshot-head,
   .single-work-head,
@@ -5898,7 +6573,7 @@ onUnmounted(() => {
 
 .account-data-module :is(
   .hot-video-head,
-  .update-plan-head,
+  .update-plan-group-head,
   .account-table-head,
   .snapshot-head,
   .single-work-head,
@@ -5980,8 +6655,7 @@ onUnmounted(() => {
 
   .hot-main-grid,
   .hot-detail-grid,
-  .update-plan-main-grid,
-  .update-plan-sub-grid {
+  .update-plan-main-grid {
     grid-template-columns: 1fr;
   }
 
@@ -5999,8 +6673,7 @@ onUnmounted(() => {
   .single-layout,
   .battle-main-grid,
   .battle-sub-grid,
-  .update-plan-main-grid,
-  .update-plan-sub-grid {
+  .update-plan-main-grid {
     grid-template-columns: 1fr;
   }
 
@@ -6149,10 +6822,6 @@ onUnmounted(() => {
   }
 
   .cosmos-stage {
-    grid-template-columns: 1fr;
-  }
-
-  .update-owner-grid {
     grid-template-columns: 1fr;
   }
 }

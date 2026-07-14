@@ -21,7 +21,7 @@ function normalizeAccountKey(value) {
 
 function normalizeAlias(value) {
   const key = normalizeAccountKey(value)
-  if (key === normalizeAccountKey('王路飞')) return normalizeAccountKey('王路飞cp')
+  if (key === normalizeAccountKey('王路飞')) return normalizeAccountKey('王路飞CP')
   if (key === normalizeAccountKey('薛定谔的机')) return normalizeAccountKey('薛定谔的机')
   if (key === normalizeAccountKey('夏天Cat')) return normalizeAccountKey('夏天丶cat')
   return key
@@ -45,7 +45,7 @@ function findAccountByName(name, accountItems) {
 
 function accountNamePattern(account) {
   const escaped = String(account || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  if (account === '王路飞cp') return '(?:王路飞cp|王路飞)'
+  if (account === '王路飞CP') return '(?:王路飞CP|王路飞cp|王路飞)'
   if (account === '夏天丶cat') return '(?:夏天丶cat|夏天Cat|夏天cat)'
   if (account === '薛定谔的机') return '薛定谔的机-?'
   return escaped + '-?'

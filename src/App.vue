@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="app-shell">
     <!-- Top Bar -->
     <header class="topbar">
@@ -112,12 +112,13 @@
           <label>所属组别</label>
           <select class="inp" v-model="registerGroup">
             <option value="">请选择组别</option>
-            <option value="内容一组">内容一组</option>
+            <option value="内容一部">内容一部</option>
             <option value="内容二组">内容二组</option>
             <option value="内容三组">内容三组</option>
             <option value="内容四组">内容四组</option>
             <option value="内容五组">内容五组</option>
             <option value="内容六组">内容六组</option>
+            <option value="MCN经纪组">MCN经纪组</option>
           </select>
         </div>
         <div v-if="authMode === 'register'" class="login-field">
@@ -133,29 +134,34 @@
 
     <div v-if="authReady && isLoggedIn" class="body-layout">
       <!-- Sidebar -->
-      <aside class="sidebar" @wheel.prevent="handleModuleWheel">
+      <aside class="sidebar">
         <nav class="sidebar-nav" ref="sidebarNavRef">
           <template v-for="item in visibleNavItems" :key="item.id">
-            <div
+            <button
+              type="button"
               class="nav-item hover-spring click-press"
               :data-nav-id="item.id"
               :class="{ active: activeModule === item.id, expanded: item.children && isNavGroupOpen(item.id), parent: item.children }"
+              :aria-current="!item.children && activeModule === item.id ? 'page' : undefined"
+              :aria-expanded="item.children ? isNavGroupOpen(item.id) : undefined"
               @click="handleNavItemClick(item)">
-              <span class="nav-icon">{{ item.icon }}</span>
+              <span class="nav-icon"><NavIcon :name="item.id" /></span>
               <span class="nav-label">{{ item.label }}</span>
-              <span v-if="item.children" class="nav-chevron">{{ isNavGroupOpen(item.id) ? '⌄' : '›' }}</span>
-            </div>
+              <NavIcon v-if="item.children" name="chevron" :size="14" class="nav-chevron" />
+            </button>
             <div v-if="item.children && isNavGroupOpen(item.id)" class="nav-children">
-              <div
+              <button
                 v-for="child in item.children"
                 :key="child.id"
+                type="button"
                 class="nav-item nav-child hover-spring click-press"
                 :data-nav-id="child.id"
                 :class="{ active: activeModule === child.id }"
+                :aria-current="activeModule === child.id ? 'page' : undefined"
                 @click="setActiveModule(child.id)">
-                <span class="nav-icon">{{ child.icon }}</span>
+                <span class="nav-icon"><NavIcon :name="child.id" /></span>
                 <span class="nav-label">{{ child.label }}</span>
-              </div>
+              </button>
             </div>
           </template>
         </nav>
@@ -168,29 +174,22 @@
             <div class="account-name">{{ accountName }}</div>
             <div class="account-status">{{ accountStatus }}</div>
           </div>
-          <button v-if="!AUTH_DISABLED" class="account-edit" title="退出登录" @click="handleLogout">⎋</button>
+          <button v-if="!AUTH_DISABLED" class="account-edit" type="button" aria-label="退出登录" title="退出登录" @click="handleLogout">
+            <NavIcon name="logout" :size="16" />
+          </button>
         </div>
       </aside>
 
       <!-- Main Content -->
       <main class="main-content">
-        <StyleWorkbenchFrame
-          v-if="shouldMountStyleWorkbench"
-          class="module-layer module-layer-workbench"
-          :class="{ active: isStyleWorkbenchActive }"
-          :active="isStyleWorkbenchActive"
-          :path="activeStyleWorkbenchPath"
-          :traffic-context="styleWorkbenchTrafficContext" />
-        <div class="module" :class="{ 'module-under-workbench': isStyleWorkbenchActive }">
+        <div class="module">
           <KeepAlive>
             <component
-              v-if="!isStyleWorkbenchActive"
               :is="activeModuleComponent"
               :key="activeModuleKey"
-              :path="activeStyleWorkbenchPath"
               :module-id="activeModule"
               :current-user="authUser"
-              :traffic-context="styleWorkbenchTrafficContext" />
+              :traffic-context="activeTrafficContext" />
           </KeepAlive>
         </div>
       </main>
@@ -253,15 +252,8 @@
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted, defineAsyncComponent, nextTick } from 'vue'
-import ToolsModule from './modules/ToolsModule.vue'
-import WorkflowModule from './modules/WorkflowModule.vue'
-import OpsModule from './modules/OpsModule.vue'
-import ScheduleModule from './modules/ScheduleModule.vue'
-import AccountStyleModule from './modules/AccountStyleModule.vue'
-import CopyGenModule from './modules/CopyWorkbenchModule.vue'
-import DailyHotModule from './modules/DailyHotModule.vue?rightPanel=v3'
-import StyleWorkbenchFrame from './modules/StyleWorkbenchFrame.vue'
 import ChatBubble from './components/ChatBubble.vue'
+import NavIcon from './components/NavIcon.vue'
 import BaseConfirmDialog from './components/BaseConfirmDialog.vue'
 import BaseToast from './components/BaseToast.vue'
 import UsagiCelebration from './components/UsagiCelebration.vue'
@@ -272,6 +264,7 @@ import { useClock } from './composables/useClock'
 import { canAccessModule, isAdminLike, MEMBER_MODULES } from './permissions'
 import { getMe, login, logout, register } from './api/auth'
 import { clearAuthSession, getAuthToken } from './api/client'
+import { clearAccountDataDashboardCache, preloadAccountDataDashboard } from './api/accountData'
 import { loadUnreadScheduleNotifications, markScheduleNotificationsRead } from './api/schedule'
 import usagiIdleImage from './assets/usagi-pet-states/idle.png'
 import usagiHappyImage from './assets/usagi-pet-states/happy.png'
@@ -280,6 +273,13 @@ import usagiSleepImage from './assets/usagi-pet-states/sleep.png'
 import usagiLoginImage from './assets/usagi-ai-pet.png'
 
 // 懒加载模块 - 减少首屏加载体积
+const ToolsModule = defineAsyncComponent(() => import('./modules/ToolsModule.vue'))
+const WorkflowModule = defineAsyncComponent(() => import('./modules/WorkflowModule.vue'))
+const OpsModule = defineAsyncComponent(() => import('./modules/OpsModule.vue'))
+const ScheduleModule = defineAsyncComponent(() => import('./modules/ScheduleModule.vue'))
+const AccountStyleModule = defineAsyncComponent(() => import('./modules/AccountStyleModule.vue'))
+const CopyGenModule = defineAsyncComponent(() => import('./modules/CopyWorkbenchModule.vue'))
+const DailyHotModule = defineAsyncComponent(() => import('./modules/DailyHotModule.vue?rightPanel=v3'))
 const ImagegenModule = defineAsyncComponent(() => import('./modules/ImagegenModule.vue'))
 const AccountMonitorModule = defineAsyncComponent(() => import('./modules/AccountMonitorModule.vue'))
 const AccountDataDashboardModule = defineAsyncComponent(() => import('./modules/AccountDataDashboardModule.vue'))
@@ -289,7 +289,7 @@ const SmartCollectModule = defineAsyncComponent(() => import('./modules/SmartCol
 const MaterialModule = defineAsyncComponent(() => import('./modules/MaterialModule.vue'))
 const VideoPublishModule = defineAsyncComponent(() => import('./modules/VideoPublishModule.vue'))
 const ProjectDeliveryModule = defineAsyncComponent(() => import('./modules/ProjectDeliveryModule.vue'))
-const FeedbackModule = defineAsyncComponent(() => import('./modules/FeedbackModule.vue'))
+const CommentReplyModule = defineAsyncComponent(() => import('./modules/CommentReplyModule.vue'))
 const VectorModule = defineAsyncComponent(() => import('./modules/VectorModule.vue'))
 const AdminUsersModule = defineAsyncComponent(() => import('./modules/AdminUsersModule.vue'))
 const OperationLogModule = defineAsyncComponent(() => import('./modules/OperationLogModule.vue'))
@@ -298,6 +298,12 @@ const PostToolsModule = defineAsyncComponent(() => import('./modules/PostToolsMo
 const ProjectAgentModule = defineAsyncComponent(() => import('./modules/ProjectAgentModule.vue'))
 const TrafficPlanModule = defineAsyncComponent(() => import('./modules/TrafficPlanModule.vue'))
 const GrossMarginModule = defineAsyncComponent(() => import('./modules/GrossMarginModule.vue'))
+const StyleLibraryModule = defineAsyncComponent(() => import('./modules/StyleLibraryModule.vue'))
+const StyleProjectWorkbenchModule = defineAsyncComponent(() => import('./modules/StyleProjectWorkbenchModule.vue'))
+const StyleWriterModule = defineAsyncComponent(() => import('./modules/StyleWriterModule.vue'))
+const StyleAssetsModule = defineAsyncComponent(() => import('./modules/StyleAssetsModule.vue'))
+const DouyinHotlistModule = defineAsyncComponent(() => import('./modules/DouyinHotlistModule.vue'))
+const StyleToolsModule = defineAsyncComponent(() => import('./modules/StyleToolsModule.vue'))
 
 const { confirmState, confirmAccept, confirmCancel } = provideConfirm()
 const { toast, showToast: showGlobalToast } = provideToast()
@@ -313,35 +319,62 @@ const AUTH_DISABLED_USER = {
 }
 
 const DEFAULT_MODULE = 'accountmonitor'
-const UPDATE_ANNOUNCEMENT_VERSION = '2026-06-09-imagegen-recovered'
+const COPY_WORKBENCH_MAINTENANCE = false
+const COPY_MAINTENANCE_MODULES = new Set([
+  'copyWorkbench',
+  'styleLibrary',
+  'styleProjectWorkbench',
+  'styleWriter',
+  'styleAssets',
+  'styleGrossMargin',
+  'copygen',
+  'accountStyle',
+  'styleCollect',
+  'styleProjects',
+  'styleCopyTools',
+  'styleDrafts'
+])
+const UPDATE_ANNOUNCEMENT_VERSION = '2026-07-09-ops-workflow-schedule'
 const UPDATE_ANNOUNCEMENT_KEY = 'usagi_update_announcement_seen_version'
 const updateAnnouncement = {
-  versionLabel: 'AI 生图恢复',
-  title: 'AI 生图图生图能力已恢复',
-  subtitle: '本次主要修复 GPT-Image2 图生图链路的稳定性问题。当前主线路已恢复可用，图生图任务会自动排队串行执行，刷新页面后仍可在历史记录中查看结果。',
+  versionLabel: '7/9 工作流与排期更新',
+  title: '7/9 工作流、投流与排期看板更新',
+  subtitle: '本次重点处理账号分组、转写精度、投流申请、评论生成和排期待办联动，减少重复录入和页面来回切换。',
   items: [
     {
-      icon: '✅',
-      title: '主线路图生图已恢复',
-      desc: '主线路已完成图生图实测，成功结果会自动落盘并写入历史记录。遇到偶发上游超时，可重新提交。'
+      icon: '🔁',
+      title: '账号换组与名单调整',
+      desc: '已按最新组织结构调整账号归属、人员分组和一部/六组相关映射，投流计划与排期相关视图同步适配。'
     },
     {
-      icon: '⏳',
-      title: '生成任务改为稳定排队',
-      desc: '图生图上游不适合并发请求，因此系统现在会自动串行处理任务，避免同时提交两张导致 504 或超时。'
+      icon: '🎧',
+      title: '转写精度提高',
+      desc: '文案工具转写链路已优化，优先试用更准确的转写渠道，提升口播稿和素材拆解可用度。'
+    },
+    {
+      icon: '📈',
+      title: '投流申请与账号模板调整',
+      desc: '投流计划账号模板不再强绑定固定维护量，后续根据 CPM 浮动计算；账号模板仍默认勾选。互动量梯度已从 50 调整为 10，方便微调。'
     },
     {
       icon: '🛠️',
-      title: '修复历史不落盘与后端掉线',
-      desc: '参考图数据不再直接写入数据库，改为任务文件保存，降低大图请求导致后端掉线的风险。'
+      title: '文案工作台维护',
+      desc: 'Next 版文案工作台进入维护阶段，旧文案入口临时暂停；当前文案需求请先使用「文案工作流」。'
     },
     {
-      icon: '📌',
-      title: '原线路仍建议备用',
-      desc: '原线路当前仍存在连接中止问题，建议优先使用主线路；需要排查时再手动切换。'
+      icon: '⚡',
+      title: '评论生成加速',
+      desc: '评论生成性能已优化，目前 200 条评论平均约 1 分钟完成。'
+    },
+    {
+      icon: '📅',
+      title: '排期看板/部门待办优化',
+      desc: '部门待办已映射到组内排期表，映射任务支持拖动分配给组内成员，并同步保存负责人。'
     }
   ],
   history: [
+    { version: '7/9 工作流与排期更新', title: '账号换组、转写精度、投流模板、评论加速、待办映射' },
+    { version: '文案工作台维护', title: '旧文案入口暂停，文案需求迁移到文案工作流' },
     { version: 'AI 生图恢复', title: '主线路图生图恢复，任务改为串行队列' },
     { version: '发布模块公测', title: 'B站、抖音、快手、小红书发布链路可用' },
     { version: 'V3', title: '维护测算、分期拆量、申请文本生成' },
@@ -366,15 +399,20 @@ const sidebarNavRef = ref(null)
 const manuallyOpenedNavGroups = ref(new Set())
 
 // Module Map
-const { getActiveModuleComponent, getActiveModuleKey, getStyleWorkbenchPath, isValidModule } = useModuleMap({
+const { getActiveModuleComponent, getActiveModuleKey, isValidModule } = useModuleMap({
   CopyGenModule,
   ToolsModule,
+  StyleToolsModule,
   WorkflowModule,
   DailyHotModule,
   AccountMonitorModule,
   AccountDataDashboardModule,
   AccountDataAccountsModule,
-  StyleWorkbenchFrame,
+  StyleLibraryModule,
+  StyleProjectWorkbenchModule,
+  StyleWriterModule,
+  StyleAssetsModule,
+  DouyinHotlistModule,
   AccountStyleModule,
   OpsModule,
   ScheduleModule,
@@ -384,7 +422,7 @@ const { getActiveModuleComponent, getActiveModuleKey, getStyleWorkbenchPath, isV
   MaterialModule,
   VideoPublishModule,
   ProjectDeliveryModule,
-  FeedbackModule,
+  CommentReplyModule,
   VectorModule,
   AdminUsersModule,
   OperationLogModule,
@@ -397,28 +435,28 @@ const { getActiveModuleComponent, getActiveModuleKey, getStyleWorkbenchPath, isV
 
 const activeModuleComponent = computed(() => getActiveModuleComponent(activeModule.value))
 const activeModuleKey = computed(() => getActiveModuleKey(activeModule.value))
-const isStyleWorkbenchActive = computed(() => activeModuleKey.value === 'style-workbench-frame')
-const activeStyleWorkbenchPath = ref(getStyleWorkbenchPath(DEFAULT_MODULE))
-const styleWorkbenchTrafficContext = ref(null)
-const styleWorkbenchMounted = ref(false)
-const shouldMountStyleWorkbench = computed(() => styleWorkbenchMounted.value || isStyleWorkbenchActive.value)
-let styleWorkbenchPreloadTimer = null
+const activeTrafficContext = ref(null)
 
-watch(activeModule, (moduleId) => {
-  if (getActiveModuleKey(moduleId) === 'style-workbench-frame') {
-    activeStyleWorkbenchPath.value = getStyleWorkbenchPath(moduleId)
+let accountDataPreloadTimer = null
+
+function findParentNavGroup(moduleId) {
+  return visibleNavItems.value.find(item => item.children?.some(child => child.id === moduleId))
+}
+
+function syncActiveNavGroup(moduleId) {
+  const parent = findParentNavGroup(moduleId)
+  if (!parent) return
+  if (!expandedNavGroups.value.has(parent.id)) {
+    const next = new Set(expandedNavGroups.value)
+    next.add(parent.id)
+    expandedNavGroups.value = next
   }
-}, { immediate: true })
-
-watch(isStyleWorkbenchActive, (active) => {
-  if (active) mountStyleWorkbenchNow()
-})
-
-watch(activeModule, (moduleId) => {
-  const parent = visibleNavItems.value.find(item => item.children?.some(child => child.id === moduleId))
-  if (!parent || !expandedNavGroups.value.has(parent.id) || !manuallyOpenedNavGroups.value.has(parent.id)) return
   nextTick(() => scrollNavItemIntoView(moduleId))
-})
+}
+
+watch([activeModule, visibleNavItems], ([moduleId]) => {
+  syncActiveNavGroup(moduleId)
+}, { immediate: true })
 
 // Auth state
 const loggingIn = ref(false)
@@ -438,6 +476,7 @@ const statusUsagiImage = computed(() => isLoggedIn.value ? usagiSignImage : usag
 
 let notificationPollTimer = null
 let notificationPolling = false
+let notificationPollDelayMs = 30000
 
 function hasSeenUpdateAnnouncement() {
   try {
@@ -471,24 +510,19 @@ function maybeShowUpdateAnnouncement() {
   }, 500)
 }
 
-function mountStyleWorkbenchNow() {
-  if (styleWorkbenchMounted.value) return
-  styleWorkbenchMounted.value = true
+function scheduleAccountDataPreload() {
+  cancelAccountDataPreload()
+  if (!isLoggedIn.value || !canAccessModule(authUser.value, 'accountDataDashboard')) return
+  accountDataPreloadTimer = window.setTimeout(() => {
+    accountDataPreloadTimer = null
+    if (isLoggedIn.value) preloadAccountDataDashboard()
+  }, 300)
 }
 
-function scheduleStyleWorkbenchPreload() {
-  cancelStyleWorkbenchPreload()
-  if (!isLoggedIn.value || styleWorkbenchMounted.value) return
-  const run = () => {
-    if (isLoggedIn.value) mountStyleWorkbenchNow()
-  }
-  styleWorkbenchPreloadTimer = window.setTimeout(run, 250)
-}
-
-function cancelStyleWorkbenchPreload() {
-  if (!styleWorkbenchPreloadTimer) return
-  window.clearTimeout(styleWorkbenchPreloadTimer)
-  styleWorkbenchPreloadTimer = null
+function cancelAccountDataPreload() {
+  if (!accountDataPreloadTimer) return
+  window.clearTimeout(accountDataPreloadTimer)
+  accountDataPreloadTimer = null
 }
 
 // Clock
@@ -557,17 +591,8 @@ function setUiStyle(styleId) {
 
 applyUiStyle(activeUiStyle.value)
 
-function applyInitialModuleFromUrl() {
-  if (typeof window === 'undefined') return
-  const moduleId = new URLSearchParams(window.location.search).get('module')
-  if (moduleId && isValidModule(moduleId)) {
-    setActiveModule(moduleId)
-  }
-}
-
 function syncInitialModuleSelection() {
   ensureActiveModule()
-  applyInitialModuleFromUrl()
 }
 
 function setAuthMode(mode) {
@@ -670,7 +695,7 @@ async function handleLogout() {
   await logout().catch(() => {})
   authUser.value = null
   loginPass.value = ''
-  activeModule.value = DEFAULT_MODULE
+  setActiveModule(DEFAULT_MODULE, { history: 'replace' })
 }
 
 function handleAuthExpired() {
@@ -690,9 +715,11 @@ function formatScheduleNotification(notification) {
 
 async function pollScheduleNotifications() {
   if (!authUser.value || notificationPolling) return
+  if (typeof document !== 'undefined' && document.hidden) return
   notificationPolling = true
   try {
     const data = await loadUnreadScheduleNotifications()
+    notificationPollDelayMs = 30000
     const notifications = Array.isArray(data.notifications) ? data.notifications : []
     if (notifications.length) {
       const latest = notifications[notifications.length - 1]
@@ -713,6 +740,7 @@ async function pollScheduleNotifications() {
     }
   } catch(e) {
     // Global notifications should stay quiet if the network blips.
+    notificationPollDelayMs = Math.min(120000, Math.max(30000, notificationPollDelayMs * 2))
   } finally {
     notificationPolling = false
   }
@@ -721,14 +749,23 @@ async function pollScheduleNotifications() {
 function startScheduleNotificationPolling() {
   if (notificationPollTimer) window.clearInterval(notificationPollTimer)
   pollScheduleNotifications()
-  notificationPollTimer = window.setInterval(pollScheduleNotifications, 10000)
+  notificationPollTimer = window.setTimeout(runScheduleNotificationPoll, notificationPollDelayMs)
+}
+
+function runScheduleNotificationPoll() {
+  if (notificationPollTimer) window.clearTimeout(notificationPollTimer)
+  pollScheduleNotifications().finally(() => {
+    if (!authUser.value) return
+    notificationPollTimer = window.setTimeout(runScheduleNotificationPoll, notificationPollDelayMs)
+  })
 }
 
 function stopScheduleNotificationPolling() {
   if (notificationPollTimer) {
-    window.clearInterval(notificationPollTimer)
+    window.clearTimeout(notificationPollTimer)
     notificationPollTimer = null
   }
+  notificationPollDelayMs = 30000
 }
 
 watch(isLoggedIn, (loggedIn) => {
@@ -736,13 +773,13 @@ watch(isLoggedIn, (loggedIn) => {
     startScheduleNotificationPolling()
     maybeShowUpdateAnnouncement()
     nextTick(() => {
-      scheduleStyleWorkbenchPreload()
+      scheduleAccountDataPreload()
     })
   } else {
     stopScheduleNotificationPolling()
     showUpdateAnnouncement.value = false
-    cancelStyleWorkbenchPreload()
-    styleWorkbenchMounted.value = false
+    cancelAccountDataPreload()
+    clearAccountDataDashboardCache()
   }
 }, { immediate: true })
 
@@ -782,30 +819,10 @@ function handleNavItemClick(item) {
 function handleModuleNavigate(event) {
   const moduleId = event?.detail?.module
   if (event?.detail?.trafficContext) {
-    styleWorkbenchTrafficContext.value = event.detail.trafficContext
+    activeTrafficContext.value = event.detail.trafficContext
   }
   if (moduleId && isValidModule(moduleId)) {
     setActiveModule(moduleId)
-  }
-}
-
-function handleModuleWheel(event) {
-  const items = visibleNavItems.value.flatMap(item => {
-    if (!item.children) return [item]
-    return expandedNavGroups.value.has(item.id) ? item.children : [item]
-  })
-  if (!items.length) return
-  const idx = items.findIndex(item => item.id === activeModule.value)
-  const safeIdx = idx >= 0 ? idx : items.findIndex(item => item.children?.some?.(child => child.id === activeModule.value))
-  const direction = event.deltaY < 0 ? -1 : 1
-  let nextIdx = safeIdx + direction
-  while (nextIdx >= 0 && nextIdx < items.length) {
-    const nextItem = items[nextIdx]
-    if (!nextItem.children?.length) {
-      setActiveModule(nextItem.id)
-      return
-    }
-    nextIdx += direction
   }
 }
 
@@ -824,7 +841,7 @@ onMounted(() => {
 
 onUnmounted(() => {
   stopScheduleNotificationPolling()
-  cancelStyleWorkbenchPreload()
+  cancelAccountDataPreload()
   window.removeEventListener('usagi:navigate', handleModuleNavigate)
   window.removeEventListener('usagi:auth-expired', handleAuthExpired)
 })
@@ -832,7 +849,6 @@ onUnmounted(() => {
 
 <style>
 @import './style.css';
+@import './style-workbench-native.css';
 </style>
-
-
 

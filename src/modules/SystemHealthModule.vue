@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="system-health module-page">
     <header class="module-page-header health-header">
       <div class="module-page-title">
@@ -106,18 +106,17 @@ function groupLabel(group) {
 function checkName(name) {
   const map = {
     'Main API 5555': '主 API 5555',
-    'Next workbench 3100': '文案工作台 Next 3100',
+    'Style workbench native API': '文案工作台原生 API',
     'Runtime data root': '运行数据目录',
     'Style library': '风格素材库',
-    'Next app': 'Next 子应用目录',
+    'Style workbench backend': '文案工作台后端库',
     'Vite config': '前端构建配置',
-    'Account library typecheck': '账号库 TypeScript',
+    'Style workbench route': '文案工作台路由',
     'Chat model config': '模型配置',
     'Volcengine ASR config': '火山 ASR 配置',
     'Feishu config': '飞书配置',
+    'Account data collection': '账号数据采集',
     'API error log': '主服务错误日志',
-    'Next supervisor log': 'Next 监督日志',
-    'Next error log': 'Next 错误日志'
   }
   return map[name] || name
 }

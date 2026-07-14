@@ -8,27 +8,39 @@
   "scripts": {
     "dev": "node scripts/dev.cjs",
     "dev:front": "vite",
-    "dev:api": "node server/index.cjs",
-    "dev:style": "node scripts/style-dev.cjs",
+    "dev:api": "node --max-old-space-size=4096 server/index.cjs",
+    "watchdog:start": "node scripts/service-watchdog.cjs start",
+    "watchdog:stop": "node scripts/service-watchdog.cjs stop",
+    "watchdog:status": "node scripts/service-watchdog.cjs status",
+    "watchdog:check": "node scripts/service-watchdog.cjs check",
     "collect:account-data": "node scripts/collect-account-data-batch.cjs",
     "build": "vite build",
     "check:backend": "node scripts/check-backend.cjs",
     "check:encoding": "node scripts/check-encoding.cjs",
     "smoke:api": "node scripts/smoke-api.cjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "check:library": "node scripts/check-style-library-consistency.mjs",
+    "test:collect-target": "node scripts/test-style-collect-target.cjs"
   },
   "dependencies": {
+    "@liangdi/wecom-pro": "^0.1.7",
     "busboy": "^1.6.0",
+    "docx": "^9.7.1",
     "global-agent": "^4.1.3",
     "https-proxy-agent": "^9.0.0",
+    "lucide-vue-next": "^0.577.0",
+    "tsx": "^4.22.4",
+    "undici": "^7.16.0",
     "vue": "^3.4.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "^0.18.5",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.0.0",
     "vite": "^5.4.0"
   },
   "optionalDependencies": {
+    "@liangdi/wecom-pro-win32-x64": "^0.1.7",
     "sqlite3": "^5.1.7"
   }
 }

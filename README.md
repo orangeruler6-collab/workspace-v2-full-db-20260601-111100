@@ -62,6 +62,11 @@ workspace-v2/
 │   ├── style.css               # 全局样式，所有颜色/CSS变量在这里
 │   ├── modules/                # 功能模块（每个对应侧边栏一个入口）
 │   │   ├── ToolsModule.vue     # 文案工具（转写/评论/搜索/热点）
+│   │   ├── StyleLibraryModule.vue # 文案工作台：账号库
+│   │   ├── StyleProjectWorkbenchModule.vue # 文案工作台：项目
+│   │   ├── StyleWriterModule.vue # 文案工作台：写作
+│   │   ├── StyleAssetsModule.vue # 文案工作台：评论/资产
+│   │   ├── GrossMarginModule.vue # 文案工作台：数据维护
 │   │   ├── WorkflowModule.vue  # 文案工作流（拖拽画布）
 │   │   ├── VectorModule.vue    # 向量库可视化
 │   │   ├── OpsModule.vue       # 运营工具（CPM/审计）
@@ -70,7 +75,8 @@ workspace-v2/
 │   └── components/
 │       └── ChatBubble.vue      # 兔子气泡AI对话（右下角悬浮）
 ├── server/
-│   └── index.js               # 后端API（端口5555）
+│   ├── index.cjs              # 后端API（端口5555）
+│   └── style-workbench/lib/   # 文案工作台后端业务层
 ├── vite.config.js             # Vite配置
 └── CHANGELOG.md               # 每次改动必须记录
 ```
@@ -136,10 +142,19 @@ Copy-Item -Recurse "workspace-v2" "workspace-v2_backup_$ts"
 
 ---
 
-## 📡 API 调用（后端 server/index.js）
+## 📡 API 调用（后端 server/index.cjs）
+
+文案工作台已经改为 Vue 原生模块，不再启动 `apps/account-style-library` Next 子应用，也不再使用 `/style-workbench` iframe/proxy。相关接口直接挂在主 API 上，使用同一套登录 token、权限和操作日志；本地数据继续使用 `STYLE_LIBRARY_DIR`，默认是 `data/style-library`。
 
 | 接口 | 方法 | 参数 | 说明 |
 |------|------|------|------|
+| `/api/library` | GET | - | 文案工作台账号库总览 |
+| `/api/accounts` | GET/POST/PATCH/DELETE | 账号信息 | 账号库维护 |
+| `/api/projects` | GET/POST/PATCH/DELETE | 项目信息 | 项目工作台 |
+| `/api/write` | POST | 文案生成参数 | 对话写作 |
+| `/api/engagement` | GET/POST | 评论/弹幕参数 | 评论素材 |
+| `/api/gross-margin` | GET/POST | 单价表/监控记录 | 数据维护 |
+| `/api/douyin-hotlist` | GET/POST | watchlist/刷新参数 | 抖音热榜 |
 | `/api/transcribe` | POST | `{url}` | 视频转写 |
 | `/api/comment/batch` | POST | `{account, prompt, style, count}` | 评论生成 |
 | `/api/write` | POST | `{account, prompt}` | 文案创作 |

@@ -18,10 +18,10 @@
         <span class="traffic-current-group">{{ currentGroup }}</span>
         <button class="btn btn-ghost btn-sm" type="button" :disabled="loading" @click="refresh">刷新</button>
         <button class="btn btn-ghost btn-sm" type="button" :disabled="crmRefreshing" @click="refreshCrmData">
-          {{ crmRefreshing ? '更新中...' : '更新后台数据' }}
+          {{ crmRefreshing ? '同步中...' : '同步CRM数据' }}
         </button>
         <button class="btn btn-ghost btn-sm" type="button" :disabled="crmLoginLoading" @click="openCrmLoginShot">
-          {{ crmLoginLoading ? '取码中...' : 'CRM登录' }}
+          {{ crmLoginLoading ? '取码中...' : '登录CRM' }}
         </button>
         <small v-if="crmRefreshSummary" class="traffic-crm-refresh-meta" :title="crmRefreshTitle">{{ crmRefreshSummary }}</small>
         <button class="btn btn-primary btn-sm" type="button" @click="showCreate = true">新建项目</button>
@@ -64,7 +64,7 @@
                 <i></i>
                 {{ project.projectName }}
               </strong>
-              <em>{{ platformLabel(project.platform) }} · {{ displayScheduleDate(project.scheduleDate) }}</em>
+              <em>{{ projectCardSubtitle(project) }}</em>
               <small class="traffic-project-brief">
                 <b>{{ projectAccountCountText(project) }}</b>
                 <b>实时 CPM {{ formatCpm(packageCpm(project)) }}</b>
@@ -82,18 +82,27 @@
           </button>
           <div v-if="!visibleProjects.length" class="traffic-empty">暂无项目，先点击右上角新建项目。</div>
         </div>
-        <section v-if="showArchivedProjects" class="traffic-archive-pool">
+        <section v-if="showArchivedProjects || archiveSearchActive" class="traffic-archive-pool">
           <div class="traffic-archive-pool-head">
             <strong>归档池</strong>
-            <span>{{ archivedProjects.length }} 个</span>
+            <span>{{ archivedProjects.length }} 个{{ archiveSearchActive && !showArchivedProjects ? ' · 搜索命中' : '' }}</span>
           </div>
           <div class="traffic-archive-list">
-            <article v-for="project in archivedProjects" :key="project.projectId" class="traffic-archive-item" :style="projectAccentStyle(project)">
+            <article
+              v-for="project in archivedProjects"
+              :key="project.projectId"
+              class="traffic-archive-item"
+              :class="{ active: selectedProjectId === project.projectId }"
+              :style="projectAccentStyle(project)"
+              @click="selectArchivedProject(project)">
               <div>
                 <strong>{{ project.projectName }}</strong>
-                <span>{{ platformLabel(project.platform) }} · {{ projectAccountCountText(project) }}</span>
+                <span>{{ projectCardSubtitle(project) }} · {{ projectAccountCountText(project) }}</span>
               </div>
-              <button class="btn btn-ghost btn-sm" type="button" @click="restoreProject(project)">恢复</button>
+              <div class="traffic-archive-actions">
+                <button class="btn btn-ghost btn-sm" type="button" @click.stop="selectArchivedProject(project)">查看</button>
+                <button class="btn btn-primary btn-sm" type="button" @click.stop="restoreProject(project)">恢复</button>
+              </div>
             </article>
             <div v-if="!archivedProjects.length" class="traffic-empty compact">归档池为空。</div>
           </div>
@@ -272,18 +281,23 @@
                       </template>
                     </small>
                   </div>
-                  <strong>
-                    <i></i>
-                    <span>{{ execution.accountName }}</span>
-                    <em class="traffic-exec-project-chip">{{ executionProjectName(execution) }}</em>
-                  </strong>
-                  <span :title="`${executionProjectName(execution)} · ${execution.accountGroup || '未分组'} · ${execution.scheduleDate || '未填档期'} · ${execution.videoUrl || '未填作品链接'}`">
-                    {{ executionProjectName(execution) }} · {{ execution.accountGroup || '未分组' }} · {{ displayScheduleDate(execution.scheduleDate) }}
-                  </span>
-                  <small>
-                    {{ executionApplicationCount(execution) ? `已申请 ${executionApplicationCount(execution)} 期` : '申请未提交' }}
-                    · {{ executionApplicationCount(execution) ? (execution.videoUrl ? '作品链接已填' : '未填作品链接') : (execution.videoUrl ? '监控链接已填' : '未填作品链接') }}
-                  </small>
+                  <div class="traffic-exec-account-block">
+                    <strong class="traffic-exec-account-name" :title="execution.accountName">
+                      <i></i>
+                      <span>{{ execution.accountName }}</span>
+                    </strong>
+                    <div class="traffic-exec-account-meta" :title="`${executionProjectName(execution)} · ${execution.accountGroup || '未分组'} · ${execution.scheduleDate || '未填档期'}`">
+                      <em>{{ executionProjectName(execution) }}</em>
+                      <em>{{ execution.accountGroup || '未分组' }}</em>
+                      <em>{{ displayScheduleDate(execution.scheduleDate) }}</em>
+                    </div>
+                    <small class="traffic-exec-account-status">
+                      <span>{{ executionApplicationCount(execution) ? `已申请 ${executionApplicationCount(execution)} 期` : '待申请' }}</span>
+                      <span v-if="executionApplicationCount(execution) || execution.videoUrl" :class="{ warn: !execution.videoUrl }">
+                        {{ execution.videoUrl ? '链接已填' : '待补链接' }}
+                      </span>
+                    </small>
+                  </div>
                 </div>
                 <div class="traffic-exec-core-metrics">
                   <div class="traffic-exec-progress-stack">
@@ -533,7 +547,7 @@
             </div>
             <label class="span-2">
               <span>视频链接</span>
-              <input v-model.trim="form.videoUrl" class="inp" placeholder="粘贴视频链接或整段分享文案" @blur="normalizeFormUrl" />
+              <input v-model.trim="form.videoUrl" class="inp" placeholder="粘贴视频链接或整段分享文案" @paste="handleVideoUrlPaste" @blur="normalizeFormUrl" />
             </label>
             <label>
               <span>期数</span>
@@ -568,8 +582,8 @@
               <input v-model="form.targetCpm" class="inp" inputmode="decimal" placeholder="自定义 CPM" @input="handleTargetCpmInput" />
             </label>
             <label>
-              <span>折前价格</span>
-              <input v-model="form.originalPrice" class="inp" inputmode="decimal" @input="syncDiscountPrice" />
+              <span>折前价格（价格表）</span>
+              <input v-model="form.originalPrice" class="inp" inputmode="decimal" readonly title="折前价格来自账号价格表；如需调整，请先更新价格表" />
             </label>
             <label>
               <span>折扣率 %</span>
@@ -585,14 +599,37 @@
                 <span v-if="currentAccountStandard">
                   CPM {{ formatNumber(currentAccountStandardPreview?.targetCpm) }} · 当前播放 {{ formatWan(currentAccountStandardPreview?.play) }} · 点赞 {{ formatCompact(currentAccountStandardPreview?.like) }}
                 </span>
-              <span v-else>按目标播放自动计算：点赞 1000 阶梯，评论/收藏/转发 50 阶梯。</span>
+              <span v-else>按目标播放自动计算：点赞 1000 阶梯，评论/收藏/转发 10 阶梯。</span>
               </div>
               <div class="traffic-standard-actions">
                 <label class="traffic-standard-toggle">
                   <input v-model="form.useAccountStandard" type="checkbox" @change="handleAccountStandardToggle" />
                   <span>使用账号预设</span>
                 </label>
+                <label class="traffic-standard-toggle">
+                  <input v-model="form.totalBudgetMode" type="checkbox" @change="handleTotalBudgetModeToggle" />
+                  <span>总预算申请</span>
+                </label>
                 <button type="button" class="ghost" @click="applyFirstBlackTechPreset">首期黑科技维护</button>
+              </div>
+            </div>
+            <div v-if="form.totalBudgetMode" class="traffic-total-budget-box span-2">
+              <div class="traffic-total-budget-head">
+                <strong>执行比例</strong>
+                <span>左侧数量按本次总申请量填写，文案按比例自动拆分。</span>
+              </div>
+              <div class="traffic-total-budget-rows">
+                <label v-for="(split, index) in form.phaseSplits" :key="index">
+                  <input v-model.trim="split.name" class="inp" placeholder="一期" @input="refreshReviewText" />
+                  <input v-model="split.ratio" class="inp" inputmode="decimal" placeholder="40" @input="refreshReviewText" />
+                  <button type="button" @click="removePhaseSplit(index)">删除</button>
+                </label>
+              </div>
+              <div class="traffic-total-budget-actions">
+                <span :class="{ warn: phaseSplitTotal !== 100 }">合计 {{ formatNumber(phaseSplitTotal) }}%</span>
+                <button type="button" @click="useOneShotSplit">一期100%</button>
+                <button type="button" @click="useDefaultPhaseSplits">40/30/30</button>
+                <button type="button" @click="addPhaseSplit">新增期次</button>
               </div>
             </div>
               </div>
@@ -601,11 +638,11 @@
             <section class="traffic-maintenance-wrap">
             <div class="traffic-maintenance-head">
               <div>
-                <strong>本期投流维护</strong>
-                <span>填申请量，右侧实时生成最终审核文案。</span>
+                <strong>{{ form.totalBudgetMode ? '总预算投流维护' : '本期投流维护' }}</strong>
+                <span>{{ form.totalBudgetMode ? '填本次总申请量，右侧自动拆分执行计划。' : '填申请量，右侧实时生成最终审核文案。' }}</span>
               </div>
               <div class="traffic-maintenance-actions">
-                <em>{{ form.phaseName }} · {{ platformLabel(form.platform) }}</em>
+                <em>{{ form.totalBudgetMode ? '总预算' : form.phaseName }} · {{ platformLabel(form.platform) }}</em>
                 <button type="button" @click="clearMaintenanceQuantities">清空数量</button>
               </div>
             </div>
@@ -649,9 +686,9 @@
 
           <aside class="traffic-result-panel">
             <div class="traffic-result-card">
-              <span>累计维护成本</span>
-              <strong>{{ formatMoney(cumulativeCost) }}</strong>
-              <em>本期 {{ formatMoney(currentCost) }} · 已保存 {{ phaseHistoryRecords.length }} 期</em>
+              <span>{{ form.totalBudgetMode ? '总维护成本' : '累计维护成本' }}</span>
+              <strong>{{ formatMoney(reviewCost) }}</strong>
+              <em>{{ form.totalBudgetMode ? `按 ${phaseSplitSummary} 执行` : `本期 ${formatMoney(currentCost)} · 已保存 ${phaseHistoryRecords.length} 期` }}</em>
             </div>
             <div class="traffic-result-card" :class="grossTone">
               <span>毛利率</span>
@@ -664,7 +701,7 @@
             </div>
             <textarea v-model="reviewText" class="inp traffic-review" rows="13" readonly></textarea>
             <button class="btn btn-primary btn-sm" type="button" :disabled="saving || !canExportApplication" @click="exportCurrentPhase">
-              {{ saving ? '保存中...' : canExportApplication ? '导出' + form.phaseName : '请选择来源后导出' }}
+              {{ saving ? '保存中...' : canExportApplication ? (form.totalBudgetMode ? '导出总预算' : '导出' + form.phaseName) : '请选择来源后导出' }}
             </button>
             <section class="traffic-comment-entry" :class="{ open: commentPanelOpen }">
               <button class="traffic-comment-toggle" type="button" @click="commentPanelOpen = !commentPanelOpen">
@@ -759,7 +796,7 @@
         <header>
           <div>
             <strong>CRM 登录</strong>
-            <span>扫码后保持这个登录态，后台刷新会复用同一个 CRM profile。</span>
+            <span>扫码登录 CRM，后续同步 CRM 数据会复用这个登录态。</span>
           </div>
           <button type="button" class="btn btn-ghost btn-sm" @click="crmLoginOpen = false">关闭</button>
         </header>
@@ -769,8 +806,8 @@
         </div>
         <div class="traffic-modal-actions">
           <span v-if="crmLoginShot.title || crmLoginShot.url">{{ crmLoginShot.title || crmLoginShot.url }}</span>
-          <button class="btn btn-ghost btn-sm" type="button" :disabled="crmLoginLoading" @click="openCrmLoginShot">重新取码</button>
-          <button class="btn btn-primary btn-sm" type="button" :disabled="crmRefreshing" @click="refreshCrmData">登录后刷新数据</button>
+          <button class="btn btn-ghost btn-sm" type="button" :disabled="crmLoginLoading" @click="openCrmLoginShot">重新获取登录码</button>
+          <button class="btn btn-primary btn-sm" type="button" :disabled="crmRefreshing" @click="refreshCrmData">登录后同步CRM数据</button>
         </div>
       </section>
     </div>
@@ -906,13 +943,17 @@ const SETTINGS_SERVICE_OPTIONS = {
 }
 const BUILTIN_PRICE_OPTIONS = {
   douyin: [
-    { id: 'douyin-play-qianchuan-new', service: 'play', name: '千川（新）', unitPrice: 28, quantityUnit: '万', minimumQuantity: 1 }
+    { id: 'douyin-play-qianchuan-new', service: 'play', name: '千川（新）', unitPrice: 25, quantityUnit: '万', minimumQuantity: 1, priceTiers: [{ min: 1, max: 9, unitPrice: 25 }, { min: 10, unitPrice: 23 }] },
+    { id: 'douyin-play-qianchuan-25', service: 'play', name: '普通千川25档', unitPrice: 25, quantityUnit: '万', minimumQuantity: 1 }
   ]
 }
 const ACCOUNT_NAME_ALIASES = [
+  { canonical: '葵仔不想肝', aliases: ['魁仔不想肝', '尼大木家族'] },
   { canonical: '木游话说', aliases: ['尼大木'] },
   { canonical: '策划克星阿强', aliases: ['苏大强'] },
-  { canonical: '最翁Damnnn', aliases: ['最翁说游'] },
+  { canonical: '最游话说', aliases: ['最翁Damnnn', '最翁damn', '最翁说游'] },
+  { canonical: '畅玩百晓生', aliases: ['畅玩白晓生'] },
+  { canonical: '王路飞CP', aliases: ['王路飞cp'] },
   { canonical: '麦小雯', aliases: ['麦晓花'] }
 ]
 const phaseRatioOptions = Array.from({ length: 10 }, (_, index) => String((index + 1) * 10))
@@ -945,6 +986,7 @@ const reviewTouched = ref(false)
 const reviewText = ref('')
 const commentPanelOpen = ref(false)
 const suppressTargetPlayAutoSync = ref(false)
+const accountStandardManuallyDisabled = ref(false)
 const crmStatus = ref(null)
 const notice = reactive({ tone: '', message: '' })
 const state = reactive({
@@ -971,6 +1013,12 @@ const form = reactive({
   orderType: 'xingtu',
   phaseName: '一期',
   phaseRatio: '100',
+  totalBudgetMode: false,
+  phaseSplits: [
+    { name: '一期', ratio: '40' },
+    { name: '二期', ratio: '30' },
+    { name: '三期', ratio: '30' }
+  ],
   videoUrl: '',
   useAccountStandard: false,
   targetPlayWan: '',
@@ -997,10 +1045,10 @@ const currentGroup = computed(() => props.currentUser?.group_name || props.curre
 const effectiveGroup = computed(() => monitorViewMode.value === 'group' ? currentGroup.value : '')
 const monitorExecutions = computed(() => {
   if (!effectiveGroup.value) return state.executions
-  const groupKey = normalize(effectiveGroup.value)
-  return state.executions.filter(execution => normalize(execution.accountGroup || execution.groupName) === groupKey)
+  const groupKey = normalizeGroupAlias(effectiveGroup.value)
+  return state.executions.filter(execution => normalizeGroupAlias(execution.accountGroup || execution.groupName) === groupKey)
 })
-const selectedProject = computed(() => visibleProjects.value.find(project => project.projectId === selectedProjectId.value) || visibleProjects.value[0] || null)
+const selectedProject = computed(() => visibleProjects.value.find(project => project.projectId === selectedProjectId.value) || archivedProjects.value.find(project => project.projectId === selectedProjectId.value) || visibleProjects.value[0] || null)
 const monitorProjects = computed(() => {
   if (selectedProjectId.value && selectedProject.value) return [selectedProject.value]
   return visibleProjects.value
@@ -1112,7 +1160,7 @@ const overviewScheduleText = computed(() => {
   const dates = monitorProjects.value.flatMap(project => [
     project.scheduleDate,
     ...(project.executions || []).map(execution => execution.scheduleDate)
-  ]).filter(Boolean)
+  ]).filter(isScheduleDateValue)
   const unique = Array.from(new Set(dates)).sort()
   if (!unique.length) return '未填档期'
   if (unique.length === 1) return displayScheduleDate(unique[0])
@@ -1165,11 +1213,12 @@ const archivedProjects = computed(() => {
   if (!keyword) return list
   return list.filter(project => normalize(`${project.projectName} ${project.executions?.map(execution => execution.accountName).join(' ')}`).includes(keyword))
 })
+const archiveSearchActive = computed(() => Boolean(projectKeyword.value.trim() && archivedProjects.value.length))
 const applyTree = computed(() => {
   const keyword = normalize(applyKeyword.value)
   return state.projects.filter(project => !isArchivedProject(project)).map(project => {
     const executions = (project.executions || []).filter(execution => {
-      if (execution.accountGroup && currentGroup.value && normalize(execution.accountGroup) !== normalize(currentGroup.value)) return false
+      if (execution.accountGroup && currentGroup.value && normalizeGroupAlias(execution.accountGroup) !== normalizeGroupAlias(currentGroup.value)) return false
       if (!keyword) return true
       return normalize(`${project.projectName} ${execution.accountName} ${nextPhaseFor(execution)}`).includes(keyword)
     })
@@ -1184,7 +1233,7 @@ const accountSuggestionRows = computed(() => {
     .map(execution => ({
       execution,
       projectName: execution.projectName || state.projects.find(project => project.projectId === execution.projectId)?.projectName || '未命名项目',
-      groupRank: groupKey && normalize(execution.accountGroup) === groupKey ? 0 : 1,
+      groupRank: groupKey && normalizeGroupAlias(execution.accountGroup) === normalizeGroupAlias(groupKey) ? 0 : 1,
       selectedRank: selectedId === execution.executionId ? 0 : 1,
       pending: pendingPlayFor(execution),
       discountText: toNumber(execution.discountRate) ? `${formatNumber(execution.discountRate)}%` : '未填'
@@ -1215,14 +1264,14 @@ const serviceRows = computed(() => {
 })
 const existingRecords = computed(() => state.applications.filter(record => record.executionId === form.executionId))
 const phaseHistoryRecords = computed(() => {
-  return dedupePhaseRecords(existingRecords.value).sort((a, b) => {
+  return dedupePhaseRecords(existingRecords.value.filter(record => !isTotalBudgetRecord(record))).sort((a, b) => {
     const phaseDiff = phaseNumber(a.phaseName) - phaseNumber(b.phaseName)
     if (phaseDiff) return phaseDiff
     return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
   })
 })
 function executionPhaseRecords(execution) {
-  return dedupePhaseRecords(state.applications.filter(record => record.executionId === execution.executionId))
+  return dedupePhaseRecords(state.applications.filter(record => record.executionId === execution.executionId && !isTotalBudgetRecord(record)))
     .sort((a, b) => {
       const phaseDiff = phaseNumber(a.phaseName) - phaseNumber(b.phaseName)
       if (phaseDiff) return phaseDiff
@@ -1246,6 +1295,10 @@ function dedupePhaseRecords(records) {
   return [...map.values()]
 }
 
+function isTotalBudgetRecord(record) {
+  return record?.applicationMode === 'totalBudget' || normalize(record?.phaseName) === normalize('总预算')
+}
+
 const phaseTabs = computed(() => {
   const base = ['一期', '二期', '三期']
   const names = new Set([...base, ...phaseHistoryRecords.value.map(record => record.phaseName || '一期')])
@@ -1267,7 +1320,7 @@ const phaseTabs = computed(() => {
 
 function latestPhaseRecord(executionId, phaseName) {
   return dedupePhaseRecords(state.applications.filter(record =>
-    record.executionId === executionId && normalize(record.phaseName) === normalize(phaseName)
+    !isTotalBudgetRecord(record) && record.executionId === executionId && normalize(record.phaseName) === normalize(phaseName)
   ))[0] || null
 }
 
@@ -1281,15 +1334,74 @@ function latestPhaseVideoUrl(executionId) {
       return String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
     })[0]?.videoUrl || ''
 }
+
+function defaultPhaseSplits() {
+  return [
+    { name: '一期', ratio: '40' },
+    { name: '二期', ratio: '30' },
+    { name: '三期', ratio: '30' }
+  ]
+}
+
+function normalizePhaseSplits(splits) {
+  return (Array.isArray(splits) ? splits : [])
+    .map((split, index) => ({
+      name: String(split?.name || ['一期', '二期', '三期', '四期', '五期'][index] || `第${index + 1}期`).trim(),
+      ratio: toNumber(split?.ratio)
+    }))
+    .filter(split => split.name && split.ratio > 0)
+}
+
+function setPhaseSplits(splits) {
+  form.phaseSplits = splits.map(split => ({ name: split.name, ratio: String(split.ratio) }))
+  refreshReviewText()
+}
+
+function handleTotalBudgetModeToggle() {
+  if (!form.phaseSplits?.length) form.phaseSplits = defaultPhaseSplits()
+  reviewTouched.value = false
+  reviewText.value = generatedReview.value
+}
+
+function useDefaultPhaseSplits() {
+  setPhaseSplits(defaultPhaseSplits())
+}
+
+function useOneShotSplit() {
+  setPhaseSplits([{ name: '一期', ratio: '100' }])
+}
+
+function addPhaseSplit() {
+  const nextIndex = (form.phaseSplits || []).length
+  form.phaseSplits.push({ name: ['一期', '二期', '三期', '四期', '五期'][nextIndex] || `第${nextIndex + 1}期`, ratio: '' })
+  refreshReviewText()
+}
+
+function removePhaseSplit(index) {
+  if ((form.phaseSplits || []).length <= 1) {
+    useOneShotSplit()
+    return
+  }
+  form.phaseSplits.splice(index, 1)
+  refreshReviewText()
+}
+
 const currentCost = computed(() => serviceRows.value.reduce((sum, service) => sum + lineCost(service.key), 0))
+const phaseSplitRows = computed(() => normalizePhaseSplits(form.phaseSplits))
+const phaseSplitTotal = computed(() => phaseSplitRows.value.reduce((sum, split) => sum + split.ratio, 0))
+const phaseSplitSummary = computed(() => {
+  const rows = phaseSplitRows.value
+  return rows.length ? rows.map(split => `${split.name}${formatNumber(split.ratio)}%`).join(' / ') : '未设置比例'
+})
 const cumulativeCost = computed(() => {
   const samePhase = normalize(form.phaseName)
   const previous = dedupePhaseRecords(existingRecords.value)
-    .filter(record => normalize(record.phaseName) !== samePhase)
+    .filter(record => !isTotalBudgetRecord(record) && normalize(record.phaseName) !== samePhase)
     .reduce((sum, record) => sum + toNumber(record.maintenanceCost), 0)
   return previous + currentCost.value
 })
-const grossProfit = computed(() => toNumber(form.discountedPrice) - cumulativeCost.value)
+const reviewCost = computed(() => form.totalBudgetMode ? currentCost.value : cumulativeCost.value)
+const grossProfit = computed(() => toNumber(form.discountedPrice) - reviewCost.value)
 const grossMargin = computed(() => {
   const basePrice = toNumber(form.originalPrice)
   return basePrice ? grossProfit.value / basePrice * 100 : 0
@@ -1427,7 +1539,7 @@ async function refreshCrmData() {
   } catch (error) {
     const message = error.message || String(error)
     if (/需要登录|needLogin|登录/.test(message)) {
-      toast('warn', 'CRM 自动化 Profile 未登录，已为你打开登录码。扫码后等页面进入列表页，再点“登录后刷新数据”。')
+      toast('warn', 'CRM 自动化 Profile 未登录，已为你打开登录码。扫码后等页面进入列表页，再点“登录后同步CRM数据”。')
       openCrmLoginShot()
     } else {
       toast('error', '后台数据更新失败：' + message)
@@ -1623,6 +1735,12 @@ async function restoreProject(project) {
   }
 }
 
+function selectArchivedProject(project) {
+  if (!project) return
+  selectedProjectId.value = project.projectId
+  showArchivedProjects.value = true
+}
+
 function openEditProject(project) {
   if (!project) return
   const targetPlay = toNumber(project.targetMetrics?.play)
@@ -1710,6 +1828,7 @@ function startGapApply(execution) {
 function startUnlinkedApply() {
   selectedExecutionId.value = ''
   activeTab.value = 'apply'
+  accountStandardManuallyDisabled.value = false
   const executionId = 'manual-' + Date.now().toString(36)
   const platform = normalizePlatform(form.platform || 'douyin')
   Object.assign(form, {
@@ -1867,9 +1986,13 @@ function applyProjectPending(project) {
 }
 
 function fillForm(execution, options = {}) {
+  accountStandardManuallyDisabled.value = false
   const phaseName = options.phaseName || latestSavedPhaseName(execution) || '一期'
   const identity = resolveAccountIdentity(execution, null, { includeForm: false })
   const play = defaultApplyPlayForPhase(execution, phaseName)
+  const standardOriginalPrice = accountPriceTableOriginal(execution.accountName, execution.platform)
+  const originalPrice = standardOriginalPrice || toNumber(execution.originalPrice || execution.discountedPrice)
+  const discountedPrice = toNumber(execution.discountedPrice)
   withoutTargetPlayAutoSync(() => {
     Object.assign(form, {
       id: '',
@@ -1885,13 +2008,15 @@ function fillForm(execution, options = {}) {
       orderType: execution.orderType || execution.dealType || 'xingtu',
       phaseName,
       phaseRatio: '100',
+      totalBudgetMode: false,
+      phaseSplits: defaultPhaseSplits(),
       videoUrl: latestPhaseVideoUrl(execution.executionId) || execution.videoUrl || '',
       useAccountStandard: false,
       targetPlayWan: stripZeros((play / 10000).toFixed(2)),
       targetCpm: String(defaultTargetCpm(execution.platform)),
-      originalPrice: String(execution.originalPrice || execution.discountedPrice || ''),
-      discountRate: String(execution.discountRate || ''),
-      discountedPrice: String(execution.discountedPrice || ''),
+      originalPrice: String(originalPrice || ''),
+      discountRate: String(originalPrice && discountedPrice ? stripZeros((discountedPrice / originalPrice * 100).toFixed(2)) : execution.discountRate || ''),
+      discountedPrice: String(discountedPrice || ''),
       quantityInputs: emptyQuantities(),
       selectedOptions: defaultSelectedOptions(execution.platform)
     })
@@ -1912,6 +2037,9 @@ function applyApplicationRecord(record, execution = null) {
   const sourceExecution = execution || state.executions.find(item => item.executionId === record.executionId) || selectedExecution.value || {}
   const platform = normalizePlatform(record.platform || sourceExecution.platform || form.platform)
   const identity = resolveAccountIdentity(sourceExecution, record, { includeForm: false })
+  const standardOriginalPrice = accountPriceTableOriginal(record.accountName || sourceExecution.accountName, platform)
+  const originalPrice = standardOriginalPrice || toNumber(record.originalPrice || sourceExecution.originalPrice || form.originalPrice)
+  const discountedPrice = toNumber(record.discountedPrice || sourceExecution.discountedPrice || form.discountedPrice)
   withoutTargetPlayAutoSync(() => {
     Object.assign(form, {
       id: record.id || record.applicationId || '',
@@ -1926,14 +2054,16 @@ function applyApplicationRecord(record, execution = null) {
       cooperationCode: identity.cooperationCode,
       orderType: record.orderType || sourceExecution.orderType || sourceExecution.dealType || form.orderType || 'xingtu',
       phaseName: record.phaseName || form.phaseName,
+      totalBudgetMode: record.applicationMode === 'totalBudget',
+      phaseSplits: Array.isArray(record.phaseSplits) && record.phaseSplits.length ? record.phaseSplits : defaultPhaseSplits(),
       videoUrl: record.videoUrl || latestPhaseVideoUrl(record.executionId || sourceExecution.executionId || form.executionId) || sourceExecution.videoUrl || form.videoUrl,
       useAccountStandard: false,
       phaseRatio: String(record.phaseRatio || '100'),
       targetPlayWan: stripZeros((toNumber(record.targetPlay || record.targetMetrics?.play) / 10000).toFixed(2)),
       targetCpm: String(record.targetCpm || form.targetCpm || defaultTargetCpm(platform)),
-      originalPrice: String(record.originalPrice || sourceExecution.originalPrice || form.originalPrice),
-      discountRate: String(record.discountRate || sourceExecution.discountRate || form.discountRate),
-      discountedPrice: String(record.discountedPrice || sourceExecution.discountedPrice || form.discountedPrice),
+      originalPrice: String(originalPrice || ''),
+      discountRate: String(originalPrice && discountedPrice ? stripZeros((discountedPrice / originalPrice * 100).toFixed(2)) : record.discountRate || sourceExecution.discountRate || form.discountRate),
+      discountedPrice: String(discountedPrice || ''),
       quantityInputs: { ...emptyQuantities(), ...(record.quantityInputs || {}) },
       selectedOptions: { ...defaultSelectedOptions(platform), ...(record.selectedOptions || {}) }
     })
@@ -2035,10 +2165,18 @@ async function exportCurrentPhase() {
   saving.value = true
   normalizeFormUrl()
   normalizeAllQuantityInputs({ syncRatio: false })
+  if (form.totalBudgetMode && Math.abs(phaseSplitTotal.value - 100) > 0.001) {
+    saving.value = false
+    toast('error', `执行比例合计为 ${formatNumber(phaseSplitTotal.value)}%，请调整到 100% 后导出`)
+    return
+  }
   const exportText = generatedReview.value
   const playOption = selectedOption('play')
   const requestedPlay = quantityInputToRaw(form.quantityInputs.play, selectedQuantityUnit('play', playOption), 'play')
     || Math.round(toNumber(form.targetPlayWan) * 10000)
+  const exportPhaseName = form.totalBudgetMode ? '总预算' : form.phaseName
+  const isTotalBudgetExport = Boolean(form.totalBudgetMode)
+  const exportPhaseSplits = phaseSplitRows.value.map(split => ({ ...split }))
   let copied = false
   let copyError = null
   try {
@@ -2049,7 +2187,7 @@ async function exportCurrentPhase() {
       copyError = error
     }
     const payload = {
-      id: form.id || `${form.executionId}-app-${normalize(form.phaseName)}`,
+      id: isTotalBudgetExport ? `${form.executionId}-app-total-budget` : (form.id || `${form.executionId}-app-${normalize(exportPhaseName)}`),
       executionId: form.executionId,
       projectId: form.projectId,
       projectName: form.projectName,
@@ -2060,8 +2198,10 @@ async function exportCurrentPhase() {
       accountId: resolveAccountIdForReview(),
       cooperationCode: resolveCooperationCodeForReview(),
       orderType: form.orderType,
-      phaseName: form.phaseName,
+      phaseName: exportPhaseName,
       phaseRatio: form.phaseRatio,
+      applicationMode: isTotalBudgetExport ? 'totalBudget' : 'phase',
+      phaseSplits: exportPhaseSplits,
       videoUrl: form.videoUrl,
       targetPlay: requestedPlay,
       targetCpm: toNumber(form.targetCpm),
@@ -2077,11 +2217,17 @@ async function exportCurrentPhase() {
     const exec = result.execution
     await refresh()
     selectedExecutionId.value = exec.executionId
-    fillForm(state.executions.find(item => item.executionId === exec.executionId) || exec, { phaseName: payload.phaseName })
+    fillForm(state.executions.find(item => item.executionId === exec.executionId) || exec, { phaseName: isTotalBudgetExport ? form.phaseName : payload.phaseName })
+    if (isTotalBudgetExport) {
+      form.totalBudgetMode = true
+      form.phaseSplits = exportPhaseSplits.map(split => ({ name: split.name, ratio: String(split.ratio) }))
+      reviewTouched.value = false
+      reviewText.value = generatedReview.value
+    }
     if (copied) {
-      toast('success', `${payload.phaseName}已复制到剪贴板，并已保存同步`)
+      toast('success', `${exportPhaseName}已复制到剪贴板，并已保存同步`)
     } else {
-      toast('warn', `${payload.phaseName}已保存同步，但复制失败：${copyError?.message || copyError || '请手动复制文案'}`)
+      toast('warn', `${exportPhaseName}已保存同步，但复制失败：${copyError?.message || copyError || '请手动复制文案'}`)
     }
   } catch (error) {
     toast('error', '导出失败：' + (error.message || error))
@@ -2135,8 +2281,10 @@ function buildReviewText() {
     `标的：${form.projectName || '未填项目'}`,
     `账号：${form.accountName || '未填账号'}`,
     `订单类型：${orderTypeLabel(form.orderType, platform)}`,
-    `视频链接：${form.videoUrl || '待补'}`
+    `链接：${extractUrl(form.videoUrl) || '待补'}`
   ]
+
+  if (form.totalBudgetMode) return buildTotalBudgetReviewText(platform, common, currentPlayLines, footer)
 
   if (platform === 'bilibili') {
     return [
@@ -2180,6 +2328,104 @@ function buildReviewText() {
     `集团毛利：${formatReviewMoney(grossProfit.value)}元`,
     footer
   ].join('\n')
+}
+
+function buildTotalBudgetReviewText(platform, common, currentPlayLines, footer) {
+  const playOption = selectedOption('play')
+  const metricLines = totalBudgetMetricLines(platform, playOption)
+  const phaseLines = totalBudgetPhaseLines(platform)
+  const baseLines = platform === 'bilibili'
+    ? [
+        '【B站】',
+        ...common
+      ]
+    : [
+        '【抖音】',
+        ...common.slice(0, 3),
+        `抖音ID：${resolveDouyinIdForReview()}`,
+        `合作码：${resolveCooperationCodeForReview()}`,
+        common[3]
+      ]
+  return [
+    ...baseLines,
+    `目标CPM：${formatReviewMoney(form.targetCpm)}`,
+    `本次申请：按 ${phaseSplitSummary.value} 分批执行`,
+    '',
+    ...metricLines,
+    ...currentPlayLines,
+    '',
+    '分期执行：',
+    ...phaseLines,
+    '',
+    `总维护成本：${formatReviewMoney(currentCost.value)}元`,
+    `维护后毛利率：${formatReviewPercent(grossMargin.value / 100)}`,
+    `集团毛利：${formatReviewMoney(grossProfit.value)}元`,
+    footer
+  ].join('\n')
+}
+
+function totalBudgetMetricLines(platform, playOption) {
+  if (platform === 'bilibili') {
+    return [
+      `播放量（${formatBilibiliPlayChannel(playOption)}）：${formatReviewMetricValue('play', playOption, form.quantityInputs.play, platform)}`,
+      `点赞：${formatReviewMetricValue('like', selectedOption('like'), form.quantityInputs.like, platform)}`,
+      `投币：${formatReviewMetricValue('coin', selectedOption('coin'), form.quantityInputs.coin, platform)}`,
+      `收藏：${formatReviewMetricValue('favorite', selectedOption('favorite'), form.quantityInputs.favorite, platform)}`,
+      `评论：${formatReviewMetricValue('comment', selectedOption('comment'), form.quantityInputs.comment, platform)}`,
+      `分享：${formatReviewMetricValue('share', selectedOption('share'), form.quantityInputs.share, platform)}`,
+      `弹幕：${formatReviewMetricValue('danmaku', selectedOption('danmaku'), form.quantityInputs.danmaku, platform)}`,
+      `蓝链点击：${formatReviewMetricValue('blueLink', selectedOption('blueLink'), form.quantityInputs.blueLink, platform)}`
+    ]
+  }
+  return [
+    `播放量${formatReviewLabelSuffix(playOption)}：${formatReviewMetricValue('play', playOption, form.quantityInputs.play, platform)}`,
+    `点赞${formatReviewLabelSuffix(selectedOption('like'))}：${formatReviewMetricValue('like', selectedOption('like'), form.quantityInputs.like, platform)}`,
+    `评论${formatReviewLabelSuffix(selectedOption('comment'))}：${formatReviewMetricValue('comment', selectedOption('comment'), form.quantityInputs.comment, platform)}`,
+    `收藏：${formatReviewMetricValue('favorite', selectedOption('favorite'), form.quantityInputs.favorite, platform)}`,
+    `转发：${formatReviewMetricValue('share', selectedOption('share'), form.quantityInputs.share, platform)}`,
+    `抖加：${formatReviewMetricValue('douPlus', selectedOption('douPlus'), form.quantityInputs.douPlus, platform)}`
+  ]
+}
+
+function totalBudgetPhaseLines(platform) {
+  const rows = phaseSplitRows.value
+  if (!rows.length) return ['请先设置执行比例']
+  const services = serviceRows.value
+    .filter(service => service.key !== 'douPlus')
+    .map(service => ({
+      key: service.key,
+      label: totalBudgetServiceLabel(service.key, service.label),
+      option: selectedOption(service.key),
+      raw: quantityInputToRaw(form.quantityInputs[service.key], selectedQuantityUnit(service.key, selectedOption(service.key)), service.key)
+    }))
+    .filter(service => service.raw > 0)
+  const allocated = Object.fromEntries(services.map(service => [service.key, 0]))
+  return rows.map((split, index) => {
+    const isLast = index === rows.length - 1
+    const parts = services.map(service => {
+      const raw = isLast
+        ? Math.max(0, service.raw - allocated[service.key])
+        : Math.round(service.raw * split.ratio / 100)
+      allocated[service.key] += raw
+      return `${service.label}${formatReviewMetricRaw(service.key, service.option, raw, platform)}`
+    }).filter(Boolean)
+    return `${split.name}${formatNumber(split.ratio)}%：${parts.join('，') || '待填写'}`
+  })
+}
+
+function totalBudgetServiceLabel(key, fallback) {
+  const labels = {
+    play: '播放',
+    like: '点赞',
+    comment: '评论',
+    favorite: '收藏',
+    share: '转发',
+    douPlus: '抖加',
+    danmaku: '弹幕',
+    coin: '投币',
+    blueLink: '蓝链点击'
+  }
+  return labels[key] || fallback || key
 }
 
 function buildCommentContextScript() {
@@ -2266,6 +2512,12 @@ function formatReviewMetricValue(service, option, quantity, platform) {
   const unit = canonicalQuantityUnit(option?.quantityUnit, service)
   const raw = quantityInputToRaw(quantity, unit, service)
   if (!raw) return '/'
+  return formatReviewMetricRaw(service, option, raw, platform)
+}
+
+function formatReviewMetricRaw(service, option, raw, platform) {
+  const unit = canonicalQuantityUnit(option?.quantityUnit, service)
+  if (!raw) return '/'
   if (service === 'douPlus') return `${formatReviewMoney(raw)}元`
   if (unit === '万') return `${formatThreshold(raw / 10000)}${platform === 'bilibili' ? 'W' : '万'}`
   return formatReviewNumber(raw)
@@ -2326,9 +2578,14 @@ function normalizeFormUrl() {
   form.videoUrl = extractUrl(form.videoUrl)
 }
 
+function handleVideoUrlPaste() {
+  nextTick(normalizeFormUrl)
+}
+
 function switchApplyPlatform(platform) {
   const nextPlatform = normalizePlatform(platform)
   if (normalizePlatform(form.platform) === nextPlatform) return
+  accountStandardManuallyDisabled.value = false
   selectedExecutionId.value = ''
   const executionId = 'manual-' + Date.now().toString(36)
   form.platform = nextPlatform
@@ -2346,6 +2603,8 @@ function switchApplyPlatform(platform) {
   form.discountedPrice = ''
   form.phaseName = '一期'
   form.phaseRatio = '100'
+  form.totalBudgetMode = false
+  form.phaseSplits = defaultPhaseSplits()
   form.quantityInputs = emptyQuantities()
   form.selectedOptions = defaultSelectedOptions(nextPlatform)
   form.targetCpm = String(defaultTargetCpm(nextPlatform))
@@ -2428,6 +2687,7 @@ function handleTargetCpmInput() {
   const standard = currentAccountStandard.value
   if (form.useAccountStandard && standard && Math.abs(toNumber(form.targetCpm) - toNumber(standard.targetCpm)) > 0.001) {
     form.useAccountStandard = false
+    accountStandardManuallyDisabled.value = true
   }
   syncTargetPlay()
 }
@@ -2484,27 +2744,54 @@ function findExactAccountStandard(accountName, platform) {
   return rows.find(hasMaintenanceStandard) || rows[0] || null
 }
 
+function accountPriceTableOriginal(accountName, platform) {
+  const standard = findAccountStandard(accountName, platform)
+  return toNumber(standard?.originalPrice || standard?.quotePrice)
+}
+
 function applyExactAccountStandardForManual() {
   if (form.executionId && !String(form.executionId).startsWith('manual-')) return
   const standard = findExactAccountStandard(form.accountName, form.platform)
   if (!standard) return
-  form.useAccountStandard = true
-  applyAccountStandard(null, { quiet: true, forcePrices: false, allowGeneric: false })
+  const identity = resolveAccountIdentity(null)
+  form.douyinId = identity.douyinId
+  form.accountId = identity.accountId
+  form.cooperationCode = identity.cooperationCode
+  if (!accountStandardManuallyDisabled.value) {
+    form.useAccountStandard = true
+    applyAccountStandard(null, { quiet: true, forcePrices: false, allowGeneric: false })
+  } else {
+    const originalPrice = accountPriceTableOriginal(form.accountName, form.platform)
+    if (originalPrice) {
+      form.originalPrice = String(originalPrice)
+    }
+    if (!form.discountedPrice && standard.discountedPrice) {
+      form.discountedPrice = String(standard.discountedPrice)
+    }
+    if (toNumber(form.originalPrice) && toNumber(form.discountedPrice)) {
+      form.discountRate = stripZeros((toNumber(form.discountedPrice) / toNumber(form.originalPrice) * 100).toFixed(2))
+    }
+    syncTargetPlay()
+  }
   reviewTouched.value = false
   reviewText.value = generatedReview.value
 }
 
 function applyCurrentAccountStandard() {
+  accountStandardManuallyDisabled.value = false
   form.useAccountStandard = true
   applyAccountStandard(null, { quiet: false, forcePrices: false, allowGeneric: false })
 }
 
 function handleAccountStandardToggle() {
   if (!form.useAccountStandard) {
+    accountStandardManuallyDisabled.value = true
+    syncTargetPlay()
     reviewTouched.value = false
     reviewText.value = generatedReview.value
     return
   }
+  accountStandardManuallyDisabled.value = false
   const standard = currentAccountStandard.value
   if (!standard) {
     form.useAccountStandard = false
@@ -2551,8 +2838,9 @@ function applyAccountStandard(execution, options = {}) {
   form.accountId = identity.accountId
   form.cooperationCode = identity.cooperationCode
   form.targetCpm = String(standard.targetCpm)
-  if ((!form.originalPrice || options.forcePrices) && (standard.originalPrice || standard.quotePrice)) {
-    form.originalPrice = String(standard.originalPrice || standard.quotePrice)
+  const originalPrice = accountPriceTableOriginal(standard.accountName, standard.platform)
+  if (originalPrice) {
+    form.originalPrice = String(originalPrice)
   }
   if ((!form.discountedPrice || options.forcePrices) && standard.discountedPrice) form.discountedPrice = String(standard.discountedPrice)
   if (toNumber(form.originalPrice) && toNumber(form.discountedPrice)) {
@@ -2631,7 +2919,7 @@ function metricStep(service) {
   if (service === 'play') return 1
   if (service === 'like') return 1000
   if (service === 'douPlus') return 1
-  return 50
+  return 10
 }
 
 function normalizeMetricRaw(service, rawValue) {
@@ -3062,7 +3350,7 @@ function projectScheduleText(project) {
   const dates = [
     project?.scheduleDate,
     ...(project?.executions || []).map(execution => execution.scheduleDate)
-  ].filter(Boolean)
+  ].filter(isScheduleDateValue)
   const unique = Array.from(new Set(dates)).sort()
   if (!unique.length) return '未填'
   if (unique.length === 1) return displayScheduleDate(unique[0])
@@ -3073,11 +3361,24 @@ function projectScheduleSummary(project) {
   const dates = [
     project?.scheduleDate,
     ...(project?.executions || []).map(execution => execution.scheduleDate)
-  ].filter(Boolean)
+  ].filter(isScheduleDateValue)
   const unique = Array.from(new Set(dates)).sort()
   if (!unique.length) return '未填档期'
   if (unique.length === 1) return displayScheduleDate(unique[0])
   return `${displayScheduleDate(unique[0])} 等${unique.length}档`
+}
+
+function projectCardSubtitle(project) {
+  const scheduleText = projectScheduleSummary(project)
+  return scheduleText === '未填档期'
+    ? platformLabel(project?.platform)
+    : `${platformLabel(project?.platform)} · ${scheduleText}`
+}
+
+function isScheduleDateValue(value) {
+  const raw = String(value || '').trim()
+  if (!raw) return false
+  return /(?:\d{4})[-/.年]\d{1,2}[-/.月]\d{1,2}/.test(raw) || /(^|[^\d])\d{1,2}[-/.月]\d{1,2}/.test(raw)
 }
 
 function displayScheduleDate(value) {
@@ -3290,8 +3591,14 @@ function emptyQuantities() {
 
 function extractUrl(value) {
   const raw = String(value || '').trim()
-  const match = raw.match(/https?:\/\/[^\s"'<>，。；;、]+/i)
-  return (match?.[0] || raw).replace(/[，。；;、,.!?！？]+$/g, '')
+  const start = raw.search(/https?:\/\//i)
+  if (start < 0) return raw.replace(/[，。；;、,.!?！？]+$/g, '')
+  let candidate = raw.slice(start)
+  const schemeEnd = candidate.indexOf('://') + 3
+  const repeatedStart = candidate.slice(schemeEnd).search(/https?:\/\//i)
+  if (repeatedStart >= 0) candidate = candidate.slice(0, schemeEnd + repeatedStart)
+  const match = candidate.match(/^[^\s"'<>，。；;、]+/i)
+  return (match?.[0] || candidate).replace(/[，。；;、,.!?！？]+$/g, '')
 }
 
 function inferGroup(name) {
@@ -3316,6 +3623,15 @@ function platformLabel(platform) {
 
 function normalize(value) {
   return String(value || '').replace(/\s+/g, '').toLowerCase()
+}
+
+function normalizeGroupAlias(value) {
+  const key = normalize(value).replace(/内容/g, '').replace(/组/g, '').replace(/部/g, '')
+  const found = state.groups.find(group => {
+    const names = [group.groupName, ...(group.aliases || [])]
+    return names.some(name => normalize(name).replace(/内容/g, '').replace(/组/g, '').replace(/部/g, '') === key)
+  })
+  return found ? normalize(found.groupName) : normalize(value)
 }
 
 function accountAliasNames(rule) {
@@ -3343,6 +3659,7 @@ function canonicalAccountName(value) {
 
 function normalizeAccountKey(value) {
   return normalize(canonicalAccountName(value))
+    .replace(/[\s·•・丶._\-—–]+/g, '')
 }
 
 function hasMaintenanceStandard(standard) {
@@ -3753,6 +4070,13 @@ function toast(tone, message) {
   border-radius: 10px;
   background: var(--traffic-surface);
   opacity: .78;
+  cursor: pointer;
+}
+
+.traffic-archive-item.active {
+  opacity: 1;
+  border-color: var(--project-accent, var(--accent));
+  box-shadow: 0 0 0 2px var(--project-wash, rgba(37, 99, 235, .12));
 }
 
 .traffic-archive-item > div {
@@ -3776,6 +4100,12 @@ function toast(tone, message) {
 .traffic-archive-item span {
   color: var(--text-muted);
   font-size: 11px;
+}
+
+.traffic-archive-actions {
+  display: flex;
+  gap: 6px;
+  flex: 0 0 auto;
 }
 
 .traffic-apply-tree {
@@ -5459,7 +5789,7 @@ function toast(tone, message) {
   top: 0;
   z-index: 2;
   display: grid;
-  grid-template-columns: minmax(150px, .26fr) minmax(360px, .9fr) minmax(340px, .78fr) minmax(112px, .2fr);
+  grid-template-columns: minmax(260px, .52fr) minmax(360px, .8fr) minmax(320px, .66fr) minmax(112px, .2fr);
   gap: 14px;
   padding: 10px 15px;
   border-bottom: 1px solid var(--traffic-line);
@@ -5472,7 +5802,7 @@ function toast(tone, message) {
 .traffic-exec-row {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(150px, .26fr) minmax(360px, .9fr) minmax(340px, .78fr) minmax(112px, .2fr);
+  grid-template-columns: minmax(260px, .52fr) minmax(360px, .8fr) minmax(320px, .66fr) minmax(112px, .2fr);
   gap: 14px;
   align-items: center;
   padding: 16px 15px;
@@ -5521,21 +5851,29 @@ function toast(tone, message) {
   font-size: 11px;
 }
 
-.traffic-exec-main strong {
-  display: flex;
-  align-items: center;
+.traffic-exec-account-block {
+  display: grid;
   gap: 7px;
-  overflow: hidden;
-  font-size: 17px;
-  line-height: 1.2;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  min-width: 0;
 }
 
-.traffic-exec-main strong > span {
+.traffic-exec-main strong,
+.traffic-exec-account-name {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 17px;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.traffic-exec-main strong > span,
+.traffic-exec-account-name > span {
   min-width: 0;
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .traffic-exec-project-chip {
@@ -5555,20 +5893,61 @@ function toast(tone, message) {
   white-space: nowrap;
 }
 
-.traffic-exec-main strong i {
+.traffic-exec-main strong i,
+.traffic-exec-account-name i {
+  flex: 0 0 auto;
   width: 8px;
   height: 8px;
+  margin-top: 6px;
   border-radius: 999px;
   background: var(--project-accent, #94a3b8);
 }
 
+.traffic-exec-account-meta,
+.traffic-exec-account-status,
 .traffic-exec-main small {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 6px;
+  flex-wrap: wrap;
   color: var(--text-muted);
   font-size: 11px;
   line-height: 1.25;
+}
+
+.traffic-exec-account-meta em,
+.traffic-exec-account-status span {
+  max-width: 100%;
+  min-height: 20px;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border: 1px solid color-mix(in srgb, var(--project-accent, var(--primary)) 24%, var(--border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--project-accent, var(--primary)) 8%, var(--panel-bg-soft));
+  color: var(--text-muted);
+  font-style: normal;
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.traffic-exec-account-meta em:first-child {
+  max-width: 180px;
+  color: color-mix(in srgb, var(--project-accent, var(--primary)) 72%, var(--text));
+}
+
+.traffic-exec-account-status span {
+  border-color: color-mix(in srgb, #10b981 28%, var(--border));
+  background: color-mix(in srgb, #10b981 9%, var(--panel-bg));
+  color: #047857;
+}
+
+.traffic-exec-account-status span.warn {
+  border-color: color-mix(in srgb, #f59e0b 34%, var(--border));
+  background: color-mix(in srgb, #f59e0b 10%, var(--panel-bg));
+  color: #92400e;
 }
 
 .mini-money {
@@ -6219,6 +6598,65 @@ function toast(tone, message) {
 .traffic-standard-card button:disabled {
   cursor: not-allowed;
   opacity: .55;
+}
+
+.traffic-total-budget-box {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px dashed color-mix(in srgb, var(--primary) 32%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--active-bg) 34%, var(--panel-bg));
+}
+
+.traffic-total-budget-head,
+.traffic-total-budget-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.traffic-total-budget-head strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.traffic-total-budget-head span,
+.traffic-total-budget-actions span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.traffic-total-budget-actions span.warn {
+  color: var(--warning-text, #b45309);
+}
+
+.traffic-total-budget-rows {
+  display: grid;
+  gap: 6px;
+}
+
+.traffic-total-budget-rows label {
+  display: grid;
+  grid-template-columns: minmax(70px, .8fr) minmax(58px, .6fr) auto;
+  gap: 6px;
+  align-items: center;
+}
+
+.traffic-total-budget-box button {
+  min-height: 30px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel-bg-soft);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  cursor: pointer;
 }
 
 .traffic-preset-box .traffic-settings-editor {
@@ -8887,6 +9325,11 @@ function toast(tone, message) {
   position: sticky;
   top: 0;
   z-index: 4;
+  grid-template-columns: minmax(300px, .62fr) minmax(360px, .78fr) minmax(300px, .6fr) minmax(112px, .2fr);
+}
+
+.traffic-plan-v2 .traffic-exec-row {
+  grid-template-columns: minmax(300px, .62fr) minmax(360px, .78fr) minmax(300px, .6fr) minmax(112px, .2fr);
 }
 
 .traffic-plan-v2 .traffic-topbar {
@@ -8973,6 +9416,19 @@ function toast(tone, message) {
 .traffic-plan-v2 .traffic-exec-main > span:not(.traffic-exec-gap-ring),
 .traffic-plan-v2 .traffic-exec-main > small {
   grid-column: 2;
+}
+
+.traffic-plan-v2 .traffic-exec-account-block {
+  grid-column: 2;
+}
+
+.traffic-plan-v2 .traffic-exec-account-name {
+  font-size: 15px;
+}
+
+.traffic-plan-v2 .traffic-exec-account-meta,
+.traffic-plan-v2 .traffic-exec-account-status {
+  gap: 5px;
 }
 
 .traffic-plan-v2 .traffic-exec-gap-cell {

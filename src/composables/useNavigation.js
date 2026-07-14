@@ -1,5 +1,26 @@
-﻿import { ref, computed, watch } from 'vue'
-import { canAccessModule, MODULE_DEFINITIONS, flattenModuleDefinitions } from '../permissions'
+import { ref, computed, watch } from 'vue'
+import { onMounted, onUnmounted } from 'vue'
+import { ALL_MODULE_DEFINITIONS, canAccessModule, MODULE_DEFINITIONS, flattenModuleDefinitions } from '../permissions'
+
+const MODULE_QUERY_KEY = 'module'
+
+function readModuleFromUrl() {
+  if (typeof window === 'undefined') return ''
+  return new URL(window.location.href).searchParams.get(MODULE_QUERY_KEY) || ''
+}
+
+function isKnownModule(moduleId) {
+  return ALL_MODULE_DEFINITIONS.some(item => item.id === moduleId)
+}
+
+function writeModuleToUrl(moduleId, historyMode = 'replace') {
+  if (typeof window === 'undefined' || !isKnownModule(moduleId)) return
+  const url = new URL(window.location.href)
+  if (url.searchParams.get(MODULE_QUERY_KEY) === moduleId) return
+  url.searchParams.set(MODULE_QUERY_KEY, moduleId)
+  const method = historyMode === 'push' ? 'pushState' : 'replaceState'
+  window.history[method]({ module: moduleId }, '', url)
+}
 
 function filterNavItems(items, user, skipPermissions) {
   return items.reduce((acc, item) => {
@@ -14,7 +35,8 @@ function filterNavItems(items, user, skipPermissions) {
 }
 
 export function useNavigation(authUser, DEFAULT_MODULE = 'accountmonitor', skipPermissions = false) {
-  const activeModule = ref(DEFAULT_MODULE)
+  const requestedModule = readModuleFromUrl()
+  const activeModule = ref(isKnownModule(requestedModule) ? requestedModule : DEFAULT_MODULE)
 
   const visibleNavItems = computed(() => {
     if (skipPermissions) return MODULE_DEFINITIONS
@@ -25,18 +47,46 @@ export function useNavigation(authUser, DEFAULT_MODULE = 'accountmonitor', skipP
 
   const visibleLeafItems = computed(() => flattenModuleDefinitions(visibleNavItems.value))
 
+  function hasAccess(moduleId) {
+    return skipPermissions || canAccessModule(authUser.value, moduleId)
+  }
+
   function ensureActiveModule() {
     if (!visibleLeafItems.value.length) return
-    if (!canAccessModule(authUser.value, activeModule.value)) {
-      activeModule.value = visibleLeafItems.value[0].id
+    if (!isKnownModule(activeModule.value) || !hasAccess(activeModule.value)) {
+      setActiveModule(visibleLeafItems.value[0].id, { history: 'replace' })
+      return
     }
+    writeModuleToUrl(activeModule.value, 'replace')
   }
 
-  function setActiveModule(moduleId) {
+  function setActiveModule(moduleId, options = {}) {
+    if (!isKnownModule(moduleId)) return false
+    const historyMode = options.history === 'replace' ? 'replace' : 'push'
     activeModule.value = moduleId
+    writeModuleToUrl(moduleId, historyMode)
+    return true
   }
 
-  watch(visibleNavItems, ensureActiveModule)
+  function handlePopState() {
+    const moduleId = readModuleFromUrl()
+    if (isKnownModule(moduleId) && hasAccess(moduleId)) {
+      activeModule.value = moduleId
+      return
+    }
+    ensureActiveModule()
+  }
+
+  watch(visibleNavItems, ensureActiveModule, { immediate: true })
+
+  onMounted(() => {
+    window.addEventListener('popstate', handlePopState)
+    ensureActiveModule()
+  })
+
+  onUnmounted(() => {
+    window.removeEventListener('popstate', handlePopState)
+  })
 
   return {
     activeModule,
@@ -48,27 +98,26 @@ export function useNavigation(authUser, DEFAULT_MODULE = 'accountmonitor', skipP
 }
 
 export function useModuleMap(imports) {
-  const styleWorkbenchRoutes = {
-    styleLibrary: '/library',
-    styleProjectWorkbench: '/project-workbench',
-    styleWriter: '/writer',
-    styleAssets: '/assets',
-    styleCollect: '/library',
-    styleProjects: '/project-workbench',
-    styleCopyTools: '/project-workbench',
-    styleDrafts: '/writer'
-  }
-
   const MODULE_MAP = {
     copygen:    imports.CopyGenModule,
     projectAgent: imports.ProjectAgentModule,
-    tools:      imports.ToolsModule,
+    tools:      imports.StyleToolsModule || imports.ToolsModule,
     workflow:   imports.WorkflowModule,
     dailyhot:   imports.DailyHotModule,
     accountmonitor: imports.AccountMonitorModule,
+    commentReply: imports.CommentReplyModule,
     accountDataDashboard: imports.AccountDataDashboardModule,
     accountDataAccounts: imports.AccountDataAccountsModule,
     accountStyle: imports.AccountStyleModule,
+    styleLibrary: imports.StyleLibraryModule,
+    styleCollect: imports.StyleLibraryModule,
+    styleProjectWorkbench: imports.StyleProjectWorkbenchModule,
+    styleProjects: imports.StyleProjectWorkbenchModule,
+    styleCopyTools: imports.StyleProjectWorkbenchModule,
+    styleWriter: imports.StyleWriterModule,
+    styleDrafts: imports.StyleWriterModule,
+    styleAssets: imports.StyleAssetsModule,
+    styleDouyinHotlist: imports.DouyinHotlistModule,
     ops:        imports.OpsModule,
     trafficPlan: imports.TrafficPlanModule,
     trafficApply: imports.TrafficPlanModule,
@@ -80,7 +129,6 @@ export function useModuleMap(imports) {
     material:   imports.MaterialModule,
     projectDelivery: imports.ProjectDeliveryModule,
     videopublish: imports.VideoPublishModule,
-    feedback:   imports.FeedbackModule,
     vector:     imports.VectorModule,
     adminUsers: imports.AdminUsersModule,
     operationLogs: imports.OperationLogModule,
@@ -88,22 +136,17 @@ export function useModuleMap(imports) {
     posttools:  imports.PostToolsModule,
   }
 
-  Object.keys(styleWorkbenchRoutes).forEach((moduleId) => {
-    MODULE_MAP[moduleId] = imports.StyleWorkbenchFrame
-  })
-
   function getActiveModuleComponent(activeModuleId) {
     return MODULE_MAP[activeModuleId] || MODULE_MAP.accountmonitor || MODULE_MAP.dailyhot
   }
 
   function getActiveModuleKey(moduleId) {
     if (moduleId === 'dailyhot') return 'dailyhot-right-panel-v3'
-    if (styleWorkbenchRoutes[moduleId]) return 'style-workbench-frame'
     return moduleId
   }
 
   function getStyleWorkbenchPath(moduleId) {
-    return styleWorkbenchRoutes[moduleId] || '/'
+    return moduleId || ''
   }
 
   function isValidModule(moduleId) {

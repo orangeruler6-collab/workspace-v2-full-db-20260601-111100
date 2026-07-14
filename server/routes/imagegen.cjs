@@ -62,7 +62,7 @@ module.exports = function createImagegenRoutes(deps) {
       prompt TEXT NOT NULL,
       image_data TEXT DEFAULT '',
       ratio TEXT DEFAULT '1:1',
-      resolution TEXT DEFAULT '2K',
+      resolution TEXT DEFAULT '1K',
       result_url TEXT NOT NULL,
       created_at INTEGER DEFAULT (strftime('%s','now'))
     )`);
@@ -95,14 +95,19 @@ module.exports = function createImagegenRoutes(deps) {
   function recoverImagegenTasks(db) {
     if (dbRecovered) return;
     dbRecovered = true;
-    db.run(`UPDATE imagegen_tasks SET status='queued', updated_at=strftime('%s','now') WHERE status='running'`);
-    db.all(`SELECT id FROM imagegen_tasks WHERE status='queued' ORDER BY created_at ASC LIMIT 3`, [], function(err, rows) {
+    db.run(`UPDATE imagegen_tasks SET status='queued', updated_at=strftime('%s','now') WHERE status='running'`, [], function(updateErr) {
+      if (updateErr) {
+        logger.warn('reset running imagegen tasks failed', updateErr.message);
+        return;
+      }
+      db.all(`SELECT id FROM imagegen_tasks WHERE status='queued' ORDER BY created_at ASC LIMIT 3`, [], function(err, rows) {
       if (err) {
         logger.warn('recover imagegen tasks failed', err.message);
         return;
       }
       (rows || []).forEach(function(row, index) {
         setTimeout(kickImagegenTaskQueue, 1000 + index * 1000);
+      });
       });
     });
   }
@@ -803,14 +808,14 @@ module.exports = function createImagegenRoutes(deps) {
 
   function gptImageSize(ratio, resolution, fallback) {
     if (/^\d+x\d+$/i.test(String(fallback || ''))) return fallback;
-    const res = String(resolution || '2K').toUpperCase();
+    const res = String(resolution || '1K').toUpperCase();
     const key = String(ratio || '1:1');
     const table = {
       '1K': { '1:1': '1088x1088', '16:9': '2048x1152', '9:16': '1152x2048', '3:2': '1632x1088', '2:3': '1088x1632', '4:3': '1472x1104', '3:4': '1104x1472' },
       '2K': { '1:1': '1440x1440', '16:9': '2560x1440', '9:16': '1440x2560', '3:2': '2160x1440', '2:3': '1440x2160', '4:3': '1920x1440', '3:4': '1440x1920' },
       '4K': { '16:9': '3840x2160', '9:16': '2160x3840', '3:2': '3840x2560', '2:3': '2560x3840', '4:3': '3840x2880', '3:4': '2880x3840' }
     };
-    return (table[res] && table[res][key]) || table['2K'][key] || table['2K']['1:1'];
+    return (table[res] && table[res][key]) || table['1K'][key] || table['1K']['1:1'];
   }
 
   function gptImageEditSize(ratio, fallback) {
@@ -871,7 +876,7 @@ module.exports = function createImagegenRoutes(deps) {
         provider: provider,
         route: body.route || '',
         ratio: body.ratio || '1:1',
-        resolution: body.resolution || body.resolution_type || '2K',
+        resolution: body.resolution || body.resolution_type || '1K',
         size: body.size || '',
         quality: body.quality || 'auto',
         background: body.background || '',

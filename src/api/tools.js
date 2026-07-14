@@ -45,6 +45,20 @@ export function runDouyinDownloader(payload, signal) {
   })
 }
 
+export function getDouyinPlayCountStatus() {
+  return request('/api/douyin/play-count-status', {
+    method: 'POST',
+    body: {}
+  })
+}
+
+export function queryDouyinPlayCount(input) {
+  return request('/api/douyin/play-count', {
+    method: 'POST',
+    body: { input }
+  })
+}
+
 export function fixText(text) {
   return request('/api/ai-fix', {
     method: 'POST',

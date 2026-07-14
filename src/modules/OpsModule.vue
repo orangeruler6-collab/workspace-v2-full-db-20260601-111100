@@ -49,21 +49,38 @@
           <strong>流水数据管理</strong>
           <em>{{ selectedYear }}年{{ selectedMonth ? selectedMonth + '月' : '全部月份' }} · {{ dataManageFilteredItems.length }} 条</em>
         </div>
-        <div class="data-manage-compact-stats">
-          <span>流水 <b>￥{{ dataManageSummary.revenue.toLocaleString() }}</b></span>
-          <span>毛利 <b>￥{{ dataManageSummary.margin.toLocaleString() }}</b></span>
-          <span>毛利率 <b>{{ dataManageSummary.marginRate }}%</b></span>
+        <div class="data-manage-kpis">
+          <article class="primary">
+            <span>筛选流水</span>
+            <strong>￥{{ dataManageSummary.revenue.toLocaleString() }}</strong>
+            <em>{{ dataManageSummary.count }} 条 · 均单 ￥{{ dataManageSummary.avgRevenue.toLocaleString() }}</em>
+          </article>
+          <article>
+            <span>预估毛利</span>
+            <strong>￥{{ dataManageSummary.margin.toLocaleString() }}</strong>
+            <em>毛利率 {{ dataManageSummary.marginRate }}%</em>
+          </article>
+          <article>
+            <span>一口价 / 非一口价</span>
+            <strong>{{ dataManageSummary.onePrice }} / {{ dataManageSummary.nonOnePrice }}</strong>
+            <em>非一口价 ￥{{ dataManageSummary.nonOnePriceRevenue.toLocaleString() }}</em>
+          </article>
+          <article>
+            <span>游戏 / 非游</span>
+            <strong>{{ dataManageSummary.game }} / {{ dataManageSummary.nonGame }}</strong>
+            <em>未标 {{ dataManageSummary.unknownProductLine }} 条</em>
+          </article>
+          <article>
+            <span>执行状态</span>
+            <strong>{{ dataManageSummary.published }} / {{ dataManageSummary.unpublished }} / {{ dataManageSummary.cancelled }}</strong>
+            <em>已发布 / 未发布 / 撤单</em>
+          </article>
         </div>
         <div class="data-manage-actions">
           <button class="btn btn-primary btn-sm" @click="openCreateModal">手动新增</button>
           <button class="btn btn-ghost btn-sm" :class="{ active: dataManagePanel === 'import' }" @click="toggleDataManagePanel('import')">规则导入</button>
-          <button class="btn btn-ghost btn-sm" :class="{ active: dataManagePanel === 'filters' }" @click="toggleDataManagePanel('filters')">更多筛选</button>
-          <button class="btn btn-ghost btn-sm" :class="{ active: dataManagePanel === 'export' }" @click="toggleDataManagePanel('export')">导出字段</button>
-          <button class="btn btn-ghost btn-sm" :disabled="feishuSyncing" @click="syncCurrentProfitsToFeishu">{{ feishuSyncing ? '同步中...' : '同步飞书' }}</button>
-          <button class="btn btn-ghost btn-sm" :disabled="feishuPulling" @click="pullCurrentProfitsFromFeishu">{{ feishuPulling ? '拉取中...' : '拉取飞书' }}</button>
-          <button class="btn btn-ghost btn-sm" @click="openFeishuProfitTable">打开飞书</button>
-          <button class="btn btn-ghost btn-sm" :disabled="loadingDepartment" @click="loadDepartmentData">刷新数据</button>
-          <button class="btn btn-ghost btn-sm" :disabled="!dataManageFilteredItems.length" @click="exportManagedData">导出筛选结果</button>
+          <button class="btn btn-ghost btn-sm" :class="{ active: dataManagePanel === 'filters' }" @click="toggleDataManagePanel('filters')">高级筛选</button>
+          <button class="btn btn-ghost btn-sm" :class="{ active: dataManagePanel === 'tools' || dataManagePanel === 'export' }" @click="toggleDataManagePanel('tools')">更多操作</button>
         </div>
       </div>
 
@@ -87,11 +104,29 @@
           </select>
         </label>
         <label>
+          <span>业务口径</span>
+          <div class="filter-segments">
+            <button type="button" :class="{ active: dataManageFilters.priceMode === '' }" @click="dataManageFilters.priceMode = ''">全部</button>
+            <button type="button" :class="{ active: dataManageFilters.priceMode === 'onePrice' }" @click="dataManageFilters.priceMode = 'onePrice'">一口价</button>
+            <button type="button" :class="{ active: dataManageFilters.priceMode === 'nonOnePrice' }" @click="dataManageFilters.priceMode = 'nonOnePrice'">非一口价</button>
+          </div>
+        </label>
+        <label>
+          <span>游戏/非游</span>
+          <div class="filter-segments">
+            <button type="button" :class="{ active: dataManageFilters.productLine === '' }" @click="dataManageFilters.productLine = ''">全部</button>
+            <button type="button" :class="{ active: dataManageFilters.productLine === 'game' }" @click="dataManageFilters.productLine = 'game'">游戏</button>
+            <button type="button" :class="{ active: dataManageFilters.productLine === 'nonGame' }" @click="dataManageFilters.productLine = 'nonGame'">非游</button>
+            <button type="button" :class="{ active: dataManageFilters.productLine === 'unknown' }" @click="dataManageFilters.productLine = 'unknown'">未标</button>
+          </div>
+        </label>
+        <label>
           <span>执行状态</span>
           <select class="inp" v-model="dataManageFilters.publishStatus">
             <option value="">全部状态</option>
             <option value="published">已发布</option>
             <option value="unpublished">未发布</option>
+            <option value="cancelled">撤单</option>
           </select>
         </label>
         <label>
@@ -167,7 +202,7 @@
           </div>
           <div class="mf-split-grid mf-wide">
             <label><span>锁档日期</span><input class="inp" v-model="editModal.data.锁档日期" placeholder="例如 2026-06-10"></label>
-            <label><span>原ID</span><input class="inp" v-model="editModal.data.原ID" placeholder="飞书表原ID"></label>
+            <label><span>原ID</span><input class="inp" v-model="editModal.data.原ID" placeholder="源表原ID"></label>
             <label><span>单号</span><input class="inp" v-model="editModal.data.单号" placeholder="单号"></label>
             <label><span>CRM单号</span><input class="inp" v-model="editModal.data.CRM单号" placeholder="CRM单号"></label>
           </div>
@@ -230,9 +265,23 @@
           </div>
         </label>
         <div class="data-manage-filter-summary">
-          <span>发布 {{ dataManageSummary.published }} / 未发 {{ dataManageSummary.unpublished }}</span>
+          <span>发布 {{ dataManageSummary.published }} / 未发 {{ dataManageSummary.unpublished }} / 撤单 {{ dataManageSummary.cancelled }}</span>
           <span>流水 ￥{{ dataManageSummary.revenue.toLocaleString() }}</span>
           <span>毛利 ￥{{ dataManageSummary.margin.toLocaleString() }}</span>
+        </div>
+      </div>
+
+      <div v-if="dataManagePanel === 'tools'" class="data-manage-tools data-manage-panel">
+        <div>
+          <strong>常用操作</strong>
+          <span>导出 / 刷新</span>
+        </div>
+        <div class="data-manage-tool-grid">
+          <button class="btn btn-ghost btn-sm" @click="openCreateNonOnePriceModal">新增非一口价</button>
+          <button class="btn btn-ghost btn-sm" :disabled="feishuPulling" @click="pullCurrentProfitsFromWecom">{{ feishuPulling ? '拉取中...' : '拉取企微表' }}</button>
+          <button class="btn btn-ghost btn-sm" :disabled="loadingDepartment" @click="loadDepartmentData">刷新数据</button>
+          <button class="btn btn-ghost btn-sm" :disabled="!dataManageFilteredItems.length" @click="exportManagedData">导出筛选结果</button>
+          <button class="btn btn-ghost btn-sm" :class="{ active: dataManagePanel === 'export' }" @click="toggleDataManagePanel('export')">导出字段配置</button>
         </div>
       </div>
 
@@ -294,7 +343,18 @@
 
       <div class="data-manage-table">
         <div class="data-manage-head">
-          <span>组别</span><span>档期</span><span>发布日期</span><span>项目</span><span>账号</span><span>类型</span><span>平台</span><span>流水</span><span>毛利</span><span>状态</span><span>链接</span><span>操作</span>
+          <label class="table-filter-cell"><span>组别</span><select v-model="dataManageFilters.group"><option value="">全部</option><option v-for="group in GROUPS" :key="'head-group-' + group.id" :value="group.label">{{ group.label }}</option></select></label>
+          <label class="table-filter-cell"><span>档期</span><input v-model.trim="dataManageFilters.schedule" placeholder="筛档期" /></label>
+          <label class="table-filter-cell"><span>发布日期</span><input v-model.trim="dataManageFilters.releaseDate" placeholder="筛日期" /></label>
+          <label class="table-filter-cell"><span>项目</span><input v-model.trim="dataManageFilters.keyword" placeholder="筛项目" /></label>
+          <label class="table-filter-cell"><span>账号</span><input v-model.trim="dataManageFilters.account" placeholder="筛账号" /></label>
+          <label class="table-filter-cell"><span>类型</span><select v-model="dataManageFilters.priceMode"><option value="">全部</option><option value="onePrice">一口价</option><option value="nonOnePrice">非一口价</option></select></label>
+          <label class="table-filter-cell"><span>平台</span><select v-model="dataManageFilters.platform"><option value="">全部</option><option v-for="platform in dataManagePlatformOptions" :key="'head-platform-' + platform" :value="platform">{{ platform }}</option></select></label>
+          <label class="table-filter-cell"><span>流水</span><input v-model.trim="dataManageFilters.revenueMin" placeholder="最低" inputmode="numeric" /></label>
+          <label class="table-filter-cell"><span>毛利</span><input v-model.trim="dataManageFilters.marginMin" placeholder="最低" inputmode="numeric" /></label>
+          <label class="table-filter-cell"><span>状态</span><select v-model="dataManageFilters.publishStatus"><option value="">全部</option><option value="published">已发布</option><option value="unpublished">未发布</option><option value="cancelled">撤单</option></select></label>
+          <label class="table-filter-cell"><span>链接</span><select v-model="dataManageFilters.linkState"><option value="">全部</option><option value="has">有链接</option><option value="empty">无链接</option></select></label>
+          <span class="table-filter-actions"><button class="btn-op btn-edit" type="button" @click="clearDataManageFilters">清空</button></span>
         </div>
         <div v-if="loadingDepartment && !departmentLoaded" class="loading-text">加载数据中...</div>
         <template v-else-if="dataManageFilteredItems.length">
@@ -344,16 +404,48 @@
     <div v-else-if="isDepartmentView" class="department-board">
       <div class="department-hero">
         <div class="department-hero-main">
-          <span class="dept-eyebrow">部门业绩总览</span>
-          <strong>￥{{ departmentSummary.margin.toLocaleString() }}</strong>
-          <em>{{ selectedYear }}年{{ selectedMonth ? selectedMonth + '月' : '全部月份' }}毛利，覆盖 {{ departmentSummary.groupCount }} 个组 / {{ departmentSummary.accountCount }} 个账号</em>
+          <span class="dept-eyebrow">部门流水总览</span>
+          <strong>￥{{ departmentSummary.total.toLocaleString() }}</strong>
+          <em>{{ selectedYear }}年{{ selectedMonth ? selectedMonth + '月' : '全部月份' }}流水，覆盖 {{ departmentSummary.groupCount }} 个组 / {{ departmentSummary.accountCount }} 个账号</em>
         </div>
         <div class="department-hero-stats">
-          <div><span>总流水</span><strong>￥{{ departmentSummary.total.toLocaleString() }}</strong></div>
+          <div><span>部门毛利</span><strong>￥{{ departmentSummary.margin.toLocaleString() }}</strong></div>
           <div><span>毛利率</span><strong>{{ departmentSummary.marginRate }}%</strong></div>
-          <div><span>项目数</span><strong>{{ departmentSummary.projectCount }}</strong></div>
+          <div><span>一口价项目数</span><strong>{{ departmentSummary.projectCount }}</strong></div>
           <div><span>商单数</span><strong>{{ departmentSummary.commercialOrderCount }}</strong></div>
         </div>
+      </div>
+      <div class="department-target-grid">
+        <article class="department-target-card">
+          <div class="target-card-head">
+            <span>流水目标</span>
+            <strong>{{ departmentTargetSummary.revenueRate }}%</strong>
+          </div>
+          <div class="target-card-main">
+            <em>已完成 ￥{{ departmentSummary.total.toLocaleString() }}</em>
+            <label>
+              <span>月目标</span>
+              <input class="inp target-input" type="number" min="0" step="1000" v-model.number="departmentTargetDraft.revenue" @change="saveDepartmentTargets" @keyup.enter="$event.target.blur()" />
+            </label>
+          </div>
+          <div class="target-progress"><i :style="{ width: Math.min(departmentTargetSummary.revenueRate, 100) + '%' }"></i></div>
+          <small>还差 ￥{{ departmentTargetSummary.revenueGap.toLocaleString() }}</small>
+        </article>
+        <article class="department-target-card">
+          <div class="target-card-head">
+            <span>毛利目标</span>
+            <strong>{{ departmentTargetSummary.marginRate }}%</strong>
+          </div>
+          <div class="target-card-main">
+            <em>已完成 ￥{{ departmentSummary.margin.toLocaleString() }}</em>
+            <label>
+              <span>月目标</span>
+              <input class="inp target-input" type="number" min="0" step="1000" v-model.number="departmentTargetDraft.margin" @change="saveDepartmentTargets" @keyup.enter="$event.target.blur()" />
+            </label>
+          </div>
+          <div class="target-progress accent"><i :style="{ width: Math.min(departmentTargetSummary.marginRate, 100) + '%' }"></i></div>
+          <small>还差 ￥{{ departmentTargetSummary.marginGap.toLocaleString() }}</small>
+        </article>
       </div>
       <div class="history-compare-strip">
         <article v-for="card in historyComparison.cards" :key="'dept-' + card.key">
@@ -379,9 +471,9 @@
       <div v-if="loadingDepartment" class="loading-text">加载部门数据中...</div>
       <template v-else>
         <div class="dept-panel wide matrix-panel">
-          <div class="dept-panel-title">平台 × 赛道</div>
+          <div class="dept-panel-title">业务模块</div>
           <div class="matrix-summary">
-            <span>四格覆盖 ￥{{ platformVerticalCoverage.matchedRevenue.toLocaleString() }} / {{ platformVerticalCoverage.matchedCount }}条</span>
+            <span>模块覆盖 ￥{{ platformVerticalCoverage.matchedRevenue.toLocaleString() }} / {{ platformVerticalCoverage.matchedCount }}条</span>
             <span>未纳入 ￥{{ platformVerticalCoverage.unmatchedRevenue.toLocaleString() }} / {{ platformVerticalCoverage.unmatchedCount }}条</span>
           </div>
           <div class="platform-matrix">
@@ -412,7 +504,7 @@
                   class="podium-nameplate"
                   :class="'rank-' + item.rank">
                   <strong :title="item.name">{{ item.shortName }}</strong>
-                  <span>￥{{ item.margin.toLocaleString() }}</span>
+                  <span>￥{{ item.revenue.toLocaleString() }}</span>
                 </div>
                 <div class="podium-static-name bottom-left">曹媛</div>
                 <div class="podium-static-name bottom-center">登魁</div>
@@ -422,7 +514,7 @@
                 <div v-for="item in accountPodiumRows.slice(3, 10)" :key="item.name" class="podium-mini-row">
                   <b>#{{ item.rank }}</b>
                   <span :title="item.name">{{ item.name }}</span>
-                  <em>￥{{ item.margin.toLocaleString() }}</em>
+                  <em>￥{{ item.revenue.toLocaleString() }}</em>
                   <small>{{ item.commercialCount }}单</small>
                   <i><u :style="{ width: item.width + '%' }"></u></i>
                 </div>
@@ -437,16 +529,16 @@
               <div v-for="item in groupPerformance" :key="item.group" class="dept-rank-row">
                 <div class="rank-main">
                   <strong>{{ item.group }}</strong>
-                  <span>{{ item.commercialOrderCount }}单 / {{ item.projects }}个项目 / {{ item.marginRate }}%毛利率</span>
+                  <span>{{ item.commercialOrderCount }}单 / {{ item.projects }}个一口价项目 / 毛利率{{ item.marginRate }}%</span>
                 </div>
-                <div class="rank-money">￥{{ item.margin.toLocaleString() }}</div>
+                <div class="rank-money">￥{{ item.revenue.toLocaleString() }}</div>
                 <div class="rank-bar"><i :style="{ width: item.pct + '%' }"></i></div>
               </div>
             </div>
           </div>
 
           <div class="dept-panel">
-            <div class="dept-panel-title">平台收益结构</div>
+            <div class="dept-panel-title">平台流水结构</div>
             <div class="dept-chip-list">
               <div v-for="(item, i) in platformPerformance" :key="item.name" class="dept-chip-row">
                 <span class="legend-dot" :style="{ background: bizColors[i % bizColors.length] }"></span>
@@ -472,12 +564,12 @@
           </div>
 
           <div class="dept-panel dept-list-panel">
-            <div class="dept-panel-title">项目毛利 Top 8</div>
+            <div class="dept-panel-title">项目流水 Top 8</div>
             <div class="dept-project-grid">
               <div v-for="item in projectRanking" :key="item.name" class="dept-project-row">
                 <span class="project-title" :title="item.name">{{ item.name }}</span>
                 <span>{{ item.count }}条</span>
-                <strong>￥{{ item.margin.toLocaleString() }}</strong>
+                <strong>￥{{ item.revenue.toLocaleString() }}</strong>
                 <div class="rank-bar"><i :style="{ width: item.pct + '%' }"></i></div>
               </div>
               <div v-if="projectRanking.length === 0" class="legend-empty">暂无数据</div>
@@ -485,12 +577,12 @@
           </div>
 
           <div class="dept-panel dept-list-panel">
-            <div class="dept-panel-title">账号毛利 / 商单 Top 10</div>
+            <div class="dept-panel-title">账号流水 / 商单 Top 10</div>
             <div class="dept-account-grid">
               <div v-for="item in accountRanking" :key="item.name" class="dept-account-row">
                 <strong :title="item.name">{{ item.name }}</strong>
                 <span>{{ item.group || '未分组' }} · {{ item.commercialCount }}单</span>
-                <em>￥{{ item.margin.toLocaleString() }}</em>
+                <em>￥{{ item.revenue.toLocaleString() }}</em>
               </div>
               <div v-if="accountRanking.length === 0" class="legend-empty">暂无数据</div>
             </div>
@@ -549,14 +641,14 @@
           <div class="donut-legend distribution-list">
             <div v-for="(item, i) in bizBreakdown" :key="item.type" class="legend-item">
               <span class="legend-dot" :style="{ background: bizColors[i % bizColors.length] }"></span>
-              <span class="legend-type">{{ item.type }}</span>
-              <span class="legend-pct">{{ item.pct }}%</span>
+              <span class="legend-type">{{ item.type }}<small>{{ item.count }}条</small></span>
+              <span class="legend-pct">￥{{ Math.round(item.amount).toLocaleString() }} · {{ item.pct }}%</span>
               <span class="legend-bar"><i :style="{ width: item.pct + '%', background: bizColors[i % bizColors.length] }"></i></span>
             </div>
             <div v-if="bizBreakdown.length === 0" class="legend-empty">暂无数据</div>
           </div>
         </div>
-        <div class="rule-note"><span>⚠️</span>记录口径：只记自己账号</div>
+        <div class="rule-note"><span>⚠️</span>按流水记录里的平台 / 产品线 / 类型归类；未标产品线需要补“游戏/非游”</div>
       </div>
 
       <!-- Card 2: 账号流水 -->
@@ -587,8 +679,10 @@
             <span class="inline-item">毛利目标 <em>￥{{ profitSummary.target.toLocaleString() }}</em></span>
             <span class="inline-item">当前毛利 <em class="accent">￥{{ profitSummary.margin.toLocaleString() }}</em></span>
             <span class="inline-item">总流水 <em>￥{{ profitSummary.total.toLocaleString() }}</em></span>
-            <span class="inline-item">项目数 <em>{{ profitProjectCount }}个</em></span>
+            <span class="inline-item">一口价项目数 <em>{{ profitProjectCount }}个</em></span>
             <span class="inline-item">账号商单 <em>{{ accountOrderSummary.totalOrders }}单</em></span>
+            <span class="inline-item">类型 <em>一口价{{ groupBusinessSummary.onePrice }} / 非一口价{{ groupBusinessSummary.nonOnePrice }}</em></span>
+            <span class="inline-item">执行 <em>已{{ groupBusinessSummary.published }} / 未{{ groupBusinessSummary.unpublished }} / 撤{{ groupBusinessSummary.cancelled }}</em></span>
           </div>
           <div class="progress-bar-wrap" style="margin:12px 0;">
             <div class="progress-bar">
@@ -599,15 +693,36 @@
           <!-- 数据表格 -->
           <div v-if="sortedItems.length" class="profit-table">
             <div class="pt-head">
-              <span>项目</span><span>账号</span><span>类型</span><span>平台</span><span>流水</span><span>毛利</span><span></span>
+              <label class="table-filter-cell"><span>项目</span><input v-model.trim="groupTableFilters.project" placeholder="筛项目" /></label>
+              <label class="table-filter-cell"><span>账号</span><input v-model.trim="groupTableFilters.account" placeholder="筛账号" /></label>
+              <label class="table-filter-cell"><span>类型</span><select v-model="groupTableFilters.priceMode"><option value="">全部</option><option value="onePrice">一口价</option><option value="nonOnePrice">非一口价</option></select></label>
+              <label class="table-filter-cell"><span>平台</span><select v-model="groupTableFilters.platform"><option value="">全部</option><option v-for="platform in groupTablePlatformOptions" :key="'group-head-platform-' + platform" :value="platform">{{ platform }}</option></select></label>
+              <label class="table-filter-cell"><span>流水</span><input v-model.trim="groupTableFilters.revenueMin" placeholder="最低" inputmode="numeric" /></label>
+              <label class="table-filter-cell"><span>毛利</span><input v-model.trim="groupTableFilters.marginMin" placeholder="最低" inputmode="numeric" /></label>
+              <label class="table-filter-cell"><span>执行</span><select v-model="groupTableFilters.publishStatus"><option value="">全部</option><option value="published">已执行</option><option value="unpublished">未执行</option><option value="cancelled">撤单</option></select></label>
+              <label class="table-filter-cell"><span>发布链接</span><select v-model="groupTableFilters.linkState"><option value="">全部</option><option value="has">有链接</option><option value="empty">无链接</option></select></label>
+              <span class="table-filter-actions"><button class="btn-op btn-edit" type="button" @click="clearGroupTableFilters">清空</button></span>
             </div>
-            <div v-for="item in sortedItems" :key="item.id" class="pt-row">
-              <span class="proj-name" :title="item.项目">{{ item.项目 }}</span>
-              <span class="account-name">{{ item.账号 }}</span>
-              <span class="type-tag" :class="getTypeClass(item.类型)">{{ item.类型 || '一口价' }}</span>
-              <span class="platform-tag">{{ item.平台 }}</span>
-              <span class="amount">￥{{ Math.round(Number(item.费用 || 0)).toLocaleString() }}</span>
-              <span class="amount accent">￥{{ Math.round(Number(item.毛利 || 0)).toLocaleString() }}</span>
+            <div v-for="item in sortedItems" :key="item.id" class="pt-row editable-row" :class="{ saving: quickSavingIds.has(item.id) }">
+              <span class="proj-name" :title="item.项目"><input class="grid-edit" v-model="item.项目" placeholder="未命名项目" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+              <span class="account-name"><input class="grid-edit" v-model="item.账号" placeholder="账号" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+              <span class="type-cell">
+                <select class="grid-edit" v-model="item.类型" @change="saveQuickEdit(item)">
+                  <option v-for="type in PROFIT_BUSINESS_TYPES" :key="'group-row-type-' + type" :value="type">{{ type }}</option>
+                </select>
+              </span>
+              <span>
+                <select class="grid-edit" v-model="item.平台" @change="saveQuickEdit(item)">
+                  <option v-for="platform in PROFIT_PLATFORM_OPTIONS" :key="'group-row-platform-' + platform" :value="platform">{{ platform }}</option>
+                </select>
+              </span>
+              <span><input class="grid-edit amount-input" type="number" v-model.number="item.费用" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+              <span><input class="grid-edit amount-input accent" type="number" v-model.number="item.毛利" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
+              <label class="execution-check" :class="{ done: normalizeExecutionStatus(item.执行状态, item) === '已发布', cancelled: normalizeExecutionStatus(item.执行状态, item) === '撤单' }">
+                <input type="checkbox" :checked="normalizeExecutionStatus(item.执行状态, item) === '已发布'" :disabled="normalizeExecutionStatus(item.执行状态, item) === '撤单'" @change="toggleProfitExecution(item, $event.target.checked)" />
+                <span>{{ normalizeExecutionStatus(item.执行状态, item) === '撤单' ? '已撤单' : (normalizeExecutionStatus(item.执行状态, item) === '已发布' ? '已执行' : '未执行') }}</span>
+              </label>
+              <span><input class="grid-edit link-edit compact" v-model="item.链接" placeholder="发布链接" @change="saveQuickEdit(item)" @keyup.enter="$event.target.blur()" /></span>
               <span class="pt-actions">
                 <button v-if="item.链接" class="btn-op btn-link" @click="openProfitLink(item.链接)">打开</button>
                 <button class="btn-op btn-edit" @click="openEditModal(item)">✏️</button>
@@ -630,9 +745,7 @@
           <button class="btn btn-ghost btn-sm" :class="{ active: profitImportMode === 'single' }" @click="profitImportMode = 'single'">当前组导入</button>
           <button class="btn btn-ghost btn-sm" :class="{ active: profitImportMode === 'total' }" @click="profitImportMode = 'total'">总表导入</button>
           <button class="btn btn-primary btn-sm" @click="openCreateModal">手动新增</button>
-          <button class="btn btn-ghost btn-sm" :disabled="feishuSyncing" @click="syncCurrentProfitsToFeishu">{{ feishuSyncing ? '同步中...' : '同步飞书' }}</button>
-          <button class="btn btn-ghost btn-sm" :disabled="feishuPulling" @click="pullCurrentProfitsFromFeishu">{{ feishuPulling ? '拉取中...' : '拉取飞书' }}</button>
-          <button class="btn btn-ghost btn-sm" @click="openFeishuProfitTable">打开飞书</button>
+          <button class="btn btn-ghost btn-sm" :disabled="feishuPulling" @click="pullCurrentProfitsFromWecom">{{ feishuPulling ? '拉取中...' : '拉取企微表' }}</button>
         </div>
         <button class="entry-toggle" @click="entryExpanded = !entryExpanded">
           <strong>录入流水 / 导入 Excel</strong>
@@ -740,7 +853,7 @@
           </div>
           <div class="mf-split-grid">
             <label><span>锁档日期</span><input class="inp" v-model="editModal.data.锁档日期" placeholder="例如 2026-06-10"></label>
-            <label><span>原ID</span><input class="inp" v-model="editModal.data.原ID" placeholder="飞书表原ID"></label>
+            <label><span>原ID</span><input class="inp" v-model="editModal.data.原ID" placeholder="源表原ID"></label>
             <label><span>单号</span><input class="inp" v-model="editModal.data.单号" placeholder="单号"></label>
             <label><span>CRM单号</span><input class="inp" v-model="editModal.data.CRM单号" placeholder="CRM单号"></label>
           </div>
@@ -796,13 +909,13 @@ import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import {
   addProfit,
   deleteProfit,
-  importFeishuProfits,
+  listProfitTargets,
   listProfits,
   parseProfitFile,
   parseProfitText as parseProfitInput,
-  pullProfitsFromFeishu,
+  pullProfitsFromWecom,
+  saveProfitTarget as saveProfitTargetRemote,
   syncProfitRecords,
-  syncProfitsToFeishu,
   updateProfit
 } from '../api/profit'
 import { GROUPS, GROUP_TARGETS, PROFIT_BUSINESS_TYPES, PROFIT_PLATFORM_OPTIONS, PROFIT_RATES, PROFIT_TYPE_LABELS } from './ops/constants'
@@ -811,7 +924,7 @@ import { parseProfitConfirmationText } from './ops/profitTextRules.mjs'
 import { callMiniMaxChat, getCurrentAuthUser } from '../api/client'
 import { useConfirm } from '../composables/useConfirm'
 import { useToast } from '../composables/useToast'
-import podiumRankImage from '../assets/account-data/podium-rank.png'
+import podiumRankImage from '../assets/account-data/podium-rank-filled.png'
 
 const confirmAction = useConfirm()
 const { showToast } = useToast()
@@ -867,11 +980,12 @@ const DEFAULT_EXPORT_FIELD_KEYS = [
   '备注',
   'CRM单号'
 ]
-const PROFIT_STATUS_OPTIONS = ['未发布', '已发布']
+const PROFIT_STATUS_OPTIONS = ['未发布', '已发布', '撤单']
 
 function getTypeClass(type) {
   const t = type || '一口价'
   if (t.includes('一口价') || t.includes('直播')) return 'type-yijia'
+  if (t.includes('非保底') || t.includes('CPI') || t.includes('CPA')) return 'type-non-one-price'
   if (t.includes('流量激励')) return 'type-liuliang'
   if (t.includes('短视频')) return 'type-duan'
   if (t.includes('星广')) return 'type-xingguang'
@@ -889,13 +1003,14 @@ function openProfitLink(rawLink) {
 
 function normalizePublishLink(value) {
   const text = String(value || '').trim()
-  if (!text || /^(未发|未发布|待发|延期|无|暂无|未上线)$/i.test(text)) return ''
+  if (!text || /^(未发|未发布|待发|延期|撤单|撤销|取消|无|暂无|未上线)$/i.test(text)) return ''
   return text
 }
 
 function normalizeExecutionStatus(value, draft = {}) {
   const text = String(value || '').trim()
   if (PROFIT_STATUS_OPTIONS.includes(text)) return text
+  if (/撤单|撤销|取消/.test(text)) return '撤单'
   if (/已完成|完成|结案|执行完成/.test(text)) return '已发布'
   if (/未发布|未发|待发|延期|取消|否|false|0/i.test(text)) return '未发布'
   if (/^(已发布|已发|发布|上线|已上线|是|true|1)$/i.test(text)) return '已发布'
@@ -905,7 +1020,11 @@ function normalizeExecutionStatus(value, draft = {}) {
 }
 
 function isExecutionPublished(status) {
-  return normalizeExecutionStatus(status) !== '未发布'
+  return normalizeExecutionStatus(status) === '已发布'
+}
+
+function isExecutionCancelled(status, draft = {}) {
+  return normalizeExecutionStatus(status, draft) === '撤单'
 }
 
 function syncPublishStatusFromExecution(draft) {
@@ -914,11 +1033,40 @@ function syncPublishStatusFromExecution(draft) {
   draft.是否发布 = isExecutionPublished(draft.执行状态)
 }
 
+function isOnePriceBusiness(item) {
+  const type = String(item?.类型 || '').trim()
+  if (type) return /一口价/.test(type) && !/非一口价/.test(type)
+  const platform = String(item?.平台 || '').trim()
+  if (/非一口价/.test(platform)) return false
+  return true
+}
+
+function profitProjectName(item) {
+  return String(item?.项目 || item?.project || item?.投放产品 || item?.产品 || '').trim()
+}
+
+function makeBusinessSummary(items) {
+  const rows = items || []
+  const activeRows = excludeCancelledRecords(rows)
+  const published = rows.filter(item => normalizeExecutionStatus(item.执行状态, item) === '已发布').length
+  const unpublished = rows.filter(item => normalizeExecutionStatus(item.执行状态, item) === '未发布').length
+  const cancelled = rows.filter(item => isExecutionCancelled(item.执行状态, item)).length
+  const onePrice = activeRows.filter(isOnePriceBusiness).length
+  return {
+    onePrice,
+    nonOnePrice: Math.max(0, activeRows.length - onePrice),
+    published,
+    unpublished,
+    cancelled
+  }
+}
+
 function normalizeGroupKey(value) {
   return String(value || '')
     .trim()
     .replace(/\u5185\u5bb9/g, '')
     .replace(/\u7ec4/g, '')
+    .replace(/\u90e8/g, '')
 }
 
 function resolveCurrentUserGroup() {
@@ -951,6 +1099,11 @@ const selectedMonth = ref(new Date().getMonth() + 1)
 const availableYears = [currentYear, currentYear - 1, currentYear - 2]
 const profitTargets = ref(loadProfitTargets())
 const targetDraft = ref(0)
+const departmentTargetDraft = reactive({
+  revenue: 0,
+  margin: 0
+})
+const profitTargetsLoaded = ref(false)
 const profitImportMode = ref('single')
 const isDepartmentView = ref(!initialUserGroup)
 const isDataManageView = ref(false)
@@ -965,7 +1118,12 @@ const dataManageFilters = reactive({
   keyword: '',
   platform: '',
   type: '',
+  priceMode: '',
+  productLine: '',
   publishStatus: '',
+  schedule: '',
+  releaseDate: '',
+  linkState: '',
   source: '',
   revenueMin: '',
   revenueMax: '',
@@ -973,12 +1131,44 @@ const dataManageFilters = reactive({
   marginMax: '',
   sortBy: 'created_desc'
 })
+const groupTableFilters = reactive({
+  project: '',
+  account: '',
+  platform: '',
+  priceMode: '',
+  publishStatus: '',
+  linkState: '',
+  revenueMin: '',
+  marginMin: ''
+})
 const exportFieldSelection = reactive(
   Object.fromEntries(DATA_MANAGE_EXPORT_FIELDS.map(field => [field.key, DEFAULT_EXPORT_FIELD_KEYS.includes(field.key)]))
 )
 
 function targetKey(groupId = activeGroup.value, year = selectedYear.value, month = selectedMonth.value) {
   return `${groupId}:${year}:${month || 'all'}`
+}
+
+function departmentTargetKey(year = selectedYear.value, month = selectedMonth.value) {
+  return `department:${year}:${month || 'all'}`
+}
+
+function normalizeTargetEntry(value) {
+  if (value && typeof value === 'object') {
+    const margin = Number(value.marginTarget ?? value.target ?? value.margin ?? 0) || 0
+    const revenue = Number(value.revenueTarget ?? value.revenue ?? 0) || 0
+    return { target: margin, marginTarget: margin, revenueTarget: revenue }
+  }
+  const margin = Number(value) || 0
+  return { target: margin, marginTarget: margin, revenueTarget: 0 }
+}
+
+function marginTargetValue(value) {
+  return normalizeTargetEntry(value).marginTarget
+}
+
+function revenueTargetValue(value) {
+  return normalizeTargetEntry(value).revenueTarget
 }
 
 function loadProfitTargets() {
@@ -996,25 +1186,92 @@ function persistProfitTargets() {
   } catch {}
 }
 
+async function loadRemoteProfitTargets() {
+  try {
+    const data = await listProfitTargets()
+    if (data && data.targets && typeof data.targets === 'object') {
+      profitTargets.value = { ...profitTargets.value, ...data.targets }
+      if (data.detailTargets && typeof data.detailTargets === 'object') {
+        profitTargets.value = { ...profitTargets.value, ...data.detailTargets }
+      }
+      persistProfitTargets()
+      syncTargetDraft()
+    }
+  } catch (e) {
+    console.warn('[ops] load profit targets failed', e)
+  } finally {
+    profitTargetsLoaded.value = true
+  }
+}
+
 function currentProfitTarget() {
   const value = profitTargets.value[targetKey()]
-  if (value !== undefined && value !== null && value !== '') return Number(value) || 0
+  if (value !== undefined && value !== null && value !== '') return marginTargetValue(value)
   return GROUP_TARGETS[activeGroup.value] || 0
+}
+
+function currentDepartmentTargets() {
+  const value = profitTargets.value[departmentTargetKey()]
+  return normalizeTargetEntry(value)
 }
 
 function syncTargetDraft() {
   targetDraft.value = currentProfitTarget()
+  const departmentTargets = currentDepartmentTargets()
+  departmentTargetDraft.revenue = revenueTargetValue(departmentTargets)
+  departmentTargetDraft.margin = marginTargetValue(departmentTargets)
 }
 
-function saveProfitTarget() {
+async function saveProfitTarget() {
   const value = Math.max(0, Number(targetDraft.value) || 0)
   targetDraft.value = value
+  const key = targetKey()
   profitTargets.value = {
     ...profitTargets.value,
-    [targetKey()]: value
+    [key]: value
   }
   persistProfitTargets()
-  showToast('毛利目标已保存', 'success')
+  try {
+    await saveProfitTargetRemote({
+      groupId: activeGroup.value,
+      year: selectedYear.value,
+      month: selectedMonth.value || 'all',
+      target: value
+    })
+    showToast('毛利目标已同步保存', 'success')
+  } catch (e) {
+    showToast('毛利目标已先保存到本机，后端同步失败：' + (e.message || e), 'error')
+  }
+}
+
+async function saveDepartmentTargets() {
+  const revenue = Math.max(0, Number(departmentTargetDraft.revenue) || 0)
+  const margin = Math.max(0, Number(departmentTargetDraft.margin) || 0)
+  departmentTargetDraft.revenue = revenue
+  departmentTargetDraft.margin = margin
+  const key = departmentTargetKey()
+  profitTargets.value = {
+    ...profitTargets.value,
+    [key]: {
+      target: margin,
+      marginTarget: margin,
+      revenueTarget: revenue
+    }
+  }
+  persistProfitTargets()
+  try {
+    await saveProfitTargetRemote({
+      groupId: 'department',
+      year: selectedYear.value,
+      month: selectedMonth.value || 'all',
+      target: margin,
+      marginTarget: margin,
+      revenueTarget: revenue
+    })
+    showToast('部门目标已同步保存', 'success')
+  } catch (e) {
+    showToast('部门目标已先保存到本机，后端同步失败：' + (e.message || e), 'error')
+  }
 }
 
 function onFilterChange() {
@@ -1157,6 +1414,8 @@ const selectedExportFieldCount = computed(() => selectedExportFields().length)
 const dataManageFilteredItems = computed(() => {
   const keyword = normalizeSearchText(dataManageFilters.keyword)
   const account = normalizeSearchText(dataManageFilters.account)
+  const schedule = normalizeSearchText(dataManageFilters.schedule)
+  const releaseDate = normalizeSearchText(dataManageFilters.releaseDate)
   const revenueMin = dataManageFilters.revenueMin === '' ? null : Number(dataManageFilters.revenueMin)
   const revenueMax = dataManageFilters.revenueMax === '' ? null : Number(dataManageFilters.revenueMax)
   const marginMin = dataManageFilters.marginMin === '' ? null : Number(dataManageFilters.marginMin)
@@ -1165,12 +1424,24 @@ const dataManageFilteredItems = computed(() => {
     if (dataManageFilters.group && item.组别 !== dataManageFilters.group) return false
     if (dataManageFilters.platform && item.平台 !== dataManageFilters.platform) return false
     if (dataManageFilters.type && (item.类型 || '一口价') !== dataManageFilters.type) return false
+    if (dataManageFilters.priceMode === 'onePrice' && !isOnePriceBusiness(item)) return false
+    if (dataManageFilters.priceMode === 'nonOnePrice' && isOnePriceBusiness(item)) return false
+    const productLine = profitProductLineBucket(item)
+    if (dataManageFilters.productLine === 'game' && productLine !== 'game') return false
+    if (dataManageFilters.productLine === 'nonGame' && productLine !== 'nonGame') return false
+    if (dataManageFilters.productLine === 'unknown' && productLine !== 'unknown') return false
     if (dataManageFilters.source && item.来源 !== dataManageFilters.source) return false
     const executionStatus = normalizeExecutionStatus(item.执行状态, item)
     if (dataManageFilters.publishStatus === 'published' && executionStatus !== '已发布') return false
     if (dataManageFilters.publishStatus === 'unpublished' && executionStatus !== '未发布') return false
+    if (dataManageFilters.publishStatus === 'cancelled' && executionStatus !== '撤单') return false
     if (account && !normalizeSearchText([item.账号, item.组别].join(' ')).includes(account)) return false
+    if (schedule && !normalizeSearchText(item.档期).includes(schedule)) return false
+    if (releaseDate && !normalizeSearchText(item.发布日期).includes(releaseDate)) return false
     if (keyword && !normalizeSearchText([item.项目, item.备注, item.单号, item.链接, item.产品线].join(' ')).includes(keyword)) return false
+    const hasLink = !!normalizePublishLink(item.链接)
+    if (dataManageFilters.linkState === 'has' && !hasLink) return false
+    if (dataManageFilters.linkState === 'empty' && hasLink) return false
     const revenue = Number(item.费用) || 0
     const margin = Number(item.毛利) || 0
     if (revenueMin !== null && revenue < revenueMin) return false
@@ -1184,16 +1455,36 @@ const dataManageFilteredItems = computed(() => {
 
 const dataManageSummary = computed(() => {
   const items = dataManageFilteredItems.value
-  const revenue = items.reduce((sum, item) => sum + (Number(item.费用) || 0), 0)
-  const margin = items.reduce((sum, item) => sum + (Number(item.毛利) || 0), 0)
+  // 撤单保留在记录里用于追溯，但不计入流水、毛利和项目口径。
+  const accountingItems = excludeCancelledRecords(items)
+  const revenue = accountingItems.reduce((sum, item) => sum + (Number(item.费用) || 0), 0)
+  const margin = accountingItems.reduce((sum, item) => sum + (Number(item.毛利) || 0), 0)
   const published = items.filter(item => normalizeExecutionStatus(item.执行状态, item) === '已发布').length
   const unpublished = items.filter(item => normalizeExecutionStatus(item.执行状态, item) === '未发布').length
+  const cancelled = items.filter(item => isExecutionCancelled(item.执行状态, item)).length
+  const onePriceItems = accountingItems.filter(isOnePriceBusiness)
+  const nonOnePriceItems = accountingItems.filter(item => !isOnePriceBusiness(item))
+  const gameItems = accountingItems.filter(item => profitProductLineBucket(item) === 'game')
+  const nonGameItems = accountingItems.filter(item => profitProductLineBucket(item) === 'nonGame')
+  const unknownProductLineItems = accountingItems.filter(item => profitProductLineBucket(item) === 'unknown')
   return {
     count: items.length,
     revenue,
     margin,
     published,
     unpublished,
+    cancelled,
+    avgRevenue: accountingItems.length ? Math.round(revenue / accountingItems.length) : 0,
+    avgMargin: accountingItems.length ? Math.round(margin / accountingItems.length) : 0,
+    onePrice: onePriceItems.length,
+    nonOnePrice: nonOnePriceItems.length,
+    onePriceRevenue: onePriceItems.reduce((sum, item) => sum + (Number(item.费用) || 0), 0),
+    nonOnePriceRevenue: nonOnePriceItems.reduce((sum, item) => sum + (Number(item.费用) || 0), 0),
+    game: gameItems.length,
+    nonGame: nonGameItems.length,
+    unknownProductLine: unknownProductLineItems.length,
+    gameRevenue: gameItems.reduce((sum, item) => sum + (Number(item.费用) || 0), 0),
+    nonGameRevenue: nonGameItems.reduce((sum, item) => sum + (Number(item.费用) || 0), 0),
     marginRate: revenue ? Math.round(margin / revenue * 100) : 0
   }
 })
@@ -1203,22 +1494,52 @@ const filteredItems = computed(() => {
   return filterBySelectedPeriod(currentItems.value)
 })
 
+const groupTablePlatformOptions = computed(() => uniqueSortedOptions(filteredItems.value.map(item => item.平台)))
+
+const groupTableFilteredItems = computed(() => {
+  const project = normalizeSearchText(groupTableFilters.project)
+  const account = normalizeSearchText(groupTableFilters.account)
+  const revenueMin = groupTableFilters.revenueMin === '' ? null : Number(groupTableFilters.revenueMin)
+  const marginMin = groupTableFilters.marginMin === '' ? null : Number(groupTableFilters.marginMin)
+  return filteredItems.value.filter(item => {
+    if (project && !normalizeSearchText([item.项目, item.备注, item.单号].join(' ')).includes(project)) return false
+    if (account && !normalizeSearchText(item.账号).includes(account)) return false
+    if (groupTableFilters.platform && item.平台 !== groupTableFilters.platform) return false
+    if (groupTableFilters.priceMode === 'onePrice' && !isOnePriceBusiness(item)) return false
+    if (groupTableFilters.priceMode === 'nonOnePrice' && isOnePriceBusiness(item)) return false
+    const executionStatus = normalizeExecutionStatus(item.执行状态, item)
+    if (groupTableFilters.publishStatus === 'published' && executionStatus !== '已发布') return false
+    if (groupTableFilters.publishStatus === 'unpublished' && executionStatus !== '未发布') return false
+    if (groupTableFilters.publishStatus === 'cancelled' && executionStatus !== '撤单') return false
+    const hasLink = !!normalizePublishLink(item.链接)
+    if (groupTableFilters.linkState === 'has' && !hasLink) return false
+    if (groupTableFilters.linkState === 'empty' && hasLink) return false
+    const revenue = Number(item.费用) || 0
+    const margin = Number(item.毛利) || 0
+    if (revenueMin !== null && revenue < revenueMin) return false
+    if (marginMin !== null && margin < marginMin) return false
+    return true
+  })
+})
+
 // Sorted items by margin descending
 const sortedItems = computed(() => {
-  return [...filteredItems.value].sort((a, b) => (Number(b.毛利) || 0) - (Number(a.毛利) || 0))
+  return [...groupTableFilteredItems.value].sort((a, b) => (Number(b.毛利) || 0) - (Number(a.毛利) || 0))
 })
 
 // Summary follows the selected year, with optional month narrowing.
 const profitSummary = computed(() => {
-  const items = filteredItems.value
+  const items = excludeCancelledRecords(filteredItems.value)
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const margin = items.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
   const target = currentProfitTarget()
   return { target, total, margin, rate: target > 0 ? Math.round(margin / target * 100) : 0, count: items.length, items }
 })
 
+const groupBusinessSummary = computed(() => makeBusinessSummary(filteredItems.value))
+
 const profitProjectCount = computed(() => {
-  const projects = new Set(filteredItems.value.map(item => item.项目).filter(Boolean))
+  const projects = new Set(excludeCancelledRecords(filteredItems.value).filter(isOnePriceBusiness).map(profitProjectName).filter(Boolean))
   return projects.size
 })
 
@@ -1235,6 +1556,16 @@ function uniqueSortedOptions(values) {
 
 function normalizeSearchText(value) {
   return String(value || '').trim().toLowerCase().replace(/\s+/g, '')
+}
+
+function profitProductLineBucket(item) {
+  const productLine = String(item?.产品线 || '').trim()
+  if (productLine === '游戏') return 'game'
+  if (productLine === '非游') return 'nonGame'
+  const text = [item?.项目, item?.平台, item?.类型, item?.备注].filter(Boolean).join(' ')
+  if (/非游|数码|电商|生态|生活|教育|汽车|美妆|母婴|食品|文旅/.test(text)) return 'nonGame'
+  if (/游戏|手游|端游|页游|Steam|主机|二游|三国|逆水寒|王者|和平精英|原神|崩铁|鸣潮|LOL|DNF/i.test(text)) return 'game'
+  return 'unknown'
 }
 
 function sortDataManageItems(items) {
@@ -1269,13 +1600,31 @@ function clearDataManageFilters() {
     keyword: '',
     platform: '',
     type: '',
+    priceMode: '',
+    productLine: '',
     publishStatus: '',
+    schedule: '',
+    releaseDate: '',
+    linkState: '',
     source: '',
     revenueMin: '',
     revenueMax: '',
     marginMin: '',
     marginMax: '',
     sortBy: 'created_desc'
+  })
+}
+
+function clearGroupTableFilters() {
+  Object.assign(groupTableFilters, {
+    project: '',
+    account: '',
+    platform: '',
+    priceMode: '',
+    publishStatus: '',
+    linkState: '',
+    revenueMin: '',
+    marginMin: ''
   })
 }
 
@@ -1332,6 +1681,7 @@ function toDepartmentRow(item) {
 }
 
 function isAccountCommercialOrder(item) {
+  if (!isOnePriceBusiness(item)) return false
   const account = String(item?.账号 || '').trim()
   if (!isReportableAccountName(account)) return false
   const project = String(item?.项目 || '').trim()
@@ -1372,6 +1722,10 @@ function normalizeMonthFilter(items) {
   return filterBySelectedPeriod(items)
 }
 
+function excludeCancelledRecords(items) {
+  return (items || []).filter(item => !isExecutionCancelled(item.执行状态, item))
+}
+
 function makeGroupMap() {
   const map = new Map(GROUPS.map(group => [group.label, {
     group: group.label,
@@ -1390,7 +1744,7 @@ function cap(value) {
 }
 
 const departmentSummary = computed(() => {
-  const items = normalizeMonthFilter(departmentEffectiveItems.value)
+  const items = excludeCancelledRecords(normalizeMonthFilter(departmentEffectiveItems.value))
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const margin = items.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
   const projects = new Set()
@@ -1401,7 +1755,7 @@ const departmentSummary = computed(() => {
   for (const item of items) {
     if (item.项目) {
       fallbackProjects.add(item.项目)
-      if (!isGenericProjectLabel(item.项目)) projects.add(item.项目)
+      if (isOnePriceBusiness(item) && !isGenericProjectLabel(item.项目)) projects.add(profitProjectName(item))
     }
     if (item.账号) accounts.add(item.账号)
     if (item.组别) groups.add(item.组别)
@@ -1420,8 +1774,24 @@ const departmentSummary = computed(() => {
   }
 })
 
+const departmentTargetSummary = computed(() => {
+  const targets = currentDepartmentTargets()
+  const revenueTarget = revenueTargetValue(targets)
+  const marginTarget = marginTargetValue(targets)
+  const revenue = Number(departmentSummary.value.total) || 0
+  const margin = Number(departmentSummary.value.margin) || 0
+  return {
+    revenueTarget,
+    marginTarget,
+    revenueRate: revenueTarget ? Math.round(revenue / revenueTarget * 100) : 0,
+    marginRate: marginTarget ? Math.round(margin / marginTarget * 100) : 0,
+    revenueGap: Math.max(0, revenueTarget - revenue),
+    marginGap: Math.max(0, marginTarget - margin)
+  }
+})
+
 const groupPerformance = computed(() => {
-  const items = normalizeMonthFilter(departmentEffectiveItems.value)
+  const items = excludeCancelledRecords(normalizeMonthFilter(departmentEffectiveItems.value))
   const map = makeGroupMap()
   for (const item of items) {
     const label = item.组别 || normalizeProfitGroup(item.组别) || inferGroupFromAccount(item.账号) || ''
@@ -1431,7 +1801,7 @@ const groupPerformance = computed(() => {
     target.margin += Number(item.毛利) || 0
     target.count += 1
     if (isAccountCommercialOrder(item)) target.commercialOrderCount += 1
-    if (item.项目) target.projects.add(item.项目)
+    if (isOnePriceBusiness(item) && item.项目) target.projects.add(profitProjectName(item))
     if (item.账号) target.accounts.add(item.账号)
   }
   const rows = [...map.values()].map(item => ({
@@ -1440,14 +1810,14 @@ const groupPerformance = computed(() => {
     accounts: item.accounts.size,
     marginRate: item.revenue ? Math.round(item.margin / item.revenue * 100) : 0
   }))
-  const maxMargin = Math.max(1, ...rows.map(item => item.margin))
+  const maxRevenue = Math.max(1, ...rows.map(item => item.revenue))
   return rows
-    .map(item => ({ ...item, pct: Math.round(item.margin / maxMargin * 100) }))
-    .sort((a, b) => b.margin - a.margin)
+    .map(item => ({ ...item, pct: Math.round(item.revenue / maxRevenue * 100) }))
+    .sort((a, b) => b.revenue - a.revenue)
 })
 
 const platformPerformance = computed(() => {
-  const items = normalizeMonthFilter(departmentEffectiveItems.value)
+  const items = excludeCancelledRecords(normalizeMonthFilter(departmentEffectiveItems.value))
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const map = new Map()
   for (const item of items) {
@@ -1463,7 +1833,7 @@ const platformPerformance = computed(() => {
 })
 
 const categoryPerformance = computed(() => {
-  const items = normalizeMonthFilter(departmentEffectiveItems.value)
+  const items = excludeCancelledRecords(normalizeMonthFilter(departmentEffectiveItems.value))
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const map = new Map()
   for (const item of items) {
@@ -1479,19 +1849,17 @@ const categoryPerformance = computed(() => {
 })
 
 const platformVerticalBoard = computed(() => {
-  const items = normalizeMonthFilter(departmentEffectiveItems.value)
+  const items = excludeCancelledRecords(normalizeMonthFilter(departmentEffectiveItems.value))
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const buckets = [
-    { name: '抖音游戏', platform: '抖音', vertical: '游戏', revenue: 0, margin: 0, count: 0 },
-    { name: 'B站游戏', platform: 'B站', vertical: '游戏', revenue: 0, margin: 0, count: 0 },
-    { name: 'B站数码', platform: 'B站', vertical: '数码', revenue: 0, margin: 0, count: 0 },
-    { name: '抖音数码', platform: '抖音', vertical: '数码', revenue: 0, margin: 0, count: 0 }
+    { name: '抖音游戏', revenue: 0, margin: 0, count: 0 },
+    { name: 'B站游戏', revenue: 0, margin: 0, count: 0 },
+    { name: '非游数码', revenue: 0, margin: 0, count: 0 },
+    { name: '非一口价', revenue: 0, margin: 0, count: 0 }
   ]
   for (const item of items) {
-    const platform = normalizePlatformLabel(item.平台)
-    const vertical = inferVerticalLabel(item)
-    if (!platform || !vertical) continue
-    const bucket = buckets.find(entry => entry.platform === platform && entry.vertical === vertical)
+    const bucketName = getProfitBusinessBucket(item)
+    const bucket = buckets.find(entry => entry.name === bucketName)
     if (!bucket) continue
     bucket.revenue += Number(item.费用) || 0
     bucket.margin += Number(item.毛利) || 0
@@ -1505,14 +1873,13 @@ const platformVerticalBoard = computed(() => {
 })
 
 const platformVerticalCoverage = computed(() => {
-  const items = normalizeMonthFilter(departmentEffectiveItems.value)
+  const items = excludeCancelledRecords(normalizeMonthFilter(departmentEffectiveItems.value))
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
+  const moduleNames = new Set(platformVerticalBoard.value.map(item => item.name))
   let matchedRevenue = 0
   let matchedCount = 0
   for (const item of items) {
-    const platform = normalizePlatformLabel(item.平台)
-    const vertical = inferVerticalLabel(item)
-    if ((platform === '抖音' || platform === 'B站') && (vertical === '游戏' || vertical === '数码')) {
+    if (moduleNames.has(getProfitBusinessBucket(item))) {
       matchedRevenue += Number(item.费用) || 0
       matchedCount += 1
     }
@@ -1526,13 +1893,12 @@ const platformVerticalCoverage = computed(() => {
 })
 
 const platformVerticalUnmatched = computed(() => {
-  const items = normalizeMonthFilter(departmentEffectiveItems.value)
+  const items = excludeCancelledRecords(normalizeMonthFilter(departmentEffectiveItems.value))
+  const moduleNames = new Set(platformVerticalBoard.value.map(item => item.name))
   const map = new Map()
   for (const item of items) {
-    const platform = normalizePlatformLabel(item.平台) || item.平台 || '其他平台'
-    const vertical = inferVerticalLabel(item) || '未识别'
-    if ((platform === '抖音' || platform === 'B站') && (vertical === '游戏' || vertical === '数码')) continue
-    const name = `${platform} / ${vertical}`
+    const name = getProfitBusinessBucket(item)
+    if (moduleNames.has(name)) continue
     const curr = map.get(name) || { name, revenue: 0, count: 0 }
     curr.revenue += Number(item.费用) || 0
     curr.count += 1
@@ -1542,7 +1908,7 @@ const platformVerticalUnmatched = computed(() => {
 })
 
 const projectRanking = computed(() => {
-  const items = normalizeMonthFilter(departmentEffectiveItems.value)
+  const items = excludeCancelledRecords(normalizeMonthFilter(departmentEffectiveItems.value))
   const candidates = items.filter(item => !isGenericProjectLabel(item.项目))
   const sourceItems = candidates.length ? candidates : items
   const map = new Map()
@@ -1554,13 +1920,13 @@ const projectRanking = computed(() => {
     curr.count += 1
     map.set(key, curr)
   }
-  const rows = [...map.values()].sort((a, b) => b.margin - a.margin)
-  const maxMargin = Math.max(1, ...rows.map(item => item.margin))
-  return rows.slice(0, 8).map(item => ({ ...item, pct: Math.round(item.margin / maxMargin * 100) }))
+  const rows = [...map.values()].sort((a, b) => b.revenue - a.revenue)
+  const maxRevenue = Math.max(1, ...rows.map(item => item.revenue))
+  return rows.slice(0, 8).map(item => ({ ...item, pct: Math.round(item.revenue / maxRevenue * 100) }))
 })
 
 const accountRanking = computed(() => {
-  const items = normalizeMonthFilter(departmentEffectiveItems.value)
+  const items = excludeCancelledRecords(normalizeMonthFilter(departmentEffectiveItems.value))
   const map = new Map()
   for (const item of items) {
     const key = item.账号 || '未知账号'
@@ -1573,7 +1939,7 @@ const accountRanking = computed(() => {
     if (isAccountCommercialOrder(item)) curr.commercialCount += 1
     map.set(key, curr)
   }
-  return [...map.values()].sort((a, b) => b.margin - a.margin).slice(0, 10)
+  return [...map.values()].sort((a, b) => b.revenue - a.revenue).slice(0, 10)
 })
 
 function shortPodiumName(name) {
@@ -1583,12 +1949,12 @@ function shortPodiumName(name) {
 
 const accountPodiumRows = computed(() => {
   const rows = accountRanking.value
-  const maxMargin = Math.max(1, ...rows.map(item => Math.max(0, Number(item.margin) || 0)))
+  const maxRevenue = Math.max(1, ...rows.map(item => Math.max(0, Number(item.revenue) || 0)))
   return rows.map((item, index) => ({
     ...item,
     rank: index + 1,
     shortName: shortPodiumName(item.name),
-    width: Math.max(6, Math.round(Math.max(0, Number(item.margin) || 0) / maxMargin * 100))
+    width: Math.max(6, Math.round(Math.max(0, Number(item.revenue) || 0) / maxRevenue * 100))
   }))
 })
 
@@ -1649,18 +2015,18 @@ const prevMonthDiff = computed(() => {
   const year = Number(selectedYear.value) || currentYear
   const accountKeys = currentComparisonAccountKeys(month, year)
   const current = summarizeAccountAlignedPeriod(month, year, accountKeys)
-  const currTotal = current.margin
-  const prevMargin = prevMonthData.value.margin
-  if (prevMargin === 0) return currTotal > 0 ? 100 : 0
-  return Math.round((currTotal - prevMargin) / prevMargin * 100)
+  const currTotal = comparisonValue(current)
+  const prevTotal = comparisonValue(prevMonthData.value)
+  if (prevTotal === 0) return currTotal > 0 ? 100 : 0
+  return Math.round((currTotal - prevTotal) / prevTotal * 100)
 })
 
 function summarizeProfitItems(items) {
   const rows = items || []
   const total = rows.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const margin = rows.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
-  const projects = new Set(rows.map(item => item.项目).filter(Boolean))
-  return { total, margin, count: rows.length, projects: projects.size }
+  const onePriceProjects = new Set(rows.filter(isOnePriceBusiness).map(profitProjectName).filter(Boolean))
+  return { total, margin, count: rows.length, projects: onePriceProjects.size }
 }
 
 function compareRate(current, base) {
@@ -1673,6 +2039,14 @@ function compareClass(rate) {
   if (rate > 0) return 'up'
   if (rate < 0) return 'down'
   return 'flat'
+}
+
+function comparisonValue(summary) {
+  return isDepartmentView.value ? Number(summary?.total) || 0 : Number(summary?.margin) || 0
+}
+
+function comparisonMetricLabel() {
+  return isDepartmentView.value ? '流水' : '毛利'
 }
 
 function previousPeriod(month, year) {
@@ -1738,20 +2112,20 @@ const historyComparison = computed(() => {
       {
         key: 'mom',
         label: '环比上月',
-        value: previous && previous.count ? `${compareRate(current.margin, previous.margin)}%` : '待补数据',
-        note: previous && previous.count ? `账号对齐 ${accountKeys.size} 个；上月毛利 ￥${previous.margin.toLocaleString()}` : '导入上月数据后自动计算'
+        value: previous && previous.count ? `${compareRate(comparisonValue(current), comparisonValue(previous))}%` : '待补数据',
+        note: previous && previous.count ? `账号对齐 ${accountKeys.size} 个；上月${comparisonMetricLabel()} ￥${comparisonValue(previous).toLocaleString()}` : '导入上月数据后自动计算'
       },
       {
         key: 'yoy',
         label: '同比去年',
-        value: lastYear && lastYear.count ? `${compareRate(current.margin, lastYear.margin)}%` : '待补数据',
-        note: lastYear && lastYear.count ? `账号对齐 ${accountKeys.size} 个；去年同月毛利 ￥${lastYear.margin.toLocaleString()}` : '等待补充去年同期数据'
+        value: lastYear && lastYear.count ? `${compareRate(comparisonValue(current), comparisonValue(lastYear))}%` : '待补数据',
+        note: lastYear && lastYear.count ? `账号对齐 ${accountKeys.size} 个；去年同月${comparisonMetricLabel()} ￥${comparisonValue(lastYear).toLocaleString()}` : '等待补充去年同期数据'
       },
       {
         key: 'projects',
-        label: '项目数对比',
+        label: '一口价项目数对比',
         value: previous && previous.count ? `${current.projects - previous.projects >= 0 ? '+' : ''}${current.projects - previous.projects}` : `${current.projects}`,
-        note: `当前 ${current.projects} 个项目 / ${current.count} 条记录`
+        note: `当前 ${current.projects} 个一口价项目 / ${current.count} 条记录`
       }
     ]
   }
@@ -1760,48 +2134,63 @@ const circumference = 52 * 2 * Math.PI // r=52, 2πr
 const donutPerimeter = 2 * Math.PI * 70 // r=70
 
 const bizColors = ['#7b2fff', '#22c55e', '#f59e0b', '#ef4444', '#3b82f6', '#ec4899']
-const FEISHU_PROFIT_TABLE_URL = 'https://tcnnt6cxkcat.feishu.cn/sheets/Eha8sWY5GhDmVQtBHg5cthtenZb'
-function openFeishuProfitTable() {
-  window.open(FEISHU_PROFIT_TABLE_URL, '_blank', 'noopener,noreferrer')
+function normalizeProfitBusinessPlatform(platform) {
+  const text = String(platform || '').trim()
+  if (/B站|哔哩|bilibili/i.test(text)) return 'B站'
+  if (/抖音|douyin/i.test(text)) return '抖音'
+  if (/快手|kuaishou/i.test(text)) return '快手'
+  return text
+}
+
+function getProfitBusinessBucket(item) {
+  const businessType = String(item.类型 || '').trim()
+  const rawPlatform = String(item.平台 || '').trim()
+  const platform = normalizeProfitBusinessPlatform(rawPlatform)
+  const productLine = String(item.产品线 || '').trim()
+
+  if (businessType && businessType !== '一口价') return '非一口价'
+  if (productLine === '非游' || /数码/.test(rawPlatform)) return '非游数码'
+  if (!productLine) return '未标产品线'
+  if (productLine === '游戏' && platform === 'B站') return 'B站游戏'
+  if (productLine === '游戏' && (platform === '抖音' || platform === '快手')) return '抖音游戏'
+  if (platform) return `${platform}${productLine}`.trim()
+  return '未标产品线'
 }
 
 const bizBreakdown = computed(() => {
-  const items = filteredItems.value
+  const items = excludeCancelledRecords(filteredItems.value)
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   if (total === 0) return []
 
   const map = {}
   for (const item of items) {
-    const type = item.平台 || '未知'
-    map[type] = (map[type] || 0) + (Number(item.费用) || 0)
+    const type = getProfitBusinessBucket(item)
+    const row = map[type] || { amount: 0, count: 0 }
+    row.amount += Number(item.费用) || 0
+    row.count += 1
+    map[type] = row
   }
 
   return Object.entries(map)
-    .map(([type, amount]) => ({
+    .map(([type, row]) => ({
       type,
-      amount,
-      pct: Math.round(amount / total * 100)
+      amount: row.amount,
+      count: row.count,
+      pct: Math.round(row.amount / total * 100)
     }))
     .sort((a, b) => b.amount - a.amount)
 })
 
 // 环形图扇区计算 (r=70)
 const donutSegments = computed(() => {
-  const items = filteredItems.value
-  const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
+  const rows = bizBreakdown.value
+  const total = rows.reduce((s, i) => s + (Number(i.amount) || 0), 0)
   if (total === 0) return []
-
-  const map = {}
-  for (const item of items) {
-    const type = item.平台 || '未知'
-    map[type] = (map[type] || 0) + (Number(item.费用) || 0)
-  }
 
   let offset = donutPerimeter * 0.25 // 从顶部开始(3点钟方向)
 
-  return Object.entries(map)
-    .sort((a, b) => b[1] - a[1])
-    .map(([type, amount]) => {
+  return rows
+    .map(({ type, amount }) => {
       const pct = amount / total
       const dashLen = donutPerimeter * pct
       const seg = { type, amount, pct: Math.round(pct * 100), dash: dashLen, offset }
@@ -1812,7 +2201,7 @@ const donutSegments = computed(() => {
 
 // 每个账号的流水
 const accountBreakdown = computed(() => {
-  const items = filteredItems.value
+  const items = excludeCancelledRecords(filteredItems.value)
   const map = new Map()
   for (const item of items) {
     const acc = item.账号 || '未知'
@@ -1852,12 +2241,20 @@ const accountOrderSummary = computed(() => ({
   accountCount: accountBreakdown.value.filter(item => item.commercialCount > 0).length
 }))
 
+function profitRowBelongsToGroup(item, groupLabel) {
+  const label = item.组别 || inferGroupFromAccount(item.账号) || ''
+  if (groupLabel === '内容一部') return label === '内容一部' || label === '内容六组'
+  return label === groupLabel
+}
+
 function seedGroupDataFromDepartment(items) {
   const byGroup = new Map(GROUPS.map(group => [group.label, []]))
   for (const item of items || []) {
-    const label = item.组别 || inferGroupFromAccount(item.账号) || ''
-    if (!byGroup.has(label)) continue
-    byGroup.get(label).push(item)
+    GROUPS.forEach(group => {
+      if (profitRowBelongsToGroup(item, group.label)) {
+        byGroup.get(group.label).push(item)
+      }
+    })
   }
   GROUPS.forEach(group => {
     groupData[group.id] = byGroup.get(group.label) || []
@@ -1900,37 +2297,10 @@ async function loadDepartmentData(options = {}) {
   }
 }
 
-async function importFromFeishu() {
-  loadingProfit.value = true
-  try {
-    const data = await importFeishuProfits()
-    if (data.items && data.items.length) {
-      const items = data.items.map((it, idx) => ({
-        id: Date.now() + idx,
-        项目: it.项目 || '',
-        平台: it.平台 || '',
-        账号: it.账号 || '',
-        档期: it.档期 || '',
-        费用: Number(it.费用) || 0,
-        毛利: calcMargin(Number(it.费用) || 0, it.平台 || '抖音'),
-        备注: it.备注 || ''
-      }))
-      groupData[4] = items
-      saveLocal(4, items)
-      showToast('已导入 ' + items.length + ' 条记录', 'success')
-    } else {
-      showToast('飞书无数据', 'error')
-    }
-  } catch(e) {
-    showToast('导入失败: ' + e.message, 'error')
-  }
-  loadingProfit.value = false
-}
 // ---- entry ----
 const profitText = ref('')
 const profitParsing = ref(false)
 const profitWriting = ref(false)
-const feishuSyncing = ref(false)
 const feishuPulling = ref(false)
 const profitDragOver = ref(false)
 const profitFileName = ref('')
@@ -2158,6 +2528,7 @@ function normalizeProfitGroup(value) {
   const raw = String(value || '').trim()
   if (!raw) return ''
   const aliases = {
+    '内容一组': '内容一部',
     '内用二组': '内容二组',
     '内容2组': '内容二组',
     '内容4组': '内容四组'
@@ -2577,70 +2948,35 @@ async function writeParsedRecords() {
   profitWriting.value = false
 }
 
-async function syncCurrentProfitsToFeishu() {
-  if (feishuSyncing.value) return
-  const ok = await confirmAction({
-    title: '同步流水到飞书',
-    message: '将把本地流水数据库全量同步到飞书表格。已同步过的记录会更新，不会按按钮重复新增。',
-    confirmText: '开始同步',
-    type: 'info'
-  })
-  if (!ok) return
-  feishuSyncing.value = true
-  try {
-    const result = await syncProfitsToFeishu({ force: true })
-    if (result.error || result.code) {
-      throw new Error(result.error || result.msg || '飞书同步失败')
-    }
-    const written = Number(result.created || 0) + Number(result.updated || 0)
-    const skippedHistorical = Number(result.skipped_historical || 0)
-    const hiddenHistorical = Number(result.hidden_historical_sheets || 0)
-    const styleWarnings = Array.isArray(result.style_errors) ? result.style_errors.length : 0
-    const extra = [
-      skippedHistorical ? `跳过历史 ${skippedHistorical} 条` : '',
-      hiddenHistorical ? `隐藏历史表 ${hiddenHistorical} 个` : '',
-      styleWarnings ? `样式警告 ${styleWarnings} 个` : ''
-    ].filter(Boolean).join('，')
-    showToast(
-      `飞书同步完成：${written} 条，失败 ${Number(result.failed || 0)} 条${extra ? '，' + extra : ''}`,
-      result.failed || styleWarnings ? 'warning' : 'success'
-    )
-    if (isDepartmentView.value) await loadDepartmentData()
-    else await loadProfitData()
-  } catch (e) {
-    showToast('飞书同步失败: ' + e.message, 'error')
-  }
-  feishuSyncing.value = false
-}
-
-async function pullCurrentProfitsFromFeishu() {
+async function pullCurrentProfitsFromWecom() {
   if (feishuPulling.value) return
   const monthText = selectedMonth.value ? `${selectedYear.value}年${selectedMonth.value}月` : `${selectedYear.value}年全部月份`
   const ok = await confirmAction({
-    title: '拉取飞书流水',
-    message: `将从飞书锁档执行表拉取「${monthText}」数据，并合并更新到本地流水库。\n会新增飞书新增的行，也会更新已有行的状态、发布日期、链接等字段；不会删除本地已有但飞书没有的记录。`,
+    title: '拉取流水',
+    message: `将从一口价流水表拉取「${monthText}」数据，并合并更新到本地流水库。\n会新增表内新增的行，也会更新已有行的状态、发布日期、链接等字段；不会删除本地已有但表内没有的记录。`,
     confirmText: '开始拉取',
     type: 'info'
   })
   if (!ok) return
   feishuPulling.value = true
   try {
-    const result = await pullProfitsFromFeishu({
+    const result = await pullProfitsFromWecom({
       year: selectedYear.value,
       month: selectedMonth.value || 0,
-      mode: 'merge'
+      mode: 'merge',
+      sourceMode: 'all'
     })
     if (result.error || (result.code && !result.success)) {
-      throw new Error(result.error || result.msg || '飞书拉取失败')
+      throw new Error(result.error || result.msg || '拉取失败')
     }
     showToast(
-      `飞书拉取完成：读取 ${Number(result.feishu_total || result.total || 0)} 条，新增 ${Number(result.inserted || 0)} 条，更新 ${Number(result.updated || 0)} 条`,
+      `拉取完成：读取 ${Number(result.source_total || result.total || 0)} 条，新增 ${Number(result.inserted || 0)} 条，更新 ${Number(result.updated || 0)} 条`,
       result.errors && result.errors.length ? 'warning' : 'success'
     )
     if (isDepartmentView.value || isDataManageView.value) await loadDepartmentData({ silent: true })
     else await loadProfitData({ silent: true })
   } catch (e) {
-    showToast('飞书拉取失败: ' + (e.message || '未知错误'), 'error')
+    showToast('拉取失败: ' + (e.message || '未知错误'), 'error')
   } finally {
     feishuPulling.value = false
   }
@@ -2722,6 +3058,7 @@ onMounted(() => {
     isDepartmentView.value = true
   }
   syncTargetDraft()
+  loadRemoteProfitTargets()
   if (isDepartmentView.value) {
     loadDepartmentData()
   } else {
@@ -2804,11 +3141,21 @@ function syncInternalSplitDefaults() {
   editModal.data.代做比例 = Number(editModal.data.代做比例) || 70
 }
 
-function openCreateModal() {
+function openCreateModal(overrides = {}) {
   editModal.mode = 'create'
   editModal.index = -1
-  editModal.data = makeProfitDraft()
+  editModal.data = makeProfitDraft(overrides)
   editModal.show = true
+}
+
+function openCreateNonOnePriceModal() {
+  openCreateModal({
+    类型: '非一口价',
+    平台: '星广联投',
+    产品线: '',
+    来源: 'manual',
+    备注: '非一口价业务'
+  })
 }
 
 function openEditModal(item) {
@@ -2934,6 +3281,26 @@ async function saveQuickEdit(item) {
   }
 }
 
+function todayDateString() {
+  const date = new Date()
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+async function toggleProfitExecution(item, checked) {
+  if (!item) return
+  item.执行状态 = checked ? '已发布' : '未发布'
+  item.是否发布 = checked
+  if (checked && !item.发布日期) item.发布日期 = todayDateString()
+  if (!checked) {
+    item.发布日期 = ''
+    item.链接 = ''
+  }
+  await saveQuickEdit(item)
+}
+
 async function doEditRecord() {
   const payload = buildProfitPayloadFromModal()
   if (!payload.account && !payload.project) {
@@ -3006,7 +3373,7 @@ function openAiChat() {
   aiChat.input = ''
   // Auto send initial query
   const monthStr = selectedYear.value + '年' + (selectedMonth.value ? selectedMonth.value + '月' : '全部月份')
-  const items = filteredItems.value
+  const items = excludeCancelledRecords(filteredItems.value)
   const total = items.reduce((s, i) => s + (Number(i.费用) || 0), 0)
   const margin = items.reduce((s, i) => s + (Number(i.毛利) || 0), 0)
   const platformStats = {}
@@ -3062,6 +3429,68 @@ async function sendAiChat() {
 .department-hero-stats div { padding: 7px 8px; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .department-hero-stats span, .dept-panel-title, .rank-main span, .dept-chip-row em, .dept-account-row span { font-size: 11px; color: var(--text-muted); }
 .department-hero-stats strong { font-size: 16px; color: var(--text, #e0d8ff); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.department-target-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.department-target-card {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 8px;
+  background: var(--surface, #1a1a2e);
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.target-card-head,
+.target-card-main,
+.target-card-main label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.target-card-head span,
+.target-card-main span,
+.department-target-card small {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.target-card-head strong {
+  color: #67e8f9;
+  font-size: 18px;
+}
+.target-card-main em {
+  min-width: 0;
+  font-size: 12px;
+  font-style: normal;
+  color: var(--text, #e0d8ff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.department-target-card .target-input {
+  width: 132px;
+}
+.target-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.18);
+  overflow: hidden;
+}
+.target-progress i {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #06b6d4, #22c55e);
+}
+.target-progress.accent i {
+  background: linear-gradient(90deg, #8b5cf6, #f59e0b);
+}
 .history-compare-strip {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -3153,17 +3582,19 @@ async function sendAiChat() {
   min-height: 310px;
   overflow: hidden;
   border-radius: 8px;
-  background: var(--bg-card, #12122a);
+  background: #fff;
   border: 1px solid rgba(148,163,184,0.16);
 }
 .dept-podium-stage img {
   position: absolute;
   inset: 0;
+  z-index: 0;
   width: 100%;
   height: 100%;
   object-fit: contain;
   object-position: center bottom;
   pointer-events: none;
+  filter: drop-shadow(0 10px 18px rgba(92, 62, 20, .16));
 }
 .podium-nameplate {
   position: absolute;
@@ -3214,9 +3645,9 @@ async function sendAiChat() {
   text-align: center;
   pointer-events: none;
 }
-.podium-static-name.bottom-left { left: 20.5%; top: 63%; }
-.podium-static-name.bottom-center { left: 42.7%; top: 60.5%; }
-.podium-static-name.bottom-right { right: 19.5%; top: 62%; }
+.podium-static-name.bottom-left { left: 20.5%; top: 66%; }
+.podium-static-name.bottom-center { left: 42.7%; top: 63.5%; }
+.podium-static-name.bottom-right { right: 19.5%; top: 65%; }
 .podium-mini-rank { min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .podium-mini-row {
   min-width: 0;
@@ -3480,6 +3911,7 @@ async function sendAiChat() {
 .data-manage-quickbar,
 .data-manage-import,
 .data-manage-export,
+.data-manage-tools,
 .data-manage-editor,
 .data-manage-table {
   border: 1px solid var(--border, #2a2a4a);
@@ -3488,12 +3920,14 @@ async function sendAiChat() {
 }
 .data-manage-toolbar {
   display: grid;
-  grid-template-columns: minmax(220px, 1fr) auto minmax(360px, auto);
+  grid-template-columns: minmax(220px, 1fr) auto;
   align-items: center;
   gap: 12px;
   padding: 8px 10px;
 }
 .data-manage-title {
+  grid-column: 1;
+  grid-row: 1;
   min-width: 0;
   display: flex;
   align-items: baseline;
@@ -3541,12 +3975,58 @@ async function sendAiChat() {
   color: #22c55e;
   font-size: 12px;
 }
+.data-manage-kpis {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+.data-manage-kpis article {
+  min-width: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(42,42,74,0.78);
+  border-radius: 8px;
+  background: var(--bg-card, #12122a);
+  display: grid;
+  gap: 3px;
+}
+.data-manage-kpis article.primary {
+  border-color: rgba(34,197,94,0.35);
+  background: rgba(34,197,94,0.08);
+}
+.data-manage-kpis span {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+.data-manage-kpis strong {
+  overflow: hidden;
+  color: var(--text, #e0d8ff);
+  font-size: 16px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.data-manage-kpis article.primary strong {
+  color: #22c55e;
+}
+.data-manage-kpis em {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .data-manage-actions {
+  grid-column: 2;
+  grid-row: 1;
   display: flex;
   align-items: center;
   justify-content: flex-end;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  white-space: nowrap;
 }
 .data-manage-actions .btn.active {
   background: var(--primary, #7b2fff);
@@ -3574,6 +4054,31 @@ async function sendAiChat() {
   min-height: 32px;
   padding: 6px 8px;
   font-size: 12px;
+}
+.filter-segments {
+  display: inline-grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 1fr;
+  min-height: 32px;
+  padding: 2px;
+  border: 1px solid var(--border, #2a2a4a);
+  border-radius: 8px;
+  background: var(--bg-card, #12122a);
+}
+.filter-segments button {
+  min-width: 0;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.filter-segments button.active {
+  background: var(--primary, #7b2fff);
+  color: #fff;
 }
 .data-manage-summary {
   display: grid;
@@ -3707,6 +4212,32 @@ async function sendAiChat() {
 .data-manage-import {
   padding: 10px;
 }
+.data-manage-tools {
+  display: grid;
+  grid-template-columns: minmax(150px, .25fr) minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  padding: 10px;
+}
+.data-manage-tools > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+.data-manage-tools strong {
+  color: var(--primary-light, #b47fff);
+  font-size: 12px;
+  font-weight: 800;
+}
+.data-manage-tools span {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.data-manage-tool-grid {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .data-manage-import-head {
   display: flex;
   align-items: flex-start;
@@ -3788,6 +4319,49 @@ async function sendAiChat() {
   font-size: 12px;
   font-weight: 800;
 }
+.table-filter-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.table-filter-cell span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--primary-light, #b47fff);
+  font-size: 12px;
+  font-weight: 800;
+}
+.table-filter-cell input,
+.table-filter-cell select {
+  width: 100%;
+  min-width: 0;
+  height: 26px;
+  padding: 3px 7px;
+  border: 1px solid rgba(124,47,255,0.22);
+  border-radius: 7px;
+  background: var(--bg-card, #12122a);
+  color: var(--text, #e0d8ff);
+  font: inherit;
+  font-size: 11px;
+  outline: none;
+  box-sizing: border-box;
+}
+.table-filter-cell input::placeholder {
+  color: rgba(224,216,255,0.42);
+}
+.table-filter-cell input:focus,
+.table-filter-cell select:focus {
+  border-color: rgba(124,47,255,0.72);
+}
+.table-filter-actions {
+  display: flex;
+  align-items: end;
+  justify-content: center;
+  min-height: 44px;
+}
 .data-manage-row {
   border-bottom: 1px solid rgba(42,42,74,0.42);
   color: var(--text, #e0d8ff);
@@ -3837,6 +4411,10 @@ async function sendAiChat() {
 }
 .grid-edit.link-edit {
   font-size: 11px;
+}
+.grid-edit.link-edit.compact {
+  min-width: 0;
+  width: 100%;
 }
 .data-manage-row .amount {
   color: var(--success-text);
@@ -4020,9 +4598,27 @@ select.inp { cursor: pointer; }
 .profit-bar { flex: 1; height: 8px; background: var(--surface2, #1e1e3a); border-radius: 4px; overflow: hidden; }
 .profit-bar-fill { height: 100%; background: linear-gradient(90deg, var(--primary, #7b2fff), var(--success-text)); border-radius: 4px; transition: width 0.4s ease; }
 .profit-bar-label { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
-.profit-table { display: flex; flex-direction: column; background: var(--panel-bg, #12122a); border-radius: 6px; min-width: 0; }
-.pt-head { display: grid; grid-template-columns: minmax(170px, 1.15fr) minmax(92px, .7fr) 80px 60px 96px 96px 112px; gap: 8px; padding: 10px 12px; font-size: 13px; font-weight: 600; color: var(--primary-light, #b47fff); border-bottom: 1px solid var(--border, #2a2a4a); background: var(--surface2, #1e1e3a); }
-.pt-row { display: grid; grid-template-columns: minmax(170px, 1.15fr) minmax(92px, .7fr) 80px 60px 96px 96px 112px; gap: 8px; padding: 10px 12px; font-size: 13px; color: var(--text, #e0d8ff); border-bottom: 1px solid rgba(42,42,74,0.4); align-items: center; }
+.profit-table {
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg, #12122a);
+  border-radius: 6px;
+  min-width: 0;
+  overflow-x: auto;
+}
+.pt-head,
+.pt-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.3fr) minmax(130px, .75fr) 128px 124px 104px 104px 96px minmax(190px, 1fr) 120px;
+  min-width: 1220px;
+  gap: 8px;
+  align-items: center;
+}
+.pt-head { padding: 10px 12px; font-size: 13px; font-weight: 600; color: var(--primary-light, #b47fff); border-bottom: 1px solid var(--border, #2a2a4a); background: var(--surface2, #1e1e3a); }
+.pt-head .table-filter-actions {
+  min-height: 44px;
+}
+.pt-row { padding: 8px 12px; font-size: 13px; color: var(--text, #e0d8ff); border-bottom: 1px solid rgba(42,42,74,0.4); }
 .pt-row:last-child { border-bottom: none; }
 .pt-row:hover { background: rgba(255,255,255,0.03); }
 .pt-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -4036,6 +4632,41 @@ select.inp { cursor: pointer; }
 .btn-link:hover { background: rgba(59,130,246,0.24); color: #93c5fd; }
 .pt-row .amount { color: var(--success-text); font-weight: 600; text-align: right; }
 .pt-row .amount.accent { color: #fbbf24; font-weight: 700; }
+.type-cell {
+  min-width: 0;
+}
+.execution-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, .28);
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.execution-check input {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--success-text);
+}
+.execution-check.done {
+  border-color: rgba(34, 197, 94, .35);
+  background: rgba(34, 197, 94, .12);
+  color: var(--success-text);
+}
+.execution-check.cancelled {
+  border-color: rgba(239, 68, 68, .38);
+  background: rgba(239, 68, 68, .1);
+  color: #dc2626;
+  cursor: default;
+}
+.execution-check.cancelled input { accent-color: #dc2626; }
 .loading-text { font-size: 13px; color: var(--text-muted); padding: 16px 0; text-align: center; }
 .refresh-btn { margin-top: 10px; }
 .entry-toggle {
@@ -4188,7 +4819,7 @@ select.inp { cursor: pointer; }
 }
 .legend-item {
   display: grid;
-  grid-template-columns: 10px minmax(0, 1fr) 48px;
+  grid-template-columns: 10px minmax(0, 1fr) minmax(112px, auto);
   align-items: center;
   gap: 8px 10px;
   font-size: 12px;
@@ -4201,13 +4832,23 @@ select.inp { cursor: pointer; }
   flex-shrink: 0;
 }
 .legend-type {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
   flex: 1;
   color: var(--text, #e0d8ff);
+  min-width: 0;
+}
+.legend-type small {
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
 }
 .legend-pct {
   color: var(--primary-light, #b47fff);
   font-weight: 600;
   text-align: right;
+  white-space: nowrap;
 }
 .legend-bar {
   grid-column: 1 / -1;
@@ -4410,6 +5051,7 @@ select.inp { cursor: pointer; }
   white-space: nowrap;
 }
 .type-yijia { background: rgba(156, 39, 176, 0.2); color: #ce93d8; }
+.type-non-one-price { background: rgba(20, 184, 166, 0.18); color: #5eead4; }
 .type-liuliang { background: rgba(33, 150, 243, 0.2); color: #64b5f6; }
 .type-duan { background: rgba(76, 175, 80, 0.2); color: #81c784; }
 .type-xingguang { background: rgba(255, 152, 0, 0.2); color: #ffb74d; }

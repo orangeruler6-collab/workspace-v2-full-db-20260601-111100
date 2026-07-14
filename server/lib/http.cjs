@@ -1,15 +1,26 @@
 const fs = require('fs');
 const path = require('path');
+const zlib = require('zlib');
+
+var lastJsonParseWarningAt = 0;
 
 function sendJSON(res, status, data) {
   if (res.writableEnded || res.destroyed) return;
+  const body = Buffer.from(JSON.stringify(data));
+  const request = res.req;
+  const acceptsGzip = /(?:^|,)\s*gzip\s*(?:,|$)/i.test(String(request && request.headers && request.headers['accept-encoding'] || ''));
+  const shouldCompress = acceptsGzip && body.length >= 16 * 1024;
+  const payload = shouldCompress ? zlib.gzipSync(body, { level: zlib.constants.Z_BEST_SPEED }) : body;
   if (!res.headersSent) {
     res.writeHead(status, {
       'Content-Type': 'application/json; charset=utf-8',
-      'Access-Control-Allow-Origin': '*'
+      'Access-Control-Allow-Origin': '*',
+      'Content-Length': payload.length,
+      'Vary': 'Accept-Encoding',
+      ...(shouldCompress ? { 'Content-Encoding': 'gzip' } : {})
     });
   }
-  res.end(JSON.stringify(data));
+  res.end(payload);
 }
 
 function sendOptions(res) {
@@ -49,8 +60,15 @@ function parseBody(req, parsedUrl, callback) {
   req.on('end', function() {
     var bodyStr = Buffer.concat(rawBody).toString('utf8');
     var body = {};
-    try { body = JSON.parse(bodyStr); } catch (e) {
-      console.error('JSON parse error:', e.message, 'body:', bodyStr);
+    var trimmedBody = bodyStr.trim();
+    if (trimmedBody) {
+      try { body = JSON.parse(trimmedBody); } catch (e) {
+        var now = Date.now();
+        if (now - lastJsonParseWarningAt > 60 * 1000) {
+          lastJsonParseWarningAt = now;
+          console.warn('JSON parse warning:', parsedUrl.pathname, e.message, 'body:', trimmedBody.slice(0, 200));
+        }
+      }
     }
     body._method = req.method;
     parsedUrl.searchParams.forEach(function(value, key) {

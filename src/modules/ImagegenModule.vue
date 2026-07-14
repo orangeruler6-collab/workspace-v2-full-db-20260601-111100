@@ -425,7 +425,7 @@ const prompt = ref('')
 const model = ref('gpt-image2')
 const gptImageRoute = ref('primary')
 const ratio = ref('16:9')
-const resVal = ref('2K')
+const resVal = ref('1K')
 const count = ref(1)
 const loading = ref(false)
 const results = ref([])
@@ -489,14 +489,14 @@ const activeGptImageRoute = computed(() => GPT_IMAGE_ROUTES.find(route => route.
 
 function handleModelChange(val) {
   model.value = val
-  resVal.value = '2K'
+  resVal.value = val === 'gpt-image2' && !hasI2IReferences.value ? '1K' : '2K'
 }
 
 function normalizeResolutionSelection() {
   const options = resolutionOptions.value || []
   const current = options.find(item => item.value === resVal.value)
   if (!current || current.disabled) {
-    resVal.value = options.find(item => !item.disabled)?.value || '2K'
+    resVal.value = options.find(item => !item.disabled)?.value || '1K'
   }
 }
 

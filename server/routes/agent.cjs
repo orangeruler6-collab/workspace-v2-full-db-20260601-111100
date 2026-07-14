@@ -159,17 +159,70 @@ function compactIntentText(input) {
 function detectGroupScope(input) {
   const text = compactIntentText(input);
   const groups = [
-    { key: '内容一组', aliases: ['内容一组', '一组', '1组', '一组的', '一组这边'] },
+    { key: '内容一部', aliases: ['内容一部', '内容一组', '一部', '一组', '1组', '一组的', '一部的', '一组这边', '一部这边'] },
     { key: '内容二组', aliases: ['内容二组', '二组', '2组', '二组的', '二组这边'] },
     { key: '内容三组', aliases: ['内容三组', '三组', '3组', '三组的', '三组这边'] },
     { key: '内容四组', aliases: ['内容四组', '四组', '4组', '四组的', '四组这边'] },
     { key: '内容五组', aliases: ['内容五组', '五组', '5组', '五组的', '五组这边'] },
-    { key: '内容六组', aliases: ['内容六组', '六组', '6组', '六组的', '六组这边'] }
+    { key: '内容六组', aliases: ['内容六组', '六组', '6组', '六组的', '六组这边'] },
+    { key: 'MCN经纪组', aliases: ['MCN经纪组', '经济组', '经纪组', 'MCN经纪组这边'] }
   ];
   for (const group of groups) {
     if (group.aliases.some(function(alias) { return text.indexOf(alias) >= 0; })) return group.key;
   }
   return '';
+}
+
+function detectMonthScope(input) {
+  const raw = String(input || '');
+  const compact = compactIntentText(raw);
+  const currentYear = new Date().getFullYear();
+  const result = { year: 0, month: 0 };
+  const normalYearMatch = raw.match(/(20\d{2})\s*年/);
+  if (normalYearMatch) result.year = Number(normalYearMatch[1]) || 0;
+  const normalNumericMonth = raw.match(/(?:^|[^\d])(1[0-2]|0?[1-9])\s*月/);
+  if (normalNumericMonth) result.month = Number(normalNumericMonth[1]) || 0;
+  const normalChineseMonths = [
+    ['十二月', 12], ['十一月', 11], ['十月', 10], ['九月', 9], ['八月', 8], ['七月', 7],
+    ['六月', 6], ['五月', 5], ['四月', 4], ['三月', 3], ['二月', 2], ['一月', 1], ['正月', 1]
+  ];
+  if (!result.month) {
+    for (const pair of normalChineseMonths) {
+      if (raw.indexOf(pair[0]) >= 0) {
+        result.month = pair[1];
+        break;
+      }
+    }
+  }
+  if (!result.month && /(本月|这个月|当月)/.test(raw)) result.month = new Date().getMonth() + 1;
+  if (!result.month && /(上月|上个月)/.test(raw)) result.month = new Date().getMonth() || 12;
+  if (result.month && !result.year) {
+    result.year = /(去年|上年|上一年)/.test(raw) ? currentYear - 1 : currentYear;
+  }
+  if (result.month) return result;
+  const yearMatch = compact.match(/(20\d{2})年?/);
+  if (yearMatch) result.year = Number(yearMatch[1]) || 0;
+  const numericMonth = compact.match(/(?:^|[^\d])([1-9]|1[0-2])月/);
+  if (numericMonth) result.month = Number(numericMonth[1]) || 0;
+  const chineseMonths = [
+    ['十二月', '12月'], ['十一月', '11月'], ['十月', '10月'], ['九月', '9月'],
+    ['八月', '8月'], ['七月', '7月'], ['六月', '6月'], ['五月', '5月'],
+    ['四月', '4月'], ['三月', '3月'], ['二月', '2月'], ['一月', '1月']
+  ];
+  if (!result.month) {
+    for (let i = 0; i < chineseMonths.length; i += 1) {
+      if (chineseMonths[i].some(function(alias) { return compact.indexOf(alias) >= 0; })) {
+        result.month = 12 - i;
+        break;
+      }
+    }
+  }
+  if (!result.month && /(本月|这个月|当月)/.test(compact)) result.month = new Date().getMonth() + 1;
+  if (!result.month && /(上月|上个月)/.test(compact)) result.month = new Date().getMonth() || 12;
+  if (result.month && !result.year) {
+    result.year = /(去年|上年|上一年)/.test(compact) ? currentYear - 1 : currentYear;
+  }
+  return result.month ? result : null;
 }
 
 function asksForWorkSummary(input) {
@@ -782,11 +835,11 @@ module.exports = function createAgentRoutes(deps) {
   }
 
   const WEEKLY_GROUPS = {
-    '内容一组': {
+    '内容一部': {
       leader: '薛荐轩',
-      members: ['许树杰', '许梦婷', '刘登魁', '许国锬', '叶进生', '高明镇', '薛荐轩', '叶颖'],
-      revenueRows: ['花无缺', '葵仔不想肝', '最翁Damnnn', '薛定谔的机', '跑腿的包子', '李野王SG', '游电工厂', '硬件侠'],
-      accounts: ['花无缺', '葵仔不想肝', '最翁Damnnn', '薛定谔的机', '跑腿的包子', '李野王SG', '游电工厂', '硬件侠']
+      members: ['薛荐轩', '廖李星', '高明镇', '林孝添', '叶子健', '许国锬', '许树杰', '林语婷', '许梦婷'],
+      revenueRows: ['最游话说', '薛定谔的机', '李野王SG', '游电工厂', '硬件侠', '情风师兄', '上官北丶', '王路飞CP'],
+      accounts: ['最游话说', '薛定谔的机', '李野王SG', '游电工厂', '硬件侠', '情风师兄', '上官北丶', '王路飞CP']
     },
     '内容二组': {
       leader: '傅思敏',
@@ -797,8 +850,8 @@ module.exports = function createAgentRoutes(deps) {
     '内容三组': {
       leader: '陈鸿睿',
       members: ['曹媛', '陈泓睿', '林文涛', '刘佳琳', '肖子璇'],
-      revenueRows: ['策划克星阿强', '中二探长', '团子好贵', '灵梦小师妹', '饭十七', '皮皮说游戏'],
-      accounts: ['策划克星阿强', '中二探长', '团子好贵', '灵梦小师妹', '饭十七', '皮皮说游戏']
+      revenueRows: ['策划克星阿强', '中二探长', '团子好贵', '灵梦小师妹', '跑腿的包子', '饭十七', '皮皮说游戏'],
+      accounts: ['策划克星阿强', '中二探长', '团子好贵', '灵梦小师妹', '跑腿的包子', '饭十七', '皮皮说游戏']
     },
     '内容四组': {
       leader: '陈健伊',
@@ -813,28 +866,186 @@ module.exports = function createAgentRoutes(deps) {
       accounts: ['游小妹', '游热娃子', '超玩教授', 'Lee小强', '木游话说', '麦冬冬']
     },
     '内容六组': {
-      leader: '张碧珊',
-      members: ['廖李星', '吴皓轩', '林孝添', '林语婷', '张碧珊', '叶子健'],
-      revenueRows: ['不玩就分手', '游点慌', '游戏永动机', '畅玩百晓生', '夏洛', '游侠蹦蹦', '王路飞cp', '上官北丶', '情风师兄'],
-      accounts: ['不玩就分手', '游点慌', '游戏永动机', '畅玩百晓生', '夏洛', '游侠蹦蹦', '王路飞cp', '上官北丶', '情风师兄']
+      leader: '刘登魁',
+      members: ['张莹珊', '刘思嫚', '吴皓轩', '邓姝', '叶进生', '叶颖', '刘登魁'],
+      revenueRows: ['花无缺', '葵仔不想肝', '游戏永动机', '畅玩百晓生'],
+      accounts: ['花无缺', '葵仔不想肝', '游戏永动机', '畅玩百晓生']
+    },
+    'MCN经纪组': {
+      leader: '',
+      members: ['张家豪', '钟文祯', '龙星羽', '吴羿玄'],
+      revenueRows: ['素材'],
+      accounts: ['素材']
     }
   };
 
   const WEEKLY_ACCOUNT_NAME_ALIASES = [
     { canonical: '木游话说', aliases: ['尼大木'] },
     { canonical: '策划克星阿强', aliases: ['苏大强'] },
-    { canonical: '最翁Damnnn', aliases: ['最翁说游'] },
+    { canonical: '最游话说', aliases: ['最翁Damnnn', '最翁damn', '最翁说游'] },
+    { canonical: '畅玩百晓生', aliases: ['畅玩白晓生'] },
+    { canonical: '王路飞CP', aliases: ['王路飞cp'] },
     { canonical: '麦小雯', aliases: ['麦晓花'] }
   ];
+
+  let weeklyUpdatePlanCache = { mtimeMs: 0, rows: [] };
+  let weeklyDashboardCache = { mtimeMs: 0, accounts: [] };
+  let weeklyDashboardWorksCache = { mtimeMs: 0, works: [] };
+
+  function readWeeklyUpdatePlanRows() {
+    const file = path.join(root, 'src', 'modules', 'account-data', 'updatePlan.js');
+    try {
+      const stat = fs.statSync(file);
+      if (weeklyUpdatePlanCache.mtimeMs === stat.mtimeMs) return weeklyUpdatePlanCache.rows;
+      const source = fs.readFileSync(file, 'utf8');
+      const rows = Array.from(source.matchAll(/\{\s*"groupName"[\s\S]*?\n\s*\}/g)).map(function(match) {
+        try { return JSON.parse(match[0]); } catch (e) { return null; }
+      }).filter(Boolean);
+      weeklyUpdatePlanCache = { mtimeMs: stat.mtimeMs, rows: rows };
+      return rows;
+    } catch (e) {
+      return weeklyUpdatePlanCache.rows;
+    }
+  }
+
+  function readWeeklyDashboardAccounts() {
+    const file = path.join(root, 'data', 'account-data-dashboard-snapshot.json');
+    try {
+      const stat = fs.statSync(file);
+      if (weeklyDashboardCache.mtimeMs === stat.mtimeMs) return weeklyDashboardCache.accounts;
+      const payload = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const accounts = payload && payload.dashboard && Array.isArray(payload.dashboard.accounts)
+        ? payload.dashboard.accounts
+        : [];
+      weeklyDashboardCache = { mtimeMs: stat.mtimeMs, accounts: accounts };
+      return accounts;
+    } catch (e) {
+      return weeklyDashboardCache.accounts;
+    }
+  }
+
+  function readWeeklyDashboardWorks() {
+    const file = path.join(root, 'data', 'account-data-dashboard-snapshot.json');
+    try {
+      const stat = fs.statSync(file);
+      if (weeklyDashboardWorksCache.mtimeMs === stat.mtimeMs) return weeklyDashboardWorksCache.works;
+      const payload = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const works = payload && payload.dashboard && Array.isArray(payload.dashboard.works)
+        ? payload.dashboard.works
+        : [];
+      weeklyDashboardWorksCache = { mtimeMs: stat.mtimeMs, works: works };
+      return works;
+    } catch (e) {
+      return weeklyDashboardWorksCache.works;
+    }
+  }
+
+  function weeklyPlanRowsForAccount(accountName) {
+    const canonical = normalizeAccountNameForProfit(canonicalWeeklyAccountName(accountName));
+    return readWeeklyUpdatePlanRows().filter(function(row) {
+      return normalizeAccountNameForProfit(canonicalWeeklyAccountName(row && row.account)) === canonical;
+    });
+  }
+
+  function weeklyPlanForAccount(accountName, platformLabel) {
+    const rows = weeklyPlanRowsForAccount(accountName);
+    const platform = platformLabel === 'B站' ? 'bilibili' : (platformLabel === '抖音' ? 'douyin' : '');
+    const exact = platform ? rows.filter(function(row) { return row.platform === platform; }) : [];
+    const candidates = exact.length ? exact : rows;
+    if (!candidates.length) return { monthlyTarget: 0, platform: platform || '' };
+    return {
+      monthlyTarget: candidates.reduce(function(max, row) {
+        return Math.max(max, Number(row.monthlyTotal || row.monthlyTarget || 0));
+      }, 0),
+      platform: candidates[0].platform || platform || ''
+    };
+  }
+
+  function weeklyDashboardMetric(accountName, platformLabel) {
+    const canonical = normalizeAccountNameForProfit(canonicalWeeklyAccountName(accountName));
+    const platform = platformLabel === 'B站' ? 'bilibili' : (platformLabel === '抖音' ? 'douyin' : '');
+    const candidates = readWeeklyDashboardAccounts().filter(function(item) {
+      const itemAccount = normalizeAccountNameForProfit(canonicalWeeklyAccountName(item && item.account));
+      return itemAccount === canonical && (!platform || item.platform === platform);
+    }).sort(function(a, b) {
+      return String(b.lastCollectedAt || '').localeCompare(String(a.lastCollectedAt || ''));
+    });
+    const item = candidates[0];
+    if (!item) return null;
+    const fanTrend = Array.isArray(item.fanTrend) ? item.fanTrend.map(Number).filter(Number.isFinite) : [];
+    const sevenDayFans = fanTrend.length >= 2 ? fanTrend[fanTrend.length - 1] - fanTrend[0] : null;
+    return {
+      followers: Number(item.followers || 0),
+      seven_day_fans: sevenDayFans,
+      month_posts: Number(item.metricsByRange && item.metricsByRange.month && item.metricsByRange.month.posts || 0),
+      collected_at: item.lastCollectedAt || item.generatedAt || '',
+      platform: item.platform || platform || ''
+    };
+  }
+
+  function weeklyWorksFor(report, accountName) {
+    if (/素材|代做/.test(String(accountName || ''))) return [];
+    const canonical = normalizeAccountNameForProfit(canonicalWeeklyAccountName(accountName));
+    const platformLabel = weeklyPlatformFor(accountName);
+    const platform = platformLabel === 'B站' ? 'bilibili' : 'douyin';
+    const range = report && report.range || {};
+    const unique = new Map();
+    readWeeklyDashboardWorks().forEach(function(item) {
+      const itemAccount = normalizeAccountNameForProfit(canonicalWeeklyAccountName(item && item.account));
+      if (itemAccount !== canonical || item.platform !== platform) return;
+      if (!inDateRange(item.publishDate || item.publishAt, range.start, range.end)) return;
+      if (item.publishVolumeExcluded) return;
+      const key = String(item.id || item.title || item.publishAt || '');
+      const previous = unique.get(key);
+      if (!previous || String(item.collectedAt || '') > String(previous.collectedAt || '')) unique.set(key, item);
+    });
+    return Array.from(unique.values());
+  }
+
+  function weeklyWorkType(item) {
+    const text = [item && item.contentType, item && item.businessKind, item && item.businessSource, item && item.businessReason]
+      .map(function(value) { return String(value || ''); })
+      .join(' ');
+    return /商单|商业|推广|合作|广告|植入|星广|CPM/i.test(text) ? 'commercial' : 'daily';
+  }
+
+  function weeklyWorksStatsFor(report, accountName) {
+    const works = weeklyWorksFor(report, accountName);
+    const commercial = works.filter(function(item) { return weeklyWorkType(item) === 'commercial'; });
+    const daily = works.filter(function(item) { return weeklyWorkType(item) === 'daily'; });
+    const hotDaily = daily.filter(function(item) {
+      return Number(item.views || 0) >= 100000 || Number(item.likes || 0) >= 10000 || /S级|爆款/.test(String(item.level || ''));
+    }).sort(function(a, b) {
+      return Number(b.views || 0) - Number(a.views || 0) || Number(b.likes || 0) - Number(a.likes || 0);
+    });
+    return {
+      works: works,
+      total: works.length,
+      commercial: commercial.length,
+      daily: daily.length,
+      hotDaily: hotDaily,
+      topDaily: hotDaily[0] || daily.slice().sort(function(a, b) { return Number(b.views || 0) - Number(a.views || 0); })[0] || null
+    };
+  }
+
+  function weeklyWorkTopicLabel(item) {
+    const title = String(item && item.title || '').trim();
+    if (/未成年|防沉迷/.test(title)) return '未成年人防沉迷内容';
+    const clean = title.split('#')[0].replace(/[？?！!。；;，,]+$/g, '').trim();
+    if (!clean) return '高表现内容';
+    return clean.length > 20 ? clean.slice(0, 20) + '…' : clean;
+  }
 
   function normalizeWeeklyGroup(value) {
     const text = String(value || '').trim();
     if (WEEKLY_GROUPS[text]) return text;
     const compact = text.replace(/\s+/g, '');
     const aliases = {
-      '一组': '内容一组',
-      '1组': '内容一组',
-      '内容1组': '内容一组',
+      '一部': '内容一部',
+      '内容一组': '内容一部',
+      '一组': '内容一部',
+      '1组': '内容一部',
+      '内容1组': '内容一部',
       '二组': '内容二组',
       '2组': '内容二组',
       '内容2组': '内容二组',
@@ -849,7 +1060,10 @@ module.exports = function createAgentRoutes(deps) {
       '内容5组': '内容五组',
       '六组': '内容六组',
       '6组': '内容六组',
-      '内容6组': '内容六组'
+      '内容6组': '内容六组',
+      'MCN经纪组': 'MCN经纪组',
+      '经济组': 'MCN经纪组',
+      '经纪组': 'MCN经纪组'
     };
     return aliases[compact] || '内容二组';
   }
@@ -857,7 +1071,11 @@ module.exports = function createAgentRoutes(deps) {
   function weeklyPlatformFor(name) {
     if (/素材|代做/.test(String(name || ''))) return '代做';
     const bilibili = new Set(['痞仔伯爵', '暴走星号键', '雷鸭Fist']);
-    return bilibili.has(String(name || '').trim()) ? 'B站' : '抖音';
+    if (bilibili.has(String(name || '').trim())) return 'B站';
+    const planned = weeklyPlanRowsForAccount(name);
+    const platforms = Array.from(new Set(planned.map(function(row) { return row.platform; }).filter(Boolean)));
+    if (platforms.length === 1) return platforms[0] === 'bilibili' ? 'B站' : '抖音';
+    return '抖音';
   }
 
   function weeklyRowsForGroup(groupName) {
@@ -944,7 +1162,7 @@ module.exports = function createAgentRoutes(deps) {
   }
 
   function estimateFollowerDelta(name) {
-    const big = new Set(['痞仔伯爵', '暴走星号键', '雷鸭Fist', '天机妹', '最翁Damnnn', '花无缺', '不玩就分手']);
+    const big = new Set(['痞仔伯爵', '暴走星号键', '雷鸭Fist', '天机妹', '最游话说', '花无缺', '不玩就分手']);
     const medium = new Set(['报告砖家', '沙雕101', '灵梦小师妹', '网瘾少女一条', '麦小雯', '花蛮楼', '有事找学姐', '策划克星阿强', '饭十七', '游小妹', '游热娃子', '超玩教授']);
     const clean = String(name || '').trim();
     if (big.has(clean)) return '-3';
@@ -1092,6 +1310,19 @@ module.exports = function createAgentRoutes(deps) {
     return match ? { year: Number(match[1]) || 0, month: Number(match[2]) || 0 } : { year: 0, month: 0 };
   }
 
+  function currentMonthParts(payload) {
+    const explicitYear = Number(payload && (payload.year || payload.reportYear || payload.report_year) || 0);
+    const explicitMonth = Number(payload && (payload.month || payload.reportMonth || payload.report_month) || 0);
+    if (explicitYear && explicitMonth) return { year: explicitYear, month: explicitMonth };
+    const nowDate = new Date();
+    return { year: nowDate.getFullYear(), month: nowDate.getMonth() + 1 };
+  }
+
+  function monthLabelFromParts(parts) {
+    const month = Number(parts && parts.month || 0);
+    return month ? month + '\u6708' : '';
+  }
+
   function sameProfitMonth(row, monthLabel) {
     if (!monthLabel) return true;
     const month = String(row && (row.month || row.schedule || row.档期 || '') || '').replace(/\s+/g, '');
@@ -1103,9 +1334,20 @@ module.exports = function createAgentRoutes(deps) {
     return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
   }
 
+  function formatWeeklyWan(value) {
+    return formatWeeklyNumber((Number(value) || 0) / 10000);
+  }
+
   function formatWeeklyCount(value) {
     const n = Number(value) || 0;
     return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+  }
+
+  function formatWeeklyWorkMetric(value) {
+    const n = Number(value) || 0;
+    if (n < 10000) return formatWeeklyCount(n);
+    const wan = n >= 100000 ? Math.ceil(n / 10000) : Math.round(n / 1000) / 10;
+    return String(wan).replace(/\.0$/, '') + 'w';
   }
 
   function cleanScheduleContent(value) {
@@ -1121,6 +1363,8 @@ module.exports = function createAgentRoutes(deps) {
 
   function materialTaskUnits(task) {
     if (!isMaterialScheduleTask(task)) return 0;
+    const stackCount = Number(task && (task.stack_count || task.stackCount || task.itemCount || task.quantity) || 0);
+    if (Number.isFinite(stackCount) && stackCount > 0) return Math.max(1, Math.round(stackCount));
     const text = [task && task.content, task && task.remark, task && task.type].map(function(value) { return String(value || ''); }).join(' ');
     const match = text.match(/(?:[xX×＊*]\s*(\d{1,3})|(\d{1,3})\s*条)/);
     const value = match ? Number(match[1] || match[2] || 0) : 0;
@@ -1143,17 +1387,40 @@ module.exports = function createAgentRoutes(deps) {
     return count + '条';
   }
 
+  function weeklySupplementalRevenueName(row) {
+    const text = [
+      row && row.project,
+      row && row.category,
+      row && row.business_type,
+      row && row.product_line,
+      row && row.remark,
+      row && row.account
+    ].map(function(value) { return String(value || ''); }).join(' ');
+    const isNonOnePrice = /非一口价/.test(text) || /wecom:non_one_price/i.test(String(row && row.entry_source || ''));
+    if (!isNonOnePrice) return '';
+    if (/带货|电商|GMV/i.test(text)) return '电商带货';
+    if (/素材|代做/.test(text)) return '素材';
+    if (/星广|联投|CPI|CPA|CPM/i.test(text)) return '星广联投';
+    return '其他非一口价';
+  }
+
+  function addWeeklyProfitItem(target, row) {
+    target.revenue += numberField(row, ['fee', 'revenue', 'amount', 'group_revenue', '集团流水']);
+    target.margin += numberField(row, ['margin', 'profit', 'department_margin', '部门毛利']);
+    target.target_margin += targetMarginField(row);
+    target.count += 1;
+    if (row && row.project && target.projects.indexOf(row.project) < 0) target.projects.push(row.project);
+  }
+
   function summarizeProfitRows(rows, monthLabel) {
     const scoped = (rows || []).filter(function(row) { return sameProfitMonth(row, monthLabel); });
     const byAccount = {};
     scoped.forEach(function(row) {
-      const account = canonicalWeeklyAccountName(row.account || row.account_name || row.name || row['账号昵称'] || '');
+      const account = weeklySupplementalRevenueName(row)
+        || canonicalWeeklyAccountName(row.account || row.account_name || row.name || row['账号昵称'] || '');
       if (!account) return;
-      if (!byAccount[account]) byAccount[account] = { revenue: 0, margin: 0, target_margin: 0, count: 0 };
-      byAccount[account].revenue += numberField(row, ['fee', 'revenue', 'amount', 'group_revenue', '集团流水']);
-      byAccount[account].margin += numberField(row, ['margin', 'profit', 'department_margin', '部门毛利']);
-      byAccount[account].target_margin += targetMarginField(row);
-      byAccount[account].count += 1;
+      if (!byAccount[account]) byAccount[account] = { revenue: 0, margin: 0, target_margin: 0, count: 0, projects: [] };
+      addWeeklyProfitItem(byAccount[account], row);
     });
     const targetMargin = scoped.reduce(function(total, row) { return total + targetMarginField(row); }, 0);
     const margin = sumField(scoped, ['margin', 'profit', 'department_margin', '部门毛利']);
@@ -1372,7 +1639,7 @@ module.exports = function createAgentRoutes(deps) {
     lines.push(strictWeeklyTitle(report));
     lines.push('');
     lines.push('截止当前本月的营收情况');
-    lines.push('账号昵称 | 平台 | 已执行-集团流水 | 已执行-部门毛利 | 预估-集团流水 | 预估-部门毛利 | 合计-集团流水 | 合计-部门毛利 | 目标毛利 | 目标完成率');
+    lines.push('账号昵称 | 平台 | 已执行-集团流水 | 已执行-部门毛利 | 预估-集团流水 | 预估-部门毛利 | 合计-集团流水 | 合计-部门毛利 | 目标流水 | 流水完成率 | 目标毛利 | 毛利完成率');
     STRICT_WEEKLY_REVENUE_ROWS.forEach(function(row) {
       lines.push(row[0] + ' | ' + row[1] + ' |  |  |  |  |  |  |  | ');
     });
@@ -1427,9 +1694,10 @@ module.exports = function createAgentRoutes(deps) {
     }
     const accountMap = strictAccountMap(report.accounts || []);
     const revenueRows = STRICT_WEEKLY_REVENUE_ROWS.map(function(row) {
-      return '<tr>' + td(row[0]) + td(row[1]) + td('') + td('') + td('') + td('') + td('') + td('') + td('') + td('') + '</tr>';
+      return '<tr>' + td(row[0]) + td(row[1]) + td('') + td('') + td('') + td('') + td('') + td('') + td('') + td('') + td('') + td('') + '</tr>';
     }).join('');
-    const revenueTotal = '<tr>' + td('合计') + td('') + td(report.profit && report.profit.revenue || '') + td(report.profit && report.profit.margin || '') + td('') + td('') + td(report.profit && report.profit.revenue || '') + td(report.profit && report.profit.margin || '') + td('') + td('') + '</tr>';
+    const profitTarget = weeklyProfitTargetSummary(report);
+    const revenueTotal = '<tr>' + td('合计') + td('') + td(report.profit && report.profit.revenue || '') + td(report.profit && report.profit.margin || '') + td('') + td('') + td(report.profit && report.profit.revenue || '') + td(report.profit && report.profit.margin || '') + td(formatWeeklyNumber(profitTarget.revenueTarget)) + td(formatWeeklyRate(profitTarget.revenueRate)) + td(formatWeeklyNumber(profitTarget.target)) + td(formatWeeklyRate(profitTarget.rate)) + '</tr>';
     const accountRows = STRICT_WEEKLY_ACCOUNT_ROWS.map(function(row) {
       const account = accountMap[row[0]] || {};
       return '<tr>' + td(row[0]) + td(row[1]) + td('') + td('') + td('') + td('') + td(account.fans_delta || '') + '</tr>';
@@ -1451,7 +1719,7 @@ module.exports = function createAgentRoutes(deps) {
       '<h1>' + htmlEscape(strictWeeklyTitle(report)) + '</h1>',
       '<h2>截止当前本月的营收情况</h2>',
       '<table>',
-      '<tr>' + th('账号昵称', 'rowspan="2"') + th('平台', 'rowspan="2"') + th('已执行', 'colspan="2"') + th('预估', 'colspan="2"') + th('合计', 'colspan="2"') + th('目标毛利', 'rowspan="2"') + th('目标完成率', 'rowspan="2"') + '</tr>',
+      '<tr>' + th('账号昵称', 'rowspan="2"') + th('平台', 'rowspan="2"') + th('已执行', 'colspan="2"') + th('预估', 'colspan="2"') + th('合计', 'colspan="2"') + th('目标流水', 'rowspan="2"') + th('流水完成率', 'rowspan="2"') + th('目标毛利', 'rowspan="2"') + th('目标完成率', 'rowspan="2"') + '</tr>',
       '<tr>' + th('集团流水') + th('部门毛利') + th('集团流水') + th('部门毛利') + th('集团流水') + th('部门毛利') + '</tr>',
       revenueRows,
       revenueTotal,
@@ -1512,11 +1780,8 @@ module.exports = function createAgentRoutes(deps) {
         ? [item.person, item.account === '素材' ? '' : item.account, cleanContent]
         : [item.person, item.account === '素材' ? '' : item.account, item.type, cleanContent === item.type ? '' : cleanContent];
       const label = labelParts.filter(Boolean).join(' - ');
-      if (item.material && item.count > 1) {
-        const suffix = item.units && item.units !== item.count
-          ? '（' + item.count + '次排期，预计' + item.units + '条素材）'
-          : '（' + item.count + '条）';
-        return label + suffix;
+      if (item.material) {
+        return label + '（' + item.units + '条）';
       }
       return item.count > 1 ? label + '（' + item.count + '条）' : label;
     }).filter(Boolean);
@@ -1529,10 +1794,10 @@ module.exports = function createAgentRoutes(deps) {
       profit: report.profit,
       schedule: {
         by_account: report.schedule && report.schedule.by_account,
-        material_count: report.schedule && report.schedule.material_count,
-        material_units: report.schedule && report.schedule.material_units,
+        material_count: report.schedule && report.schedule.material_units,
+        material_schedule_count: report.schedule && report.schedule.material_count,
         material_samples: (report.schedule && report.schedule.material_tasks || []).slice(0, 12).map(schedulePlanLabel),
-        next_samples: (scheduleRows || []).filter(function(task) { return task && task.date && task.date > range.end; }).slice(0, 16).map(schedulePlanLabel)
+        next_samples: (report.schedule && report.schedule.plan_tasks || []).slice(0, 24).map(schedulePlanLabel)
       },
       next_plans: report.next_plans
     };
@@ -1545,12 +1810,14 @@ module.exports = function createAgentRoutes(deps) {
   function applyWeeklyFallbackNarrative(report) {
     report.manual = report.manual || {};
     const profit = report.profit || {};
-    const materialCount = Number(report.schedule && report.schedule.material_count || 0);
-    const materialUnits = Number(report.schedule && report.schedule.material_units || 0);
-    const materialText = formatMaterialStats(materialCount, materialUnits);
+    const materialCount = Number(report.schedule && report.schedule.material_units || 0);
+    const materialText = materialCount ? formatWeeklyCount(materialCount) + '条' : '';
     const totals = totalScheduleCounts(report);
+    const targetRevenue = Number(profit.target_revenue || 0);
     const targetMargin = Number(profit.target_margin || 0);
+    const revenueCompletionRate = Number(profit.revenue_completion_rate || 0);
     const completionRate = Number(profit.completion_rate || 0);
+    const revenueGap = Math.max(0, targetRevenue - Number(profit.revenue || 0));
     const gap = Math.max(0, targetMargin - Number(profit.margin || 0));
     const accountEntries = Object.keys(profit.by_account || {}).map(function(name) {
       const item = profit.by_account[name] || {};
@@ -1560,7 +1827,7 @@ module.exports = function createAgentRoutes(deps) {
       return item.name + '毛利' + formatWeeklyNumber(item.margin);
     }).join('；');
     if (!String(report.manual.performanceText || '').trim()) {
-      report.manual.performanceText = '截止当前本月，' + (report.group || '本组') + '已执行部门毛利' + formatWeeklyNumber(profit.margin) + '，目标毛利' + formatWeeklyNumber(targetMargin) + '，目标完成率' + formatWeeklyRate(completionRate) + (targetMargin ? '，距离目标还差' + formatWeeklyNumber(gap) : '') + '。' + (topAccounts ? '主要毛利贡献来自' + topAccounts + '。' : '');
+      report.manual.performanceText = '截止当前本月，' + (report.group || '本组') + '已执行集团流水' + formatWeeklyNumber(profit.revenue) + (targetRevenue ? '，目标流水' + formatWeeklyNumber(targetRevenue) + '，流水完成率' + formatWeeklyRate(revenueCompletionRate) + '，流水缺口' + formatWeeklyNumber(revenueGap) : '') + '；已执行部门毛利' + formatWeeklyNumber(profit.margin) + '，目标毛利' + formatWeeklyNumber(targetMargin) + '，毛利完成率' + formatWeeklyRate(completionRate) + (targetMargin ? '，毛利缺口' + formatWeeklyNumber(gap) : '') + '。' + (topAccounts ? '主要毛利贡献来自' + topAccounts + '。' : '');
     }
     if (!String(report.manual.landingText || '').trim()) {
       report.manual.landingText = '上周排期共' + formatWeeklyNumber(report.schedule && report.schedule.total) + '条，账号发布' + formatWeeklyNumber(totals.total) + '条' + (materialText ? '，素材代做' + materialText : '') + '；本周继续按排期推进商单、日常与素材交付。';
@@ -1578,7 +1845,7 @@ module.exports = function createAgentRoutes(deps) {
     const system = [
       '你是内容事业部周报助理，只做中文内部周会文案整理。',
       '根据给定流水和排期，补全周报中的本月业绩情况、落地项推进、账号数据总结和当周工作计划。',
-      '要求：短、准、像运营周报；不要编造未给出的数据；素材代做要同时说明排期次数和 xN 推算出的预计素材条数；输出严格 JSON。'
+      '要求：短、准、像运营周报；不要编造未给出的数据；素材代做按排期卡片的 stack_count 堆叠条数求和，不要只数卡片数量；输出严格 JSON。'
     ].join('\n');
     const user = [
       '请基于这些数据整理周报文字，输出 JSON：',
@@ -1665,6 +1932,17 @@ module.exports = function createAgentRoutes(deps) {
     return item || { revenue: 0, margin: 0, target_margin: 0 };
   }
 
+  function weeklyRevenueDetailRows(report) {
+    const rows = weeklyRowsForGroup(report.group).revenueRows.slice();
+    const existing = new Set(rows.map(function(row) { return row[0]; }));
+    ['星广联投', '电商带货', '素材'].forEach(function(name) {
+      if (!existing.has(name)) rows.push([name, '']);
+    });
+    const other = weeklyRevenueFor(report, '其他非一口价');
+    if (Number(other.revenue || 0) || Number(other.margin || 0)) rows.push(['其他非一口价', '']);
+    return rows;
+  }
+
   function weeklyTargetMarginFor(report, accountName) {
     const item = weeklyRevenueFor(report, accountName);
     return Number(item.target_margin || 0);
@@ -1679,9 +1957,13 @@ module.exports = function createAgentRoutes(deps) {
 
   function weeklyProfitTargetSummary(report) {
     const profit = report.profit || {};
+    const revenueTarget = Number(profit.target_revenue || 0);
     const target = Number(profit.target_margin || 0);
+    const revenue = Number(profit.revenue || 0);
     const margin = Number(profit.margin || 0);
     return {
+      revenueTarget: revenueTarget,
+      revenueRate: revenueTarget ? revenue / revenueTarget * 100 : 0,
       target: target,
       rate: target ? margin / target * 100 : 0
     };
@@ -1689,10 +1971,15 @@ module.exports = function createAgentRoutes(deps) {
 
   function applyWeeklyProfitTarget(report, payload) {
     report.profit = report.profit || {};
+    const payloadRevenueTarget = numberField(payload || {}, ['targetRevenue', 'target_revenue', 'revenueTarget', 'revenue_target', '流水目标', '目标流水']);
     const payloadTarget = numberField(payload || {}, ['targetMargin', 'target_margin', 'profitTarget', 'profit_target', '目标毛利', '毛利目标']);
+    const existingRevenueTarget = Number(report.profit.target_revenue || 0);
     const existingTarget = Number(report.profit.target_margin || 0);
     const defaultTarget = Number(WEEKLY_GROUP_TARGETS[normalizeWeeklyGroup(report.group)] || 0);
+    const revenueTarget = payloadRevenueTarget || existingRevenueTarget || 0;
     const target = payloadTarget || existingTarget || defaultTarget;
+    report.profit.target_revenue = revenueTarget;
+    report.profit.revenue_completion_rate = revenueTarget ? Number(report.profit.revenue || 0) / revenueTarget * 100 : 0;
     report.profit.target_margin = target;
     report.profit.completion_rate = target ? Number(report.profit.margin || 0) / target * 100 : 0;
     return report.profit;
@@ -1724,6 +2011,38 @@ module.exports = function createAgentRoutes(deps) {
     }, { commercial: 0, ecology: 0, daily: 0, total: 0 });
   }
 
+  function weeklyMonthlyScheduleFor(report, accountName) {
+    const canonicalAccount = canonicalWeeklyAccountName(accountName);
+    const byAccount = report.schedule && report.schedule.monthly_by_account || {};
+    return Object.keys(byAccount).filter(function(name) {
+      return canonicalWeeklyAccountName(name) === canonicalAccount || name === accountName;
+    }).reduce(function(total, name) {
+      return total + Number(byAccount[name] && byAccount[name].total || 0);
+    }, 0);
+  }
+
+  function weeklyAccountMetric(report, accountName) {
+    const platform = weeklyPlatformFor(accountName);
+    const key = canonicalWeeklyAccountName(accountName) + '|' + platform;
+    return report.account_metrics && report.account_metrics[key]
+      || weeklyDashboardMetric(accountName, platform)
+      || { followers: 0, seven_day_fans: 0, month_posts: 0 };
+  }
+
+  function weeklyMonthPublishedFor(report, accountName) {
+    if (/素材|代做/.test(String(accountName || ''))) {
+      return Number(report.schedule && report.schedule.monthly_material_units || 0);
+    }
+    const metric = weeklyAccountMetric(report, accountName);
+    const reportMonth = Number(report.profit && report.profit.month || 0);
+    const reportYear = Number(report.profit && report.profit.year || 0);
+    const today = new Date();
+    if ((!reportYear || reportYear === today.getFullYear()) && (!reportMonth || reportMonth === today.getMonth() + 1)) {
+      return Number(metric.month_posts || 0);
+    }
+    return weeklyMonthlyScheduleFor(report, accountName);
+  }
+
   function totalScheduleCounts(report) {
     const result = { commercial: 0, ecology: 0, daily: 0, total: 0 };
     Object.values((report.schedule && report.schedule.by_account) || {}).forEach(function(item) {
@@ -1737,12 +2056,23 @@ module.exports = function createAgentRoutes(deps) {
     return result;
   }
 
+  function totalWeeklyMonthPublished(report) {
+    return weeklyRowsForGroup(report.group).accountDataRows.reduce(function(total, row) {
+      return total + Number(weeklyMonthPublishedFor(report, row[0]) || 0);
+    }, 0);
+  }
+
   function weeklyFollowerDeltaFor(report, accountName) {
     const accountMap = strictAccountMap(report.accounts || []);
     const account = accountMap[accountName] || accountMap[canonicalWeeklyAccountName(accountName)] || {};
+    const metric = weeklyAccountMetric(report, accountName);
+    if (metric.seven_day_fans !== undefined && metric.seven_day_fans !== null) {
+      const delta = Number(metric.seven_day_fans || 0);
+      return delta > 0 ? ('+' + formatWeeklyCount(delta)) : formatWeeklyCount(delta);
+    }
     const raw = account.fans_delta;
-    if (raw === undefined || raw === null || raw === '') return '0';
-    return String(raw);
+    if (account.status && account.status !== 'estimated' && raw !== undefined && raw !== null && raw !== '') return String(raw);
+    return '0';
   }
 
   function totalFollowerDelta(report) {
@@ -1754,6 +2084,102 @@ module.exports = function createAgentRoutes(deps) {
     return formatWeeklyCount(total);
   }
 
+  function totalWeeklyUpdateTarget(report) {
+    return weeklyRowsForGroup(report.group).accountDataRows.reduce(function(total, row) {
+      return total + Number(latestWeeklyUpdateTarget(report, row[0]) || 0);
+    }, 0);
+  }
+
+  function totalWeeklyUpdateGap(report) {
+    return weeklyRowsForGroup(report.group).accountDataRows.reduce(function(total, row) {
+      return total + Number(latestWeeklyAccountGap(report, row[0]) || 0);
+    }, 0);
+  }
+
+  function latestWeeklyTitle(report) {
+    const group = normalizeWeeklyGroup(report && report.group || '');
+    return 'MCN事业部-' + (group || '内容X组') + ' 周会材料';
+  }
+
+  function latestWeeklyMeetingDate(report) {
+    const range = report && report.range || {};
+    const date = String(range.end || range.start || '').trim();
+    const match = date.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    if (!match) return '周会日期：';
+    return '周会日期：' + match[1] + '年' + Number(match[2]) + '月' + Number(match[3]) + '日';
+  }
+
+  function latestWeeklyMonthLabel(report) {
+    const profit = report && report.profit || {};
+    const month = Number(profit.month || (report.range && String(report.range.end || report.range.start || '').slice(5, 7)));
+    return month ? month + '月份' : '本月';
+  }
+
+  function latestWeeklyAccountOwner(report) {
+    const rows = weeklyRowsForGroup(report && report.group);
+    return rows.leader || '';
+  }
+
+  function latestWeeklyUpdateTarget(report, accountName) {
+    return formatWeeklyCount(weeklyPlanForAccount(accountName, weeklyPlatformFor(accountName)).monthlyTarget || 0);
+  }
+
+  function latestWeeklyAccountGap(report, accountName) {
+    const target = Number(latestWeeklyUpdateTarget(report, accountName) || 0);
+    return formatWeeklyCount(Math.max(target - weeklyMonthPublishedFor(report, accountName), 0));
+  }
+
+  function latestWeeklyAccountNote(report, accountName) {
+    if (/素材|代做/.test(String(accountName || ''))) {
+      const materialCount = Number(report && report.schedule && report.schedule.material_units || 0);
+      return materialCount
+        ? '本周素材代做' + formatWeeklyCount(materialCount) + '条。'
+        : '本周暂无素材代做排期。';
+    }
+    const stats = weeklyScheduleFor(report, accountName);
+    const workStats = weeklyWorksStatsFor(report, accountName);
+    const parts = [];
+    const published = workStats.total || stats.total;
+    const commercial = workStats.total ? workStats.commercial : stats.commercial;
+    const daily = workStats.total ? workStats.daily : (stats.daily + stats.ecology);
+    if (published) parts.push('本周发布' + formatWeeklyCount(published) + '条');
+    if (commercial) parts.push('商单' + formatWeeklyCount(commercial) + '条');
+    if (daily) parts.push('日常' + formatWeeklyCount(daily) + '条');
+    if (workStats.hotDaily.length && workStats.topDaily) {
+      const top = workStats.topDaily;
+      parts.push('日常侧热点爆款' + formatWeeklyCount(workStats.hotDaily.length) + '条，最高' + formatWeeklyWorkMetric(top.views) + '播放、' + formatWeeklyWorkMetric(top.likes) + '点赞（' + weeklyWorkTopicLabel(top) + '）');
+    }
+    return parts.length ? parts.join('，') + '。' : '本周主平台暂无已发布作品数据。';
+  }
+
+  function latestWeeklyProjectRows(report) {
+    return Array.from({ length: 4 }, function() {
+      return { product: '', target: '', role: '', owner: '', amount: '', progress: '' };
+    });
+  }
+
+  function latestWeeklyWorkBenchLines(report) {
+    const lines = normalizeWeeklyLines(manualWeeklyText(report, 'workbenchText', ''));
+    return lines.length ? lines : ['1、', '2、'];
+  }
+
+  function latestWeeklyPlanGroups(report) {
+    const plans = (report.next_plans || []).length ? report.next_plans : ['待补充'];
+    return {
+      account: plans.slice(0, 4),
+      project: plans.slice(4, 8),
+      workbench: latestWeeklyWorkBenchLines(report),
+      other: []
+    };
+  }
+
+  function weeklyNumberedItems(items) {
+    return (items || []).filter(Boolean).map(function(item, index) {
+      const text = String(item || '').trim().replace(/^(?:[一二三四五六七八九十]+|\d+|[①②③④⑤⑥⑦⑧⑨⑩])[、.．）)]\s*/, '');
+      return '（' + (index + 1) + '）' + text;
+    });
+  }
+
   function autoWeeklySummary(report) {
     const accountTotals = { commercial: 0, ecology: 0, daily: 0, total: 0 };
     Object.values((report.schedule && report.schedule.by_account) || {}).forEach(function(item) {
@@ -1762,9 +2188,8 @@ module.exports = function createAgentRoutes(deps) {
       accountTotals.daily += Number(item.daily || 0);
       accountTotals.total += Number(item.total || 0);
     });
-    const materialCount = Number(report.schedule && report.schedule.material_count || 0);
-    const materialUnits = Number(report.schedule && report.schedule.material_units || 0);
-    const materialText = formatMaterialStats(materialCount, materialUnits);
+    const materialCount = Number(report.schedule && report.schedule.material_units || 0);
+    const materialText = materialCount ? formatWeeklyCount(materialCount) + '条' : '';
     const parts = [];
     if (accountTotals.total) {
       parts.push('上周账号共发布视频' + accountTotals.total + '条，其中商单' + accountTotals.commercial + '条，生态项目' + accountTotals.ecology + '条，日常' + accountTotals.daily + '条。');
@@ -1781,13 +2206,13 @@ module.exports = function createAgentRoutes(deps) {
     lines.push(strictWeeklyTitle(report));
     lines.push('');
     lines.push('截止当前本月的营收情况');
-    lines.push('账号昵称 | 平台 | 已执行-集团流水 | 已执行-部门毛利 | 预估-集团流水 | 预估-部门毛利 | 合计-集团流水 | 合计-部门毛利 | 目标毛利 | 目标完成率');
+    lines.push('账号昵称 | 平台 | 已执行-集团流水 | 已执行-部门毛利 | 预估-集团流水 | 预估-部门毛利 | 合计-集团流水 | 合计-部门毛利 | 目标流水 | 流水完成率 | 目标毛利 | 毛利完成率');
     rows.revenueRows.forEach(function(row) {
       const item = weeklyRevenueFor(report, row[0]);
-      lines.push(row[0] + ' | ' + row[1] + ' | ' + formatWeeklyNumber(item.revenue) + ' | ' + formatWeeklyNumber(item.margin) + ' | 0 | 0 | ' + formatWeeklyNumber(item.revenue) + ' | ' + formatWeeklyNumber(item.margin) + ' | ' + formatWeeklyNumber(weeklyTargetMarginFor(report, row[0])) + ' | ' + formatWeeklyRate(weeklyCompletionRateFor(report, row[0])));
+      lines.push(row[0] + ' | ' + row[1] + ' | ' + formatWeeklyNumber(item.revenue) + ' | ' + formatWeeklyNumber(item.margin) + ' | 0 | 0 | ' + formatWeeklyNumber(item.revenue) + ' | ' + formatWeeklyNumber(item.margin) + ' | 0 | 0% | ' + formatWeeklyNumber(weeklyTargetMarginFor(report, row[0])) + ' | ' + formatWeeklyRate(weeklyCompletionRateFor(report, row[0])));
     });
     const profitTarget = weeklyProfitTargetSummary(report);
-    lines.push('合计 |  | ' + formatWeeklyNumber(report.profit && report.profit.revenue) + ' | ' + formatWeeklyNumber(report.profit && report.profit.margin) + ' | 0 | 0 | ' + formatWeeklyNumber(report.profit && report.profit.revenue) + ' | ' + formatWeeklyNumber(report.profit && report.profit.margin) + ' | ' + formatWeeklyNumber(profitTarget.target) + ' | ' + formatWeeklyRate(profitTarget.rate));
+    lines.push('合计 |  | ' + formatWeeklyNumber(report.profit && report.profit.revenue) + ' | ' + formatWeeklyNumber(report.profit && report.profit.margin) + ' | 0 | 0 | ' + formatWeeklyNumber(report.profit && report.profit.revenue) + ' | ' + formatWeeklyNumber(report.profit && report.profit.margin) + ' | ' + formatWeeklyNumber(profitTarget.revenueTarget) + ' | ' + formatWeeklyRate(profitTarget.revenueRate) + ' | ' + formatWeeklyNumber(profitTarget.target) + ' | ' + formatWeeklyRate(profitTarget.rate));
     lines.push(weeklyPerCapitaMarginText(report));
     lines.push(weeklyYoYText(report));
     lines.push('');
@@ -1850,10 +2275,10 @@ module.exports = function createAgentRoutes(deps) {
     const accountMap = strictAccountMap(report.accounts || []);
     const revenueRows = rows.revenueRows.map(function(row) {
       const item = weeklyRevenueFor(report, row[0]);
-      return '<tr>' + td(row[0]) + td(row[1]) + td(formatWeeklyNumber(item.revenue)) + td(formatWeeklyNumber(item.margin)) + td('0') + td('0') + td(formatWeeklyNumber(item.revenue)) + td(formatWeeklyNumber(item.margin)) + td(formatWeeklyNumber(weeklyTargetMarginFor(report, row[0]))) + td(formatWeeklyRate(weeklyCompletionRateFor(report, row[0]))) + '</tr>';
+      return '<tr>' + td(row[0]) + td(row[1]) + td(formatWeeklyNumber(item.revenue)) + td(formatWeeklyNumber(item.margin)) + td('0') + td('0') + td(formatWeeklyNumber(item.revenue)) + td(formatWeeklyNumber(item.margin)) + td('0') + td('0%') + td(formatWeeklyNumber(weeklyTargetMarginFor(report, row[0]))) + td(formatWeeklyRate(weeklyCompletionRateFor(report, row[0]))) + '</tr>';
     }).join('');
     const profitTarget = weeklyProfitTargetSummary(report);
-    const revenueTotal = '<tr class="total-row">' + td('合计') + td('') + td(formatWeeklyNumber(report.profit && report.profit.revenue)) + td(formatWeeklyNumber(report.profit && report.profit.margin)) + td('0') + td('0') + td(formatWeeklyNumber(report.profit && report.profit.revenue)) + td(formatWeeklyNumber(report.profit && report.profit.margin)) + td(formatWeeklyNumber(profitTarget.target)) + td(formatWeeklyRate(profitTarget.rate)) + '</tr>';
+    const revenueTotal = '<tr class="total-row">' + td('合计') + td('') + td(formatWeeklyNumber(report.profit && report.profit.revenue)) + td(formatWeeklyNumber(report.profit && report.profit.margin)) + td('0') + td('0') + td(formatWeeklyNumber(report.profit && report.profit.revenue)) + td(formatWeeklyNumber(report.profit && report.profit.margin)) + td(formatWeeklyNumber(profitTarget.revenueTarget)) + td(formatWeeklyRate(profitTarget.revenueRate)) + td(formatWeeklyNumber(profitTarget.target)) + td(formatWeeklyRate(profitTarget.rate)) + '</tr>';
     const accountRows = rows.accountDataRows.map(function(row) {
       const stats = weeklyScheduleFor(report, row[0]);
       return '<tr>' + td(row[0]) + td(row[1]) + td(formatWeeklyCount(stats.commercial)) + td(formatWeeklyCount(stats.ecology)) + td(formatWeeklyCount(stats.daily)) + td(formatWeeklyCount(stats.total)) + td(weeklyFollowerDeltaFor(report, row[0])) + '</tr>';
@@ -1872,7 +2297,7 @@ module.exports = function createAgentRoutes(deps) {
       '<h1>' + htmlEscape(strictWeeklyTitle(report)) + '</h1>',
       '<h2>截止当前本月的营收情况</h2>',
       '<table>',
-      '<tr>' + th('账号昵称', 'rowspan="2"') + th('平台', 'rowspan="2"') + th('已执行', 'colspan="2"') + th('预估', 'colspan="2"') + th('合计', 'colspan="2"') + th('目标毛利', 'rowspan="2"') + th('目标完成率', 'rowspan="2"') + '</tr>',
+      '<tr>' + th('账号昵称', 'rowspan="2"') + th('平台', 'rowspan="2"') + th('已执行', 'colspan="2"') + th('预估', 'colspan="2"') + th('合计', 'colspan="2"') + th('目标流水', 'rowspan="2"') + th('流水完成率', 'rowspan="2"') + th('目标毛利', 'rowspan="2"') + th('目标完成率', 'rowspan="2"') + '</tr>',
       '<tr>' + th('集团流水') + th('部门毛利') + th('集团流水') + th('部门毛利') + th('集团流水') + th('部门毛利') + '</tr>',
       revenueRows,
       revenueTotal,
@@ -1896,6 +2321,158 @@ module.exports = function createAgentRoutes(deps) {
       workHourLines,
       '<h2>4、当周工作计划</h2>',
       planLines,
+      '</body></html>'
+    ].join('');
+  }
+
+  function renderLatestWeeklyReportText(report) {
+    const rows = weeklyRowsForGroup(report.group);
+    const revenueDetailRows = weeklyRevenueDetailRows(report);
+    const scheduleTotals = totalScheduleCounts(report);
+    const profitTarget = weeklyProfitTargetSummary(report);
+    const lines = [];
+    lines.push(latestWeeklyTitle(report));
+    lines.push(latestWeeklyMeetingDate(report));
+    lines.push('');
+    lines.push('一、本月业绩情况');
+    lines.push('1、营收数据');
+    lines.push('账号昵称 | 平台 | 已执行-集团流水 | 已执行-部门毛利 | 合计-集团流水 | 合计-部门毛利 | 目标流水 | 流水完成率 | 目标毛利 | 目标毛利完成率');
+    revenueDetailRows.forEach(function(row, index) {
+      const item = weeklyRevenueFor(report, row[0]);
+      const goals = index === 0
+        ? [profitTarget.revenueTarget ? formatWeeklyNumber(profitTarget.revenueTarget) : '', profitTarget.revenueTarget ? formatWeeklyRate(profitTarget.revenueRate) : '', profitTarget.target ? formatWeeklyNumber(profitTarget.target) : '', profitTarget.target ? formatWeeklyRate(profitTarget.rate) : '']
+        : ['', '', '', ''];
+      lines.push([row[0], row[1], formatWeeklyNumber(item.revenue), formatWeeklyNumber(item.margin), formatWeeklyNumber(item.revenue), formatWeeklyNumber(item.margin)].concat(goals).join(' | '));
+    });
+    lines.push('合计 |  | ' + formatWeeklyNumber(report.profit && report.profit.revenue) + ' | ' + formatWeeklyNumber(report.profit && report.profit.margin) + ' | ' + formatWeeklyNumber(report.profit && report.profit.revenue) + ' | ' + formatWeeklyNumber(report.profit && report.profit.margin) + ' |  |  |  | ');
+    lines.push(latestWeeklyMonthLabel(report) + '截止目前共计锁档' + formatWeeklyCount(report.profit && report.profit.count) + '单，部门毛利预估' + formatWeeklyWan(report.profit && report.profit.margin) + '万，人均' + formatWeeklyWan(report.profit && report.profit.per_capita_margin) + '万（实习生除外）。');
+    lines.push('');
+    lines.push('二、战略执行项');
+    lines.push('1、完成进度、预计完成时间及卡点');
+    const strategyLines = weeklyStrategyLines(report);
+    if (strategyLines.length) strategyLines.forEach(function(item) { lines.push(item); });
+    else lines.push(weeklyStrategyStatus(report) || '待补充');
+    lines.push('');
+    lines.push('三、账号运营');
+    lines.push('账号昵称 | 平台 | 负责人 | 月更新目标 | 已发布数量 | 缺口 | 净增粉 | 运营情况说明');
+    rows.accountDataRows.forEach(function(row) {
+      lines.push(row[0] + ' | ' + row[1] + ' | ' + latestWeeklyAccountOwner(report, row[0]) + ' | ' + latestWeeklyUpdateTarget(report, row[0]) + ' | ' + formatWeeklyCount(weeklyMonthPublishedFor(report, row[0])) + ' | ' + latestWeeklyAccountGap(report, row[0]) + ' | ' + weeklyFollowerDeltaFor(report, row[0]) + ' | ' + latestWeeklyAccountNote(report, row[0]));
+    });
+    lines.push('合计 |  |  | ' + formatWeeklyCount(totalWeeklyUpdateTarget(report)) + ' | ' + formatWeeklyCount(totalWeeklyMonthPublished(report)) + ' | ' + formatWeeklyCount(totalWeeklyUpdateGap(report)) + ' | ' + totalFollowerDelta(report) + ' | ' + manualWeeklyText(report, 'summaryText', autoWeeklySummary(report)));
+    lines.push('');
+    lines.push('四、项目进度');
+    lines.push('产品 | 营销标的 | 参与角色 | 负责人 | 合同金额 | 项目进度说明');
+    const projectRows = latestWeeklyProjectRows(report);
+    if (projectRows.length) {
+      projectRows.forEach(function(row) {
+        lines.push([row.product, row.target, row.role, row.owner, row.amount, row.progress].join(' | '));
+      });
+    } else {
+      lines.push('内容电商 | 产品方/资产方 |  |  |  | ');
+    }
+    lines.push('');
+    lines.push('五、AI工作台开发');
+    latestWeeklyWorkBenchLines(report).forEach(function(item) { lines.push(item); });
+    lines.push('');
+    lines.push('六、工时与人员情况');
+    lines.push('姓名 | 工时 | 特殊情况说明');
+    if ((report.work_hours || []).length) {
+      (report.work_hours || []).forEach(function(item) {
+        lines.push((item.name || '') + ' | ' + (item.hours || '') + ' | ');
+      });
+    } else {
+      lines.push((rows.leader || '') + ' |  | ');
+    }
+    lines.push('实习生/新人的学习进度；老员工是否有异常等');
+    lines.push('');
+    lines.push('七、本周工作计划');
+    const plans = latestWeeklyPlanGroups(report);
+    const planOffset = report.schedule && report.schedule.snapshot_path ? 1 : 0;
+    if (planOffset) lines.push('1、本周排期看板（见周报截图）');
+    lines.push((1 + planOffset) + '、账号日常与商单');
+    weeklyNumberedItems(plans.account).forEach(function(item) { lines.push(item); });
+    lines.push((2 + planOffset) + '、项目跟进');
+    weeklyNumberedItems(plans.project).forEach(function(item) { lines.push(item); });
+    lines.push((3 + planOffset) + '、工作台开发与使用');
+    weeklyNumberedItems(plans.workbench).forEach(function(item) { lines.push(item); });
+    lines.push((4 + planOffset) + '、其他');
+    weeklyNumberedItems(plans.other).forEach(function(item) { lines.push(item); });
+    return lines.join('\n');
+  }
+
+  function renderLatestWeeklyReportHtml(report) {
+    function td(value, attrs) {
+      return '<td' + (attrs ? ' ' + attrs : '') + '>' + htmlEscape(strictBlank(value)) + '</td>';
+    }
+    function th(value, attrs) {
+      return '<th' + (attrs ? ' ' + attrs : '') + '>' + htmlEscape(strictBlank(value)) + '</th>';
+    }
+    function pLines(lines) {
+      return (lines || []).map(function(item) { return '<p>' + htmlEscape(item) + '</p>'; }).join('');
+    }
+    const rows = weeklyRowsForGroup(report.group);
+    const scheduleTotals = totalScheduleCounts(report);
+    const profitTarget = weeklyProfitTargetSummary(report);
+    const revenueDetailRows = weeklyRevenueDetailRows(report);
+    const revenueRows = revenueDetailRows.map(function(row, index) {
+      const item = weeklyRevenueFor(report, row[0]);
+      const goals = index === 0
+        ? td(profitTarget.revenueTarget ? formatWeeklyNumber(profitTarget.revenueTarget) : '', 'rowspan="' + revenueDetailRows.length + '" class="goal-cell"')
+          + td(profitTarget.revenueTarget ? formatWeeklyRate(profitTarget.revenueRate) : '', 'rowspan="' + revenueDetailRows.length + '" class="goal-cell"')
+          + td(profitTarget.target ? formatWeeklyNumber(profitTarget.target) : '', 'rowspan="' + revenueDetailRows.length + '" class="goal-cell"')
+          + td(profitTarget.target ? formatWeeklyRate(profitTarget.rate) : '', 'rowspan="' + revenueDetailRows.length + '" class="goal-cell"')
+        : '';
+      return '<tr class="detail-row">' + td(row[0]) + td(row[1]) + td(formatWeeklyNumber(item.revenue)) + td(formatWeeklyNumber(item.margin)) + td(formatWeeklyNumber(item.revenue)) + td(formatWeeklyNumber(item.margin)) + goals + '</tr>';
+    }).join('');
+    const accountRows = rows.accountDataRows.map(function(row) {
+      return '<tr>' + td(row[0]) + td(row[1]) + td(latestWeeklyAccountOwner(report, row[0])) + td(latestWeeklyUpdateTarget(report, row[0])) + td(formatWeeklyCount(weeklyMonthPublishedFor(report, row[0]))) + td(latestWeeklyAccountGap(report, row[0])) + td(weeklyFollowerDeltaFor(report, row[0])) + td(latestWeeklyAccountNote(report, row[0])) + '</tr>';
+    }).join('');
+    const projectRows = latestWeeklyProjectRows(report);
+    const projectHtml = (projectRows.length ? projectRows : [{ product: '内容电商', target: '产品方/资产方', role: '', owner: '', amount: '', progress: '' }]).map(function(row) {
+      return '<tr>' + td(row.product) + td(row.target) + td(row.role) + td(row.owner) + td(row.amount) + td(row.progress) + '</tr>';
+    }).join('');
+    const workHours = (report.work_hours || []).length ? report.work_hours : [{ name: rows.leader || '', hours: '' }];
+    const workHourHtml = workHours.map(function(item) { return '<tr>' + td(item.name || '') + td(item.hours || '') + td('') + '</tr>'; }).join('');
+    const plans = latestWeeklyPlanGroups(report);
+    const scheduleSnapshot = report.schedule && report.schedule.snapshot_url
+      ? '<h3>1、本周排期看板</h3><img class="schedule-shot" src="' + htmlEscape(report.schedule.snapshot_url) + '" alt="本周排期看板">'
+      : '';
+    const planOffset = scheduleSnapshot ? 1 : 0;
+    return [
+      '<!DOCTYPE html><html><head><meta charset="utf-8"><title>' + htmlEscape(latestWeeklyTitle(report)) + '</title>',
+      '<style>@page{margin:1.35cm;}body{font-family:"Microsoft YaHei",SimSun,sans-serif;color:#243142;line-height:1.55;font-size:11.5pt;}h1{font-size:21pt;text-align:center;margin:0 0 8px;font-weight:700;color:#17365d;letter-spacing:.5px;}h2{font-size:14.5pt;margin:20px 0 8px;padding:5px 9px;border-left:5px solid #2f75b5;background:#eaf2f8;color:#17365d;}h3{font-size:12pt;margin:12px 0 6px;color:#2f5597;}table{border-collapse:collapse;width:100%;table-layout:fixed;margin:7px 0 14px;box-shadow:0 1px 3px rgba(0,0,0,.08);}th,td{border:1px solid #9fbad0;padding:7px 5px;text-align:center;vertical-align:middle;font-size:9.3pt;}th{font-weight:700;background:#1f4e78;color:#fff;}.blue{background:#4472c4}.yellow{background:#bf9000}.detail-row:nth-child(even) td:not(.goal-cell){background:#f7fafc}.goal-cell{background:#fff2cc!important;color:#7f6000;font-weight:700;font-size:10pt;}.total-row td{background:#d9eaf7;color:#c00000;font-weight:700;border-top:2px solid #2f75b5;}.schedule-shot{display:block;width:100%;height:auto;border:1px solid #c8d8e5;border-radius:8px;margin:7px 0 14px;}p{margin:5px 0;}</style>',
+      '</head><body>',
+      '<h1>' + htmlEscape(latestWeeklyTitle(report)) + '</h1>',
+      '<p>' + htmlEscape(latestWeeklyMeetingDate(report)) + '</p>',
+      '<h2>一、本月业绩情况</h2>',
+      '<h3>1、营收数据</h3>',
+      '<table>',
+      '<tr>' + th('账号昵称', 'rowspan="2"') + th('平台', 'rowspan="2"') + th('已执行', 'colspan="2" class="blue"') + th('合计', 'colspan="2" class="yellow"') + th('目标流水', 'rowspan="2"') + th('流水完成率', 'rowspan="2"') + th('目标毛利', 'rowspan="2"') + th('目标毛利完成率', 'rowspan="2"') + '</tr>',
+      '<tr>' + th('集团流水', 'class="blue"') + th('部门毛利', 'class="blue"') + th('集团流水', 'class="yellow"') + th('部门毛利', 'class="yellow"') + '</tr>',
+      revenueRows,
+      '<tr class="total-row">' + td('合计') + td('') + td(formatWeeklyNumber(report.profit && report.profit.revenue)) + td(formatWeeklyNumber(report.profit && report.profit.margin)) + td(formatWeeklyNumber(report.profit && report.profit.revenue)) + td(formatWeeklyNumber(report.profit && report.profit.margin)) + td('') + td('') + td('') + td('') + '</tr>',
+      '</table>',
+      '<p>' + htmlEscape(latestWeeklyMonthLabel(report) + '截止目前共计锁档' + formatWeeklyCount(report.profit && report.profit.count) + '单，部门毛利预估' + formatWeeklyWan(report.profit && report.profit.margin) + '万，人均' + formatWeeklyWan(report.profit && report.profit.per_capita_margin) + '万（实习生除外）。') + '</p>',
+      '<h2>二、战略执行项</h2>',
+      '<h3>1、完成进度、预计完成时间及卡点</h3>',
+      pLines(weeklyStrategyLines(report).length ? weeklyStrategyLines(report) : [weeklyStrategyStatus(report) || '待补充']),
+      '<h2>三、账号运营</h2>',
+      '<table><tr>' + th('账号昵称') + th('平台') + th('负责人') + th('月更新目标') + th('已发布数量') + th('缺口') + th('净增粉') + th('运营情况说明') + '</tr>',
+      accountRows,
+      '<tr class="total-row">' + td('合计') + td('') + td('') + td(formatWeeklyCount(totalWeeklyUpdateTarget(report))) + td(formatWeeklyCount(totalWeeklyMonthPublished(report))) + td(formatWeeklyCount(totalWeeklyUpdateGap(report))) + td(totalFollowerDelta(report)) + td(manualWeeklyText(report, 'summaryText', autoWeeklySummary(report))) + '</tr></table>',
+      '<h2>四、项目进度</h2>',
+      '<table><tr>' + th('产品') + th('营销标的') + th('参与角色') + th('负责人') + th('合同金额') + th('项目进度说明') + '</tr>' + projectHtml + '</table>',
+      '<h2>五、AI工作台开发</h2>',
+      pLines(latestWeeklyWorkBenchLines(report)),
+      '<h2>六、工时与人员情况</h2>',
+      '<table><tr>' + th('姓名') + th('工时') + th('特殊情况说明') + '</tr>' + workHourHtml + '</table>',
+      '<p>实习生/新人的学习进度；老员工是否有异常等</p>',
+      '<h2>七、本周工作计划</h2>',
+      scheduleSnapshot,
+      '<h3>' + (1 + planOffset) + '、账号日常与商单</h3>' + pLines(weeklyNumberedItems(plans.account)),
+      '<h3>' + (2 + planOffset) + '、项目跟进</h3>' + pLines(weeklyNumberedItems(plans.project)),
+      '<h3>' + (3 + planOffset) + '、工作台开发与使用</h3>' + pLines(weeklyNumberedItems(plans.workbench)),
+      '<h3>' + (4 + planOffset) + '、其他</h3>' + pLines(weeklyNumberedItems(plans.other)),
       '</body></html>'
     ].join('');
   }
@@ -2005,111 +2582,240 @@ module.exports = function createAgentRoutes(deps) {
       '</w:tbl>' + docxParagraph('', { spacing: 80 });
   }
 
-  function createWeeklyDocumentXml(report) {
+  function docxImage(relId, width, height) {
+    const imageWidth = Math.max(Number(width || 1600), 1);
+    const imageHeight = Math.max(Number(height || 900), 1);
+    const cx = 5486400;
+    const cy = Math.round(cx * imageHeight / imageWidth);
+    return '<w:p><w:pPr><w:jc w:val="center"/><w:spacing w:after="120"/></w:pPr><w:r><w:drawing>' +
+      '<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" distT="0" distB="0" distL="0" distR="0">' +
+      '<wp:extent cx="' + cx + '" cy="' + cy + '"/><wp:docPr id="1" name="本周排期看板"/>' +
+      '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+      '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:nvPicPr><pic:cNvPr id="0" name="schedule.png"/><pic:cNvPicPr/></pic:nvPicPr>' +
+      '<pic:blipFill><a:blip xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:embed="' + relId + '"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
+      '<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="' + cx + '" cy="' + cy + '"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>' +
+      '</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>';
+  }
+
+  function edgeBinaryForWeeklyScreenshot() {
+    const candidates = [
+      path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'Microsoft', 'Edge', 'Application', 'msedge.exe'),
+      path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'Edge', 'Application', 'msedge.exe')
+    ];
+    return candidates.find(function(file) { return file && fs.existsSync(file); }) || '';
+  }
+
+  function weeklyScheduleSnapshotHtml(report) {
+    const schedule = report.schedule || {};
+    const range = schedule.plan_range || {};
+    const tasks = Array.isArray(schedule.plan_tasks) ? schedule.plan_tasks : [];
+    const dates = [];
+    const start = new Date(String(range.start || '') + 'T00:00:00');
+    if (Number.isFinite(start.getTime())) {
+      for (let index = 0; index < 7; index += 1) {
+        const date = new Date(start);
+        date.setDate(start.getDate() + index);
+        dates.push(date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0'));
+      }
+    }
+    const weekday = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'];
+    const columns = dates.map(function(date, index) {
+      const items = tasks.filter(function(task) { return String(task && task.date || '').slice(0, 10) === date; });
+      const cards = items.length ? items.map(function(task) {
+        const stackLabel = isMaterialScheduleTask(task) && materialTaskUnits(task) > 1 ? 'x' + materialTaskUnits(task) : '';
+        const meta = [task.person, task.account, task.type, stackLabel].map(function(value) { return String(value || '').trim(); }).filter(Boolean).join(' · ');
+        const content = cleanScheduleContent(task.content || task.remark || '待补充');
+        return '<article><strong>' + htmlEscape(content) + '</strong><span>' + htmlEscape(meta) + '</span></article>';
+      }).join('') : '<div class="empty">暂无排期</div>';
+      return '<section><header><b>' + weekday[index] + '</b><small>' + htmlEscape(date.slice(5).replace('-', '/')) + '</small></header>' + cards + '</section>';
+    }).join('');
+    return '<!doctype html><html><head><meta charset="utf-8"><style>' +
+      '*{box-sizing:border-box}body{margin:0;background:#eef3f7;color:#203040;font-family:"Microsoft YaHei",sans-serif;padding:34px}' +
+      '.title{display:flex;justify-content:space-between;align-items:end;margin-bottom:22px}.title h1{margin:0;color:#17365d;font-size:30px}.title p{margin:0;color:#66788a;font-size:16px}' +
+      '.board{display:grid;grid-template-columns:repeat(7,1fr);gap:12px;align-items:start}section{background:#fff;border:1px solid #c8d8e5;border-radius:14px;min-height:500px;overflow:hidden;box-shadow:0 5px 18px rgba(25,62,92,.08)}' +
+      'header{padding:13px 14px;background:#1f4e78;color:#fff;display:flex;justify-content:space-between;align-items:center}header b{font-size:18px}header small{opacity:.82}' +
+      'article{margin:10px;padding:11px;border-left:4px solid #e5a93d;border-radius:8px;background:#fff8e9;min-height:78px}article strong{display:block;font-size:14px;line-height:1.45;margin-bottom:8px}article span{display:block;color:#6b7785;font-size:12px;line-height:1.4}.empty{padding:22px 10px;text-align:center;color:#a0aab4;font-size:13px}' +
+      '</style></head><body><div class="title"><h1>' + htmlEscape(report.group + ' · 本周排期看板') + '</h1><p>' + htmlEscape((range.start || '') + ' 至 ' + (range.end || '')) + '</p></div><div class="board">' + columns + '</div></body></html>';
+  }
+
+  async function createWeeklyScheduleSnapshot(report, req) {
+    const edge = edgeBinaryForWeeklyScreenshot();
+    if (!edge) return null;
+    const outputDir = path.join(root, 'public', 'uploads', 'weekly-reports');
+    fs.mkdirSync(outputDir, { recursive: true });
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'usagi-weekly-schedule-'));
+    const htmlPath = path.join(tempDir, 'schedule.html');
+    const filename = safeDocFileName('schedule-' + report.group + '-' + (report.schedule && report.schedule.plan_range && report.schedule.plan_range.start || '') + '-' + Date.now().toString(36)) + '.png';
+    const outputPath = path.join(outputDir, filename);
+    fs.writeFileSync(htmlPath, weeklyScheduleSnapshotHtml(report), 'utf8');
+    const planTasks = Array.isArray(report.schedule && report.schedule.plan_tasks) ? report.schedule.plan_tasks : [];
+    const perDay = new Map();
+    planTasks.forEach(function(task) {
+      const date = String(task && task.date || '').slice(0, 10);
+      if (date) perDay.set(date, (perDay.get(date) || 0) + 1);
+    });
+    const maxPerDay = Math.max(0, ...perDay.values());
+    const height = Math.max(760, Math.min(1800, 230 + maxPerDay * 100));
+    const ok = await new Promise(function(resolve) {
+      const child = spawn(edge, [
+        '--headless=new', '--disable-gpu', '--hide-scrollbars', '--run-all-compositor-stages-before-draw',
+        '--user-data-dir=' + path.join(tempDir, 'edge-profile'),
+        '--window-size=1600,' + height, '--screenshot=' + outputPath,
+        'file:///' + htmlPath.replace(/\\/g, '/')
+      ], { windowsHide: true, stdio: 'ignore' });
+      const timer = setTimeout(function() { try { child.kill(); } catch (e) {} resolve(false); }, 20000);
+      child.on('error', function() { clearTimeout(timer); resolve(false); });
+      child.on('close', function(code) { clearTimeout(timer); resolve(code === 0 && fs.existsSync(outputPath)); });
+    });
+    try { fs.rmSync(tempDir, { recursive: true, force: true }); } catch (e) {}
+    if (!ok) return null;
+    const relativeUrl = '/uploads/weekly-reports/' + encodeURIComponent(filename);
+    return { path: outputPath, relative_url: relativeUrl, url: absolutePublicUrl(relativeUrl, req), width: 1600, height: height };
+  }
+
+  function createLatestWeeklyDocumentXml(report) {
     const rows = weeklyRowsForGroup(report.group);
-    const accountMap = strictAccountMap(report.accounts || []);
+    const revenueDetailRows = weeklyRevenueDetailRows(report);
     const scheduleTotals = totalScheduleCounts(report);
-    const revenueWidths = [1153, 491, 1096, 1096, 1096, 1096, 1096, 1096, 822, 993];
-    const accountWidths = [1326, 945, 1350, 1298, 1365, 1365, 1365];
+    const revenueWidths = [1050, 620, 1100, 1100, 1100, 1100, 950, 950, 950, 1050];
+    const accountWidths = [1200, 900, 900, 1100, 1100, 900, 900, 2800];
+    const projectWidths = [900, 1200, 900, 900, 900, 4200];
+    const workHourWidths = [2200, 2200, 7000];
     function revenueCell(index, text, options) {
       return docxCell(text, Object.assign({ width: revenueWidths[index] || 1200 }, options || {}));
     }
     function accountCell(index, text, options) {
       return docxCell(text, Object.assign({ width: accountWidths[index] || 1200 }, options || {}));
     }
+    function projectCell(index, text, options) {
+      return docxCell(text, Object.assign({ width: projectWidths[index] || 1200 }, options || {}));
+    }
+    function workHourCell(index, text, options) {
+      return docxCell(text, Object.assign({ width: workHourWidths[index] || 1200 }, options || {}));
+    }
     const revenueTable = [
       [
-        revenueCell(0, '账号昵称', { bold: true, shade: 'F2F2F2', vMerge: 'restart' }),
-        revenueCell(1, '平台', { bold: true, shade: 'F2F2F2', vMerge: 'restart' }),
-        revenueCell(2, '已执行', { bold: true, shade: 'F2F2F2', gridSpan: 2, width: revenueWidths[2] + revenueWidths[3] }),
-        revenueCell(4, '预估', { bold: true, shade: 'F2F2F2', gridSpan: 2, width: revenueWidths[4] + revenueWidths[5] }),
-        revenueCell(6, '合计', { bold: true, shade: 'F2F2F2', gridSpan: 2, width: revenueWidths[6] + revenueWidths[7] }),
-        revenueCell(8, '目标毛利', { bold: true, shade: 'F2F2F2', vMerge: 'restart' }),
-        revenueCell(9, '目标完成率', { bold: true, shade: 'F2F2F2', vMerge: 'restart' })
+        revenueCell(0, '账号昵称', { bold: true, shade: '1F4E78', color: 'FFFFFF', vMerge: 'restart' }),
+        revenueCell(1, '平台', { bold: true, shade: '1F4E78', color: 'FFFFFF', vMerge: 'restart' }),
+        revenueCell(2, '已执行', { bold: true, shade: '4472C4', color: 'FFFFFF', gridSpan: 2, width: revenueWidths[2] + revenueWidths[3] }),
+        revenueCell(4, '合计', { bold: true, shade: 'BF9000', color: 'FFFFFF', gridSpan: 2, width: revenueWidths[4] + revenueWidths[5] }),
+        revenueCell(6, '目标流水', { bold: true, shade: '1F4E78', color: 'FFFFFF', vMerge: 'restart' }),
+        revenueCell(7, '流水完成率', { bold: true, shade: '1F4E78', color: 'FFFFFF', vMerge: 'restart' }),
+        revenueCell(8, '目标毛利', { bold: true, shade: '1F4E78', color: 'FFFFFF', vMerge: 'restart' }),
+        revenueCell(9, '目标毛利完成率', { bold: true, shade: '1F4E78', color: 'FFFFFF', vMerge: 'restart' })
       ],
       [
         revenueCell(0, '', { bold: true, shade: 'F2F2F2', vMerge: 'continue' }),
         revenueCell(1, '', { bold: true, shade: 'F2F2F2', vMerge: 'continue' }),
-        revenueCell(2, '集团流水', { bold: true, shade: 'F2F2F2' }),
-        revenueCell(3, '部门毛利', { bold: true, shade: 'F2F2F2' }),
-        revenueCell(4, '集团流水', { bold: true, shade: 'F2F2F2' }),
-        revenueCell(5, '部门毛利', { bold: true, shade: 'F2F2F2' }),
-        revenueCell(6, '集团流水', { bold: true, shade: 'F2F2F2' }),
-        revenueCell(7, '部门毛利', { bold: true, shade: 'F2F2F2' }),
+        revenueCell(2, '集团流水', { bold: true, shade: 'D9EAF7', color: '17365D' }),
+        revenueCell(3, '部门毛利', { bold: true, shade: 'D9EAF7', color: '17365D' }),
+        revenueCell(4, '集团流水', { bold: true, shade: 'FFF2CC', color: '7F6000' }),
+        revenueCell(5, '部门毛利', { bold: true, shade: 'FFF2CC', color: '7F6000' }),
+        revenueCell(6, '', { bold: true, shade: 'F2F2F2', vMerge: 'continue' }),
+        revenueCell(7, '', { bold: true, shade: 'F2F2F2', vMerge: 'continue' }),
         revenueCell(8, '', { bold: true, shade: 'F2F2F2', vMerge: 'continue' }),
         revenueCell(9, '', { bold: true, shade: 'F2F2F2', vMerge: 'continue' })
       ]
     ];
-    rows.revenueRows.forEach(function(row) {
+    const profitTarget = weeklyProfitTargetSummary(report);
+    revenueDetailRows.forEach(function(row, index) {
       const item = weeklyRevenueFor(report, row[0]);
+      const stripe = index % 2 ? 'F7FAFC' : 'FFFFFF';
+      const merge = index === 0 ? 'restart' : 'continue';
       revenueTable.push([
-        revenueCell(0, row[0]),
-        revenueCell(1, row[1]),
-        revenueCell(2, formatWeeklyNumber(item.revenue)),
-        revenueCell(3, formatWeeklyNumber(item.margin)),
-        revenueCell(4, '0'),
-        revenueCell(5, '0'),
-        revenueCell(6, formatWeeklyNumber(item.revenue)),
-        revenueCell(7, formatWeeklyNumber(item.margin)),
-        revenueCell(8, formatWeeklyNumber(weeklyTargetMarginFor(report, row[0]))),
-        revenueCell(9, formatWeeklyRate(weeklyCompletionRateFor(report, row[0])))
+        revenueCell(0, row[0], { shade: stripe }),
+        revenueCell(1, row[1], { shade: stripe }),
+        revenueCell(2, formatWeeklyNumber(item.revenue), { shade: stripe }),
+        revenueCell(3, formatWeeklyNumber(item.margin), { shade: stripe }),
+        revenueCell(4, formatWeeklyNumber(item.revenue), { shade: stripe }),
+        revenueCell(5, formatWeeklyNumber(item.margin), { shade: stripe }),
+        revenueCell(6, index === 0 && profitTarget.revenueTarget ? formatWeeklyNumber(profitTarget.revenueTarget) : '', { bold: true, shade: 'FFF2CC', color: '7F6000', vMerge: merge }),
+        revenueCell(7, index === 0 && profitTarget.revenueTarget ? formatWeeklyRate(profitTarget.revenueRate) : '', { bold: true, shade: 'FFF2CC', color: '7F6000', vMerge: merge }),
+        revenueCell(8, index === 0 && profitTarget.target ? formatWeeklyNumber(profitTarget.target) : '', { bold: true, shade: 'FFF2CC', color: '7F6000', vMerge: merge }),
+        revenueCell(9, index === 0 && profitTarget.target ? formatWeeklyRate(profitTarget.rate) : '', { bold: true, shade: 'FFF2CC', color: '7F6000', vMerge: merge })
       ]);
     });
-    const profitTarget = weeklyProfitTargetSummary(report);
     revenueTable.push([
-      revenueCell(0, '合计', { bold: true, color: 'FF0000' }),
-      revenueCell(1, '', { color: 'FF0000' }),
-      revenueCell(2, formatWeeklyNumber(report.profit && report.profit.revenue), { bold: true, color: 'FF0000' }),
-      revenueCell(3, formatWeeklyNumber(report.profit && report.profit.margin), { bold: true, color: 'FF0000' }),
-      revenueCell(4, '0', { color: 'FF0000' }),
-      revenueCell(5, '0', { color: 'FF0000' }),
-      revenueCell(6, formatWeeklyNumber(report.profit && report.profit.revenue), { bold: true, color: 'FF0000' }),
-      revenueCell(7, formatWeeklyNumber(report.profit && report.profit.margin), { bold: true, color: 'FF0000' }),
-      revenueCell(8, formatWeeklyNumber(profitTarget.target), { color: 'FF0000' }),
-      revenueCell(9, formatWeeklyRate(profitTarget.rate), { color: 'FF0000' })
+      revenueCell(0, '合计', { bold: true, color: 'C00000', shade: 'D9EAF7' }),
+      revenueCell(1, '', { color: 'C00000', shade: 'D9EAF7' }),
+      revenueCell(2, formatWeeklyNumber(report.profit && report.profit.revenue), { bold: true, color: 'C00000', shade: 'D9EAF7' }),
+      revenueCell(3, formatWeeklyNumber(report.profit && report.profit.margin), { bold: true, color: 'C00000', shade: 'D9EAF7' }),
+      revenueCell(4, formatWeeklyNumber(report.profit && report.profit.revenue), { bold: true, color: 'C00000', shade: 'D9EAF7' }),
+      revenueCell(5, formatWeeklyNumber(report.profit && report.profit.margin), { bold: true, color: 'C00000', shade: 'D9EAF7' }),
+      revenueCell(6, '', { shade: 'D9EAF7' }),
+      revenueCell(7, '', { shade: 'D9EAF7' }),
+      revenueCell(8, '', { shade: 'D9EAF7' }),
+      revenueCell(9, '', { shade: 'D9EAF7' })
     ]);
-    const accountTable = [['账号昵称', '平台', '商业化条数', '生态项目', '日常条数', '总发布条数', '净增粉'].map(function(text, index) { return accountCell(index, text, { bold: true, shade: 'F2F2F2' }); })];
-    rows.accountDataRows.forEach(function(row) {
-      const stats = weeklyScheduleFor(report, row[0]);
-      accountTable.push([accountCell(0, row[0]), accountCell(1, row[1]), accountCell(2, formatWeeklyCount(stats.commercial)), accountCell(3, formatWeeklyCount(stats.ecology)), accountCell(4, formatWeeklyCount(stats.daily)), accountCell(5, formatWeeklyCount(stats.total)), accountCell(6, weeklyFollowerDeltaFor(report, row[0]))]);
+    const accountTable = [['账号昵称', '平台', '负责人', '月更新目标', '已发布数量', '缺口', '净增粉', '运营情况说明'].map(function(text, index) { return accountCell(index, text, { bold: true, shade: '1F4E78', color: 'FFFFFF' }); })];
+    rows.accountDataRows.forEach(function(row, index) {
+      const shade = index % 2 ? 'F7FAFC' : 'FFFFFF';
+      accountTable.push([accountCell(0, row[0], { shade: shade }), accountCell(1, row[1], { shade: shade }), accountCell(2, latestWeeklyAccountOwner(report, row[0]), { shade: shade }), accountCell(3, latestWeeklyUpdateTarget(report, row[0]), { shade: 'E2F0D9', bold: true }), accountCell(4, formatWeeklyCount(weeklyMonthPublishedFor(report, row[0])), { shade: shade }), accountCell(5, latestWeeklyAccountGap(report, row[0]), { shade: 'FFF2CC', bold: true }), accountCell(6, weeklyFollowerDeltaFor(report, row[0]), { shade: shade }), accountCell(7, latestWeeklyAccountNote(report, row[0]), { shade: shade })]);
     });
-    accountTable.push([accountCell(0, '合计', { bold: true, color: 'FF0000' }), accountCell(1, '', { color: 'FF0000' }), accountCell(2, formatWeeklyCount(scheduleTotals.commercial), { bold: true, color: 'FF0000' }), accountCell(3, formatWeeklyCount(scheduleTotals.ecology), { bold: true, color: 'FF0000' }), accountCell(4, formatWeeklyCount(scheduleTotals.daily), { bold: true, color: 'FF0000' }), accountCell(5, formatWeeklyCount(scheduleTotals.total), { bold: true, color: 'FF0000' }), accountCell(6, totalFollowerDelta(report), { color: 'FF0000' })]);
+    accountTable.push([accountCell(0, '合计', { bold: true, color: 'C00000', shade: 'D9EAF7' }), accountCell(1, '', { shade: 'D9EAF7' }), accountCell(2, '', { shade: 'D9EAF7' }), accountCell(3, formatWeeklyCount(totalWeeklyUpdateTarget(report)), { bold: true, color: 'C00000', shade: 'D9EAF7' }), accountCell(4, formatWeeklyCount(totalWeeklyMonthPublished(report)), { bold: true, color: 'C00000', shade: 'D9EAF7' }), accountCell(5, formatWeeklyCount(totalWeeklyUpdateGap(report)), { bold: true, color: 'C00000', shade: 'D9EAF7' }), accountCell(6, totalFollowerDelta(report), { color: 'C00000', shade: 'D9EAF7' }), accountCell(7, manualWeeklyText(report, 'summaryText', autoWeeklySummary(report)), { color: 'C00000', shade: 'D9EAF7' })]);
+    const projectRows = latestWeeklyProjectRows(report);
+    const projectTable = [['产品', '营销标的', '参与角色', '负责人', '合同金额', '项目进度说明'].map(function(text, index) { return projectCell(index, text, { bold: true, shade: '1F4E78', color: 'FFFFFF' }); })];
+    (projectRows.length ? projectRows : [{ product: '内容电商', target: '产品方/资产方', role: '', owner: '', amount: '', progress: '' }]).forEach(function(row) {
+      projectTable.push([projectCell(0, row.product), projectCell(1, row.target), projectCell(2, row.role), projectCell(3, row.owner), projectCell(4, row.amount), projectCell(5, row.progress)]);
+    });
+    const workHours = (report.work_hours || []).length ? report.work_hours : [{ name: rows.leader || '', hours: '' }];
+    const workHourTable = [['姓名', '工时', '特殊情况说明'].map(function(text, index) { return workHourCell(index, text, { bold: true, shade: '1F4E78', color: 'FFFFFF' }); })];
+    workHours.forEach(function(item) { workHourTable.push([workHourCell(0, item.name || ''), workHourCell(1, item.hours || ''), workHourCell(2, '')]); });
     const strategyLines = weeklyStrategyLines(report);
-    const strategyParagraphs = (strategyLines.length || weeklyStrategyStatus(report))
-      ? [docxParagraph('战略项及完成情况', { bold: true, size: 28 })]
-        .concat(strategyLines.map(function(item) { return docxParagraph(item, { size: 24 }); }))
-        .concat([docxParagraph('完成情况：' + (weeklyStrategyStatus(report) || '待补充'), { size: 24 })])
-      : [];
+    const plans = latestWeeklyPlanGroups(report);
+    const hasScheduleSnapshot = Boolean(report.schedule && report.schedule.snapshot_path);
+    const planOffset = hasScheduleSnapshot ? 1 : 0;
     const body = [
-      docxParagraph(strictWeeklyTitle(report), { align: 'center', bold: true, size: 40, spacing: 240 }),
-      docxParagraph('截止当前本月的营收情况', { bold: true, size: 28 }),
-      docxTable(revenueTable, { width: 10035, grid: revenueWidths }),
-      docxParagraph(weeklyPerCapitaMarginText(report), { size: 24 }),
-      docxParagraph(weeklyYoYText(report), { size: 24 }),
-      docxParagraph('1)本月业绩情况：', { size: 24 }),
-      docxParagraph(manualWeeklyText(report, 'performanceText', ''), { size: 24 }),
-      docxParagraph('2）落地项推进进度', { size: 24 }),
-      docxParagraph(manualWeeklyText(report, 'landingText', ''), { size: 24 }),
-      ...strategyParagraphs,
-      docxParagraph('2.上周的账号数据情况', { bold: true, size: 28 }),
-      docxTable(accountTable, { width: 9014, grid: accountWidths }),
-      docxParagraph('总结：', { size: 24 }),
-      docxParagraph(manualWeeklyText(report, 'summaryText', autoWeeklySummary(report)), { size: 24 }),
-      docxParagraph('3、工时情况', { bold: true, size: 28 })
+      docxParagraph(latestWeeklyTitle(report), { align: 'center', bold: true, size: 40, spacing: 160, color: '17365D' }),
+      docxParagraph(latestWeeklyMeetingDate(report), { size: 22, color: '5B6573' }),
+      docxParagraph('一、本月业绩情况', { bold: true, size: 28, color: '1F4E78' }),
+      docxParagraph('1、营收数据', { bold: true, size: 24, color: '2F5597' }),
+      docxTable(revenueTable, { width: 9950, grid: revenueWidths }),
+      docxParagraph(latestWeeklyMonthLabel(report) + '截止目前共计锁档' + formatWeeklyCount(report.profit && report.profit.count) + '单，部门毛利预估' + formatWeeklyWan(report.profit && report.profit.margin) + '万，人均' + formatWeeklyWan(report.profit && report.profit.per_capita_margin) + '万（实习生除外）。', { size: 24 }),
+      docxParagraph('二、战略执行项', { bold: true, size: 28, color: '1F4E78' }),
+      docxParagraph('1、完成进度、预计完成时间及卡点', { bold: true, size: 24, color: '2F5597' })
     ];
-    (report.work_hours || []).forEach(function(item) { body.push(docxParagraph((item.name || '') + '目前工时  ' + (item.hours || ''), { size: 24 })); });
-    body.push(docxParagraph('4、当周工作计划', { bold: true, size: 28 }));
-    (report.next_plans || []).forEach(function(item, idx) { body.push(docxParagraph(String.fromCharCode(9312 + idx) + item, { size: 24 })); });
+    (strategyLines.length ? strategyLines : [weeklyStrategyStatus(report) || '待补充']).forEach(function(item) { body.push(docxParagraph(item, { size: 24 })); });
+    body.push(docxParagraph('三、账号运营', { bold: true, size: 28, color: '1F4E78' }));
+    body.push(docxTable(accountTable, { width: 11200, grid: accountWidths }));
+    body.push(docxParagraph('四、项目进度', { bold: true, size: 28, color: '1F4E78' }));
+    body.push(docxTable(projectTable, { width: 10000, grid: projectWidths }));
+    body.push(docxParagraph('五、AI工作台开发', { bold: true, size: 28, color: '1F4E78' }));
+    weeklyNumberedItems(latestWeeklyWorkBenchLines(report)).forEach(function(item) { body.push(docxParagraph(item, { size: 24 })); });
+    body.push(docxParagraph('六、工时与人员情况', { bold: true, size: 28, color: '1F4E78' }));
+    body.push(docxTable(workHourTable, { width: 11400, grid: workHourWidths }));
+    body.push(docxParagraph('实习生/新人的学习进度；老员工是否有异常等', { size: 24 }));
+    body.push(docxParagraph('七、本周工作计划', { bold: true, size: 28, color: '1F4E78' }));
+    if (hasScheduleSnapshot) {
+      body.push(docxParagraph('1、本周排期看板', { bold: true, size: 24, color: '2F5597' }));
+      body.push(docxImage('rIdSchedule', report.schedule.snapshot_width, report.schedule.snapshot_height));
+    }
+    body.push(docxParagraph((1 + planOffset) + '、账号日常与商单', { bold: true, size: 24, color: '2F5597' }));
+    weeklyNumberedItems(plans.account).forEach(function(item) { body.push(docxParagraph(item, { size: 24 })); });
+    body.push(docxParagraph((2 + planOffset) + '、项目跟进', { bold: true, size: 24, color: '2F5597' }));
+    weeklyNumberedItems(plans.project).forEach(function(item) { body.push(docxParagraph(item, { size: 24 })); });
+    body.push(docxParagraph((3 + planOffset) + '、工作台开发与使用', { bold: true, size: 24, color: '2F5597' }));
+    weeklyNumberedItems(plans.workbench).forEach(function(item) { body.push(docxParagraph(item, { size: 24 })); });
+    body.push(docxParagraph((4 + planOffset) + '、其他', { bold: true, size: 24, color: '2F5597' }));
+    weeklyNumberedItems(plans.other).forEach(function(item) { body.push(docxParagraph(item, { size: 24 })); });
     body.push('<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="851" w:footer="992" w:gutter="0"/></w:sectPr>');
     return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>' + body.join('') + '</w:body></w:document>';
   }
 
   function createWeeklyDocxBuffer(report) {
-    return createZip([
-      { name: '[Content_Types].xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
+    const snapshotPath = report.schedule && report.schedule.snapshot_path;
+    const hasSnapshot = snapshotPath && fs.existsSync(snapshotPath);
+    const files = [
+      { name: '[Content_Types].xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' + (hasSnapshot ? '<Default Extension="png" ContentType="image/png"/>' : '') + '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>' },
       { name: '_rels/.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>' },
-      { name: 'word/document.xml', data: createWeeklyDocumentXml(report) }
-    ]);
+      { name: 'word/document.xml', data: createLatestWeeklyDocumentXml(report) }
+    ];
+    if (hasSnapshot) {
+      files.push({ name: 'word/_rels/document.xml.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdSchedule" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="media/schedule.png"/></Relationships>' });
+      files.push({ name: 'word/media/schedule.png', data: fs.readFileSync(snapshotPath) });
+    }
+    return createZip(files);
   }
 
   function writeWeeklyWordFile(report, req) {
@@ -2145,12 +2851,12 @@ module.exports = function createAgentRoutes(deps) {
     };
 
     update('collecting', '读取流水看板', { progress: 18 });
-    const reportMonth = monthPartsFromRange(range);
+    const reportMonth = currentMonthParts(payload);
     const profitData = await routeData('/api/profit/list', { _auth: auth, grp: group, year: reportMonth.year, month: reportMonth.month, limit: 500 });
     const lastYearProfitData = await routeData('/api/profit/list', { _auth: auth, grp: group, year: reportMonth.year ? reportMonth.year - 1 : 0, month: reportMonth.month, limit: 500 });
     const profitRows = filterWeeklyProfitRows(pickRows(profitData), group);
     const lastYearProfitRows = filterWeeklyProfitRows(pickRows(lastYearProfitData), group);
-    const monthLabel = monthLabelFromRange(range);
+    const monthLabel = monthLabelFromParts(reportMonth);
     const profit = Object.assign(summarizeProfitRows(profitRows, monthLabel), {
       last_year: summarizeProfitRows(lastYearProfitRows, monthLabel),
       yoy_basis: '按当前周报账号白名单对齐去年同月流水',
@@ -2170,6 +2876,16 @@ module.exports = function createAgentRoutes(deps) {
     const scheduleData = await routeData('/api/schedule/load', { _auth: auth });
     const scheduleRows = pickRows(scheduleData);
     const scheduleStats = groupSchedule(scheduleRows, range.start, range.end, group);
+    const monthStart = reportMonth.year && reportMonth.month
+      ? reportMonth.year + '-' + String(reportMonth.month).padStart(2, '0') + '-01'
+      : range.start;
+    const monthEndDate = reportMonth.year && reportMonth.month
+      ? new Date(reportMonth.year, reportMonth.month, 0)
+      : new Date(String(range.end || range.start) + 'T00:00:00');
+    const monthEnd = monthEndDate.getFullYear() + '-' + String(monthEndDate.getMonth() + 1).padStart(2, '0') + '-' + String(monthEndDate.getDate()).padStart(2, '0');
+    const monthlyScheduleStats = groupSchedule(scheduleRows, monthStart, monthEnd, group);
+    const planRange = weekRange(0);
+    const planScheduleStats = groupSchedule(scheduleRows, planRange.start, planRange.end, group);
 
     update('accounts', '整理账号数据', { progress: 52 });
     const linkedAccounts = parseAccountLines(payload.accountsText || '');
@@ -2199,13 +2915,17 @@ module.exports = function createAgentRoutes(deps) {
     const members = groupRows.members;
     const workHours = members.map(function(name) { return { name: name, hours: '' }; });
     const explicitPlans = Array.from(new Set(normalizeWeeklyLines(payload.nextPlansText || ''))).slice(0, 5);
-    const scheduledPlans = summarizeSchedulePlans(scheduleRows.filter(function(task) {
-      return task && task.date && task.date > range.end && taskMatchesWeeklyGroup(task, group) && !Number(task.schedule_hidden || 0);
-    }), 5);
+    const scheduledPlans = summarizeSchedulePlans(planScheduleStats.tasks, 8);
     const nextPlans = explicitPlans.length ? explicitPlans : scheduledPlans;
     const strategyItems = normalizeWeeklyLines(payload.strategyText || payload.strategyItemsText || payload.strategy_items || '').slice(0, 12);
     const strategyStatus = String(payload.strategyStatusText || payload.strategyStatus || payload.strategy_status || '').trim();
     const materialStats = materialStatsForTasks(scheduleStats.materialTasks);
+    const monthlyMaterialStats = materialStatsForTasks(monthlyScheduleStats.materialTasks);
+    const accountMetrics = {};
+    groupRows.accountDataRows.forEach(function(row) {
+      const metric = weeklyDashboardMetric(row[0], row[1]);
+      if (metric) accountMetrics[canonicalWeeklyAccountName(row[0]) + '|' + row[1]] = metric;
+    });
 
     const report = {
       title: group + '周报-' + range.start + '至' + range.end,
@@ -2214,16 +2934,23 @@ module.exports = function createAgentRoutes(deps) {
       range: range,
       profit: profit,
       schedule: {
+        tasks: scheduleStats.tasks,
         total: scheduleStats.tasks.length,
         completed: scheduleStats.completed.length,
         by_type: scheduleStats.byType,
         by_account: scheduleStats.byAccount,
+        monthly_by_account: monthlyScheduleStats.byAccount,
         material_count: materialStats.count,
         material_units: materialStats.units,
+        monthly_material_count: monthlyMaterialStats.count,
+        monthly_material_units: monthlyMaterialStats.units,
         material_tasks: scheduleStats.materialTasks,
+        plan_range: planRange,
+        plan_tasks: planScheduleStats.tasks,
         summary: ''
       },
       accounts: accountResults,
+      account_metrics: accountMetrics,
       work_hours: workHours,
       strategy_items: strategyItems,
       strategy_status: strategyStatus,
@@ -2234,16 +2961,27 @@ module.exports = function createAgentRoutes(deps) {
         summaryText: payload.summaryText || '',
         nextPlansText: payload.nextPlansText || '',
         strategyText: payload.strategyText || payload.strategyItemsText || '',
-        strategyStatusText: strategyStatus
+        strategyStatusText: strategyStatus,
+        workbenchText: payload.workbenchText || ''
       },
       generated_at: now()
     };
     applyWeeklyProfitTarget(report, payload);
     update('ai', 'AI 整理周报表述', { progress: 72, account_results: accountResults });
     await refineWeeklyReportWithAi(report, scheduleRows, range);
+    update('writing', '生成本周排期看板截图', { progress: 80, account_results: accountResults });
+    const scheduleSnapshot = await createWeeklyScheduleSnapshot(report, payload._req);
+    if (scheduleSnapshot) {
+      report.schedule.snapshot_path = scheduleSnapshot.path;
+      report.schedule.snapshot_url = scheduleSnapshot.url;
+      report.schedule.snapshot_relative_url = scheduleSnapshot.relative_url;
+      report.schedule.snapshot_width = scheduleSnapshot.width;
+      report.schedule.snapshot_height = scheduleSnapshot.height;
+    }
     update('writing', '生成周报文档', { progress: 84, account_results: accountResults });
-    report.text = renderStrictWeeklyReportText(report);
-    report.html = renderStrictWeeklyReportHtml(report);
+    report.title = latestWeeklyTitle(report);
+    report.text = renderLatestWeeklyReportText(report);
+    report.html = renderLatestWeeklyReportHtml(report);
     const word = writeWeeklyWordFile(report, payload._req);
     report.filename = word.filename;
     report.word_path = word.path;
@@ -2340,8 +3078,9 @@ module.exports = function createAgentRoutes(deps) {
     const text = [task && task.status, task && task.progress, task && task.workflow_stage, task && task.remark]
       .map(function(value) { return String(value || ''); })
       .join(' ');
+    if (taskDoneOrPublished(task)) return false;
     if (/延期|逾期|执行中|推进中|文案|脚本|大纲|后期|剪辑|录制|待发布|素材录制|修改|反馈/.test(text)) return true;
-    return !taskDoneOrPublished(task);
+    return true;
   }
 
   function platformFromTask(task) {
@@ -2385,9 +3124,15 @@ module.exports = function createAgentRoutes(deps) {
   }
 
   function isProjectProgressTask(task) {
-    const text = [task && task.type, task && task.content, task && task.remark, task && task.progress, task && task.workflow_stage].map(function(value) { return String(value || ''); }).join(' ');
-    if (/移交|handoff/i.test(text)) return false;
-    return /商单|星广|CPM|项目|带货|电商|GMV|汇报|延期|执行|录制|大纲|文案|后期|待发布|已发布/.test(text);
+    const type = String(task && task.type || '').trim();
+    const business = [type, task && task.business_type, task && task.category, task && task.content, task && task.remark]
+      .map(function(value) { return String(value || ''); })
+      .join(' ');
+    const allText = [business, task && task.progress, task && task.workflow_stage].map(function(value) { return String(value || ''); }).join(' ');
+    if (/移交|handoff/i.test(allText)) return false;
+    if (/日常|周事件|选题|热点/.test(type)) return false;
+    if (isMaterialScheduleTask(task)) return true;
+    return /商单|商业|星广|CPM|项目|带货|电商|GMV|推广|合作|广告|植入/.test(business);
   }
 
   function uniqueLines(lines, limit) {
@@ -2401,18 +3146,13 @@ module.exports = function createAgentRoutes(deps) {
     const todayTasks = scoped.filter(function(task) { return String(task && task.date || '').slice(0, 10) === dates.reportDate; });
     const nextTasks = scoped.filter(function(task) { return String(task && task.date || '').slice(0, 10) === dates.nextDate; });
     const activeStart = dayOffset(dates.reportDate, -14);
-    const activeEnd = dayOffset(dates.reportDate, 14);
     const recentProjectTasks = scoped.filter(function(task) {
       const date = String(task && task.date || '').slice(0, 10);
       if (!isProjectProgressTask(task)) return false;
-      if (date === dates.reportDate) return true;
-      if (taskDoneOrPublished(task)) return false;
-      if (date > dates.reportDate && date <= activeEnd) return true;
-      if (date >= activeStart && date < dates.reportDate && taskStillActive(task)) return true;
-      return false;
+      return date >= activeStart && date <= dates.reportDate && taskStillActive(task);
     });
-    const outputs = uniqueLines(todayTasks.filter(isDailyOutputTask).map(dailyOutputLine), 30);
-    const nextPlans = uniqueLines(nextTasks.filter(isDailyOutputTask).map(dailyOutputLine), 12);
+    const outputs = uniqueLines(todayTasks.filter(isDailyOutputTask).map(dailyOutputLine), 12);
+    const nextPlans = uniqueLines(nextTasks.filter(isDailyOutputTask).map(dailyOutputLine), 8);
     const projectRows = recentProjectTasks.map(function(task) {
       return {
         platform: platformFromTask(task),
@@ -2460,10 +3200,19 @@ module.exports = function createAgentRoutes(deps) {
     const scoped = (profitRows || []).filter(function(row) {
       return profitRowMatchesDailyGroup(row, group) && profitRowInDailyMonth(row, reportDate, monthLabel);
     });
-    const locked = scoped.reduce(function(total, row) {
+    const onePriceRows = scoped.filter(function(row) {
+      const businessType = String(row && (row.business_type || row.category) || '').trim();
+      if (businessType) return /一口价/.test(businessType) && !/非一口价/.test(businessType);
+      return !/非一口价/.test(String(row && row.platform || ''));
+    });
+    const nonOnePriceRows = scoped.filter(function(row) { return onePriceRows.indexOf(row) < 0; });
+    const locked = onePriceRows.reduce(function(total, row) {
       return total + firstPositiveField(row, ['order_amount', 'orderAmount', '锁档金额', '一口价']);
     }, 0);
-    const executed = scoped.reduce(function(total, row) {
+    const executed = onePriceRows.reduce(function(total, row) {
+      return total + firstPositiveField(row, ['revenue', 'fee', 'amount', 'tax_revenue', 'final_amount', 'group_revenue', '集团流水', '最终合作价格']);
+    }, 0);
+    const other = nonOnePriceRows.reduce(function(total, row) {
       return total + firstPositiveField(row, ['revenue', 'fee', 'amount', 'tax_revenue', 'final_amount', 'group_revenue', '集团流水', '最终合作价格']);
     }, 0);
     const margin = scoped.reduce(function(total, row) {
@@ -2473,8 +3222,8 @@ module.exports = function createAgentRoutes(deps) {
       month_label: monthLabel,
       locked: locked,
       executed: executed,
-      other: 0,
-      total: executed,
+      other: other,
+      total: executed + other,
       gross_margin: margin,
       count: scoped.length,
       note: scoped.length ? '来自流水看板当月记录（按组别过滤）' : '流水看板暂无当月记录'
@@ -2489,13 +3238,18 @@ module.exports = function createAgentRoutes(deps) {
   }
 
   function formatWorkMetrics(work) {
+    function metric(value) {
+      const n = Number(value) || 0;
+      if (n < 10000) return formatWeeklyCount(n);
+      return String(Math.round(n / 1000) / 10).replace(/\.0$/, '') + 'w';
+    }
     return [
-      (work.views || 0) + '播放',
-      (work.likes || 0) + '点赞',
-      (work.comments || 0) + '评论',
-      (work.favorites || 0) + '收藏',
-      (work.shares || 0) + '转发'
-    ].join('-');
+      metric(work.views) + '播放',
+      metric(work.likes) + '点赞',
+      metric(work.comments) + '评论',
+      metric(work.favorites) + '收藏',
+      metric(work.shares) + '转发'
+    ].join('，');
   }
 
   function shortDateLabel(dateText) {
@@ -2554,6 +3308,8 @@ module.exports = function createAgentRoutes(deps) {
 
   function mapDailyAccountWork(work, note) {
     const platform = work.platformLabel || work.platform || '';
+    const accountPlatform = [work.account || '账号', platform].filter(Boolean).join('-');
+    const linePrefix = accountPlatform + '- ' + (work.contentType || '作品') + '-';
     return {
       account: work.account || '',
       title: work.title || '',
@@ -2565,7 +3321,7 @@ module.exports = function createAgentRoutes(deps) {
       favorites: work.favorites || 0,
       shares: work.shares || 0,
       note: note || '',
-      line: (work.account || '账号') + '-' + (platform ? platform + '-' : '') + (work.contentType || '作品') + '-' + (work.title || '未命名作品') + '：' + formatWorkMetrics(work) + (note ? '（' + note + '）' : '')
+      line: linePrefix + (work.title || '未命名作品') + '：' + formatWorkMetrics(work) + (note ? '（' + note + '）' : '')
     };
   }
 
@@ -2697,56 +3453,90 @@ module.exports = function createAgentRoutes(deps) {
     return false;
   }
 
+  function normalizeDailyReportText(text) {
+    let source = String(text || '')
+      .replace(/\r\n?/g, '\n')
+      .replace(/^```(?:markdown|text)?\s*/i, '')
+      .replace(/```$/i, '')
+      .trim();
+    if (!source) return '';
+    source = source
+      .replace(/-\s*\n\s*(?:-\s*\n\s*)?(?:-\s*)?(日常|商单|素材代做)-/g, '- $1-')
+      .replace(/([^\s\n-]+-[^\s\n-]+)-\s*(日常|商单|素材代做)-/g, '$1- $2-')
+      .replace(/([^\n])\s*(1[.、．]\s*当日(?:产出|销售额))/g, '$1\n$2')
+      .replace(/([^\n])\s*(账号数据（[^）\n]+）：)/g, '$1\n$2')
+      .replace(/([^\n])\s*(2[.、．]\s*项目执行(?:进度|细节))/g, '$1\n$2')
+      .replace(/([^\n])\s*(3[.、．]\s*(?:截止当月的营收情况|预设当月的网格情况已锁档))/g, '$1\n$2')
+      .replace(/([^\n])\s*(4[.、．]\s*次日工作计划)/g, '$1\n$2')
+      .replace(/([^\n])\s*(AI小结：)/g, '$1\n$2')
+      .replace(/\n{3,}/g, '\n\n');
+    return source.trim();
+  }
+
+  function compactDailyItems(items, fallback) {
+    const values = (items || []).map(function(item) {
+      return String(item && item.line || item || '').trim().replace(/^(?:[-*]\s+|\d+[）.)、]\s*)/, '');
+    }).filter(Boolean);
+    return values.length ? values.join('；') : fallback;
+  }
+
   function renderDailyReportText(report) {
     const lines = [];
     lines.push(report.title);
     lines.push('');
     lines.push('1.当日产出（日常/商单）：');
-    lines.push.apply(lines, report.outputs.length ? report.outputs : ['暂无当日产出，请补充']);
     lines.push('');
-    lines.push('账号数据（' + (report.account_data_label || shortDateLabel(report.data_date)) + '）：');
-    if (report.account_data_note) lines.push(report.account_data_note);
-    lines.push.apply(lines, report.account_data.length ? report.account_data.map(function(item) { return item.line; }) : ['暂无可用账号数据，建议补充近期发布作品表现']);
+    (report.outputs.length ? report.outputs : ['暂无当日产出']).forEach(function(item) {
+      lines.push(item);
+      lines.push('');
+    });
+    const accountNote = report.account_data_note ? '（' + report.account_data_note + '）' : '';
+    lines.push('2.账号数据（' + (report.account_data_label || shortDateLabel(report.data_date)) + '）' + accountNote + '：');
     lines.push('');
-    lines.push('2.项目执行进度');
+    (report.account_data.length ? report.account_data.map(function(item) { return item.line; }) : ['暂无可用账号数据']).forEach(function(item) {
+      lines.push(item);
+      lines.push('');
+    });
     const platforms = ['抖音', 'B站', '项目'].concat(Object.keys(report.projects_by_platform || {}).filter(function(key) { return ['抖音', 'B站', '项目'].indexOf(key) < 0; }));
     let projectLineCount = 0;
+    const projectLineLimit = 6;
+    const projectParts = [];
     platforms.forEach(function(platform) {
       const rows = (report.projects_by_platform && report.projects_by_platform[platform]) || [];
-      if (!rows.length) return;
-      lines.push(platform + '：');
-      rows.slice(0, 18).forEach(function(row) {
-        projectLineCount += 1;
-        lines.push(row.line);
-      });
+      if (!rows.length || projectLineCount >= projectLineLimit) return;
+      const selected = rows.slice(0, projectLineLimit - projectLineCount);
+      projectLineCount += selected.length;
+      projectParts.push(platform + '：' + compactDailyItems(selected, ''));
     });
-    if (!projectLineCount) lines.push('暂无今日推进项，请补充');
-    if (report.project_note) {
-      lines.push('');
-      lines.push(report.project_note);
+    if (projectLineCount) {
+      lines.push('2.项目执行进度：');
+      lines.push.apply(lines, projectParts);
+    } else {
+      lines.push('2.项目执行进度：暂无项目执行');
+    }
+    if (projectLineCount && report.project_note) {
+      lines.push(String(report.project_note || '').trim());
     }
     lines.push('');
-    lines.push('3.截止当月的营收情况');
-    lines.push('已锁档一口价：' + formatMoneyWan(report.revenue.locked));
-    lines.push('已执行：' + formatMoneyWan(report.revenue.executed));
-    lines.push('其他营收：' + formatMoneyWan(report.revenue.other));
-    lines.push('合计：' + formatMoneyWan(report.revenue.total));
-    if (report.revenue.gross_margin) lines.push('毛利：' + formatMoneyWan(report.revenue.gross_margin));
+    lines.push('3.截止当月的营收情况：');
+    lines.push('已锁档一口价：' + formatMoneyWan(report.revenue.locked) + '；');
+    lines.push('已执行：' + formatMoneyWan(report.revenue.executed) + '；');
+    lines.push('其他营收：' + formatMoneyWan(report.revenue.other) + '；');
+    lines.push('合计：' + formatMoneyWan(report.revenue.total) + '；');
+    lines.push('毛利：' + formatMoneyWan(report.revenue.gross_margin));
     lines.push('');
-    lines.push('4.次日工作计划');
-    (report.next_plans.length ? report.next_plans : ['待补充次日工作计划']).forEach(function(item, idx) {
-      lines.push((idx + 1) + '）' + item);
-    });
+    const plans = report.next_plans.length ? report.next_plans : ['待补充次日工作计划'];
+    lines.push('4.次日工作计划：');
+    plans.forEach(function(item, idx) { lines.push((idx + 1) + '）' + item); });
     if (report.summary) {
-      lines.push('');
       lines.push('AI小结：' + report.summary);
     }
-    return lines.join('\n');
+    return normalizeDailyReportText(lines.join('\n'));
   }
 
   async function refineDailyReportWithAi(report) {
     if (!callModelText) return report;
-    const system = '你是内容小组日报助理。只基于给定数据补充简短运营总结、项目提示和次日计划措辞，不编造具体金额和账号数据。输出严格 JSON。';
+    const system = '你是内容小组日报助理。日报必须简短。项目执行进度只允许写正在执行的商单、素材代做或明确商业项目，禁止把日常、选题、热点内容写入项目执行；没有项目时 projectNote 必须为空。只基于给定数据整理，不编造具体金额和账号数据。输出严格 JSON。';
     const user = [
       '请补充日报文案，输出 JSON：{"summary":"","projectNote":"","nextPlans":[""]}',
       JSON.stringify({
@@ -2765,15 +3555,15 @@ module.exports = function createAgentRoutes(deps) {
       const parsed = extractJsonLoose(raw);
       if (!parsed || typeof parsed !== 'object' || hasBrokenText(JSON.stringify(parsed))) return report;
       report.summary = report.manual.summaryText || String(parsed.summary || '').trim();
-      report.project_note = report.manual.projectNote || String(parsed.projectNote || '').trim();
+      report.project_note = report.projects.length ? (report.manual.projectNote || String(parsed.projectNote || '').trim()) : '';
       if (!report.manual.nextPlansText && Array.isArray(parsed.nextPlans) && parsed.nextPlans.length) {
-        report.next_plans = parsed.nextPlans.map(function(item) { return String(item || '').trim(); }).filter(Boolean).slice(0, 8);
+        report.next_plans = parsed.nextPlans.map(function(item) { return String(item || '').trim(); }).filter(Boolean).slice(0, 5);
       }
     } catch (e) {
       report.ai_error = e.message || String(e);
     }
     if (!report.summary) {
-      report.summary = '今日重点围绕产出交付、项目推进和次日排期衔接展开；账号数据优先取昨日作品，缺失时回看近期高表现内容，异常或加急项目建议继续单独维护。';
+      report.summary = report.projects.length ? '今日按排期推进内容产出与商单执行。' : '今日按排期完成内容产出，暂无项目执行。';
     }
     return report;
   }
@@ -2858,7 +3648,7 @@ module.exports = function createAgentRoutes(deps) {
       _auth: payload._auth,
       prompt: payload.prompt || dailyImagePrompt(report, text),
       ratio: payload.ratio || '4:5',
-      resolution: payload.resolution || '2K',
+      resolution: payload.resolution || '1K',
       quality: payload.quality || 'auto'
     });
     const imageUrl = data.url || data.result_url || data.image_url || '';
@@ -2902,6 +3692,8 @@ module.exports = function createAgentRoutes(deps) {
         '你是内容小组日报协作编辑。用户会给你一份当前日报正文和一条修改要求。',
         '你必须直接返回修改后的完整日报正文，不要解释，不要 Markdown 代码块。',
         '保留原有四段结构和已有真实数字；只按用户要求增删改，不要编造新数据。',
+        '排版要整齐：标题和四个板块各自成行，每条作品或计划各占一行，不使用“- ”项目符号，也不插入空行。账号数据固定为“账号-平台- 类型-标题”，类型前保留一个空格，整条必须连续显示，禁止换行。',
+        '项目执行进度只保留正在执行的商单、素材代做或明确商业项目，禁止写入日常、选题和热点；没有商单或商业项目时固定写“- 暂无项目执行”。',
         '如果用户只是补充一段事项，把它放进最合适的段落，例如项目执行进度或次日工作计划。'
       ].join('\n');
       const user = [
@@ -2920,6 +3712,7 @@ module.exports = function createAgentRoutes(deps) {
       }
     }
     if (!revised) revised = fallbackReviseDailyText(currentText, instruction);
+    revised = normalizeDailyReportText(revised);
     await dailyStore.save({
       group_name: report.group || payload.group || '',
       report_date: report.report_date || payload.reportDate || '',
@@ -3105,10 +3898,10 @@ module.exports = function createAgentRoutes(deps) {
     const currentText = latestDailyReportText(body.history || []);
     const report = dailyReportObjectFromText(currentText, input, auth);
     const steps = [toolMeta('daily_report_image', '日报确认出图', 'imagegen', 'running')];
-    writeSse(res, 'plan', { task_type: 'daily_report', agent_mode: 'platform', plan: { task_type: 'daily_report', tools: [{ id: 'daily_report_image', args: { ratio: '4:5', resolution: '2K' } }] }, tools: steps });
+    writeSse(res, 'plan', { task_type: 'daily_report', agent_mode: 'platform', plan: { task_type: 'daily_report', tools: [{ id: 'daily_report_image', args: { ratio: '4:5', resolution: '1K' } }] }, tools: steps });
     try {
       writeSse(res, 'status', { stage: 'daily_report_image', message: '正在用 image2 生成日报图' });
-      const image = await generateDailyReportImage({ _auth: auth, report: report, text: currentText, ratio: '4:5', resolution: '2K' });
+      const image = await generateDailyReportImage({ _auth: auth, report: report, text: currentText, ratio: '4:5', resolution: '1K' });
       const imageUrl = image.image_url || image.url || image.result_url || '';
       steps[0].status = 'done';
       steps[0].detail = imageUrl ? '图片已生成' : '完成';
@@ -3247,7 +4040,66 @@ module.exports = function createAgentRoutes(deps) {
     return authStore.canAccess(auth, moduleId);
   }
 
-  function availableAgentTools(auth) {
+  const SITE_CONTEXT_TOOL_IDS = new Set([
+    'platform_snapshot',
+    'vector_search',
+    'bf_list',
+    'cases_list',
+    'profit_list',
+    'profit_stats',
+    'account_monitor',
+    'account_data_dashboard',
+    'schedule_load',
+    'daily_hot',
+    'ideas_list',
+    'materials_list',
+    'materials_stats',
+    'materials_storage',
+    'smart_collect_status',
+    'video_publish_accounts',
+    'video_publish_jobs',
+    'imagegen_history',
+    'operation_logs',
+    'users_list',
+    'copygen_state',
+    'copygen_records',
+    'account_styles_list',
+    'vector_list'
+  ]);
+
+  function parseBooleanOption(value, defaultValue) {
+    if (value === undefined || value === null || value === '') return defaultValue;
+    if (value === false) return false;
+    if (value === true) return true;
+    const text = String(value).trim().toLowerCase();
+    if (['false', '0', 'no', 'off', 'disabled'].includes(text)) return false;
+    if (['true', '1', 'yes', 'on', 'enabled'].includes(text)) return true;
+    return defaultValue;
+  }
+
+  function useSiteContextEnabled(body) {
+    if (!body || typeof body !== 'object') return true;
+    return parseBooleanOption(
+      Object.prototype.hasOwnProperty.call(body, 'use_site_context') ? body.use_site_context
+        : Object.prototype.hasOwnProperty.call(body, 'useSiteContext') ? body.useSiteContext
+          : body.site_context,
+      true
+    );
+  }
+
+  function isSiteContextToolId(id) {
+    return SITE_CONTEXT_TOOL_IDS.has(String(id || ''));
+  }
+
+  function filterSiteContextTools(tools, allowSiteContext) {
+    return (Array.isArray(tools) ? tools : []).filter(function(tool) {
+      const id = typeof tool === 'string' ? tool : tool && (tool.id || tool.tool);
+      return allowSiteContext || !isSiteContextToolId(id);
+    });
+  }
+
+  function availableAgentTools(auth, options) {
+    const allowSiteContext = !options || options.allowSiteContext !== false;
     const defs = [
       { id: 'platform_snapshot', label: '读取平台总览', module: 'projectAgent', route: '__platform_snapshot__', args: { scope: 'auto' } },
       { id: 'douyin_transcribe', label: '读取/转写抖音链接', module: 'tools', route: '/api/douyin/downloader', args: { url: '抖音分享链接' } },
@@ -3256,8 +4108,8 @@ module.exports = function createAgentRoutes(deps) {
       { id: 'vector_search', label: '检索向量库/文案库', module: 'tools', route: '/api/vector/search', args: { query: '检索词', collection: 'wenan|bf|cases', limit: 5 } },
       { id: 'bf_list', label: '读取BF库', module: 'tools', route: '/api/bf/list', args: {} },
       { id: 'cases_list', label: '读取案例库', module: 'tools', route: '/api/cases/list', args: {} },
-      { id: 'profit_list', label: '读取流水数据', module: 'ops', route: '/api/profit/list', args: { grp: '内容一组/内容二组/内容三组/内容四组/内容五组/内容六组/全部' } },
-      { id: 'profit_stats', label: '读取流水统计', module: 'ops', route: '/api/profit/stats', args: { grp: '内容一组/内容二组/内容三组/内容四组/内容五组/内容六组/全部' } },
+      { id: 'profit_list', label: '读取流水数据', module: 'ops', route: '/api/profit/list', args: { grp: '内容一部/内容二组/内容三组/内容四组/内容五组/内容六组/全部' } },
+      { id: 'profit_stats', label: '读取流水统计', module: 'ops', route: '/api/profit/stats', args: { grp: '内容一部/内容二组/内容三组/内容四组/内容五组/内容六组/全部' } },
       { id: 'account_monitor', label: '读取账号监控数据', module: 'accountmonitor', route: '/api/account-monitor/list', args: { days: 7, limit: 120 } },
       { id: 'schedule_load', label: '读取排期/工时', module: 'schedule', route: '/api/schedule/load', args: {} },
       { id: 'daily_hot', label: '读取每日热点', module: 'dailyhot', route: '/api/daily-hot/list', args: {} },
@@ -3269,7 +4121,6 @@ module.exports = function createAgentRoutes(deps) {
       { id: 'video_publish_accounts', label: '读取发布账号配置', module: 'videopublish', route: '/api/video-publish/accounts/list', args: {} },
       { id: 'video_publish_jobs', label: '读取视频发布任务', module: 'videopublish', route: '/api/video-publish/jobs', args: { limit: 80, mineOnly: false } },
       { id: 'imagegen_history', label: '读取生图历史', module: 'imagegen', route: '/api/imagegen/history', args: { page: 1, limit: 20 } },
-      { id: 'feedback_list', label: '读取意见反馈', module: 'feedback', route: '/api/feedback/list', args: { limit: 80 } },
       { id: 'operation_logs', label: '读取操作日志', module: 'operationLogs', route: '/api/admin/logs', args: { limit: 80 } },
       { id: 'users_list', label: '读取成员列表', module: 'adminUsers', route: '/api/admin/users', args: {} },
       { id: 'copygen_state', label: '读取旧文案工作台状态', module: 'copygen', route: '/api/copygen/state', args: {} },
@@ -3278,11 +4129,14 @@ module.exports = function createAgentRoutes(deps) {
       { id: 'vector_list', label: '读取向量库条目', module: 'tools', route: '/api/vector/list', args: { limit: 80 } },
       { id: 'vision_analyze_image', label: '图片理解/视觉分析', module: 'projectAgent', route: '__vision_analyze_image__', args: { question: '需要看图分析的问题' } },
       { id: 'video_analyze', label: '视频打点/画面分析', module: 'tools', route: '/api/posttools/video-analyze', args: { url: '视频链接或上传路径', mode: 'auto' } },
-      { id: 'gpt_image2_text2image', label: 'GPT-Image2 文生图', module: 'imagegen', route: '/api/gpt-image2/text2image', args: { prompt: '图片提示词', ratio: '1:1', resolution: '2K' } },
+      { id: 'gpt_image2_text2image', label: 'GPT-Image2 文生图', module: 'imagegen', route: '/api/gpt-image2/text2image', args: { prompt: '图片提示词', ratio: '1:1', resolution: '1K' } },
       { id: 'gpt_image2_image2image', label: 'GPT-Image2 图生图', module: 'imagegen', route: '/api/gpt-image2/image2image', args: { prompt: '图片修改提示词', image_base64: '参考图base64', ratio: '1:1', resolution: '2K' } },
       { id: 'codex_deep_analysis', label: 'Codex 深度分析', module: 'projectAgent', route: '__codex_deep_analysis__', args: { question: '需要深度分析的问题' } }
     ];
-    return defs.filter(function(tool) { return canAccess(auth, tool.module); });
+    return defs.filter(function(tool) {
+      if (!allowSiteContext && isSiteContextToolId(tool.id)) return false;
+      return canAccess(auth, tool.module);
+    });
   }
 
   function extractJsonLoose(text) {
@@ -3356,8 +4210,9 @@ module.exports = function createAgentRoutes(deps) {
     throw new Error('planner model failed: ' + failures.join('; '));
   }
 
-  async function planAgentRun(input, history, auth, explicitType) {
-    const tools = availableAgentTools(auth);
+  async function planAgentRun(input, history, auth, explicitType, options) {
+    const allowSiteContext = !options || options.allowSiteContext !== false;
+    const tools = availableAgentTools(auth, { allowSiteContext: allowSiteContext });
     const fallback = normalizePlan(null, input, explicitType);
     const system = [
       '你是乌萨奇工作平台的 Agent 调度器。你只负责判断用户意图和选择工具，不写最终答案。',
@@ -3388,18 +4243,19 @@ module.exports = function createAgentRoutes(deps) {
       const raw = await callPlannerModel([{ role: 'system', content: system }, { role: 'user', content: user }]);
       const parsed = extractJsonLoose(raw);
       const plan = normalizePlan(parsed, input, explicitType);
-      if (!plan.tools.length) plan.tools = fallbackToolsForPlan(plan, input, auth);
+      plan.tools = filterSiteContextTools(plan.tools, allowSiteContext);
+      if (!plan.tools.length) plan.tools = fallbackToolsForPlan(plan, input, auth, { allowSiteContext: allowSiteContext });
       return plan;
     } catch(e) {
       logger.warn('agent planner failed, using fallback rules', e);
-      fallback.tools = fallbackToolsForPlan(fallback, input, auth);
+      fallback.tools = fallbackToolsForPlan(fallback, input, auth, { allowSiteContext: allowSiteContext });
       fallback.reasoning = 'planner_failed_fallback: ' + (e.message || String(e)).slice(0, 160);
       return fallback;
     }
   }
 
-  function fallbackToolsForPlan(plan, input, auth) {
-    const visible = visibleToolsFor(input, plan.task_type, auth);
+  function fallbackToolsForPlan(plan, input, auth, options) {
+    const visible = visibleToolsFor(input, plan.task_type, auth, options);
     const map = {
       platform_snapshot: 'platform_snapshot',
       douyin_transcribe: 'douyin_transcribe',
@@ -3418,7 +4274,6 @@ module.exports = function createAgentRoutes(deps) {
       video_publish_accounts: 'video_publish_accounts',
       video_publish_jobs: 'video_publish_jobs',
       imagegen_history: 'imagegen_history',
-      feedback_list: 'feedback_list',
       operation_logs: 'operation_logs',
       users_list: 'users_list',
       copygen_state: 'copygen_state',
@@ -3436,12 +4291,14 @@ module.exports = function createAgentRoutes(deps) {
     });
   }
 
-  function visibleToolsFor(input, taskType, auth) {
+  function visibleToolsFor(input, taskType, auth, options) {
+    const allowSiteContext = !options || options.allowSiteContext !== false;
     const text = String(input || '');
     const links = extractLinks(text);
     const groupScope = detectGroupScope(text);
     const tools = [];
     const add = function(id, label, moduleId, detail) {
+      if (!allowSiteContext && isSiteContextToolId(id)) return;
       if (canAccess(auth, moduleId)) tools.push(toolMeta(id, label, moduleId, 'pending', detail));
     };
     if (asksForPlatformSnapshot(text)) add('platform_snapshot', '读取平台总览', 'projectAgent');
@@ -3480,9 +4337,6 @@ module.exports = function createAgentRoutes(deps) {
     }
     if (includesAny(text, ['生图', '图片历史', '封面图', 'AI生图'])) {
       add('imagegen_history', '读取生图历史', 'imagegen');
-    }
-    if (includesAny(text, ['反馈', 'bug', '报错', '意见'])) {
-      add('feedback_list', '读取意见反馈', 'feedback');
     }
     if (includesAny(text, ['操作日志', '谁改了', '最近操作', '日志'])) {
       add('operation_logs', '读取操作日志', 'operationLogs');
@@ -3528,9 +4382,25 @@ module.exports = function createAgentRoutes(deps) {
   }
 
   async function readPlatformSnapshot(auth, input) {
+    const groupScope = detectGroupScope(input);
+    const monthScope = detectMonthScope(input);
+    const profitBody = { limit: 120 };
+    const profitStatsBody = {};
+    if (groupScope && groupScope !== '全部') {
+      profitBody.grp = groupScope;
+      profitStatsBody.grp = groupScope;
+    }
+    if (monthScope && monthScope.year) {
+      profitBody.year = monthScope.year;
+      profitStatsBody.year = monthScope.year;
+    }
+    if (monthScope && monthScope.month) {
+      profitBody.month = monthScope.month;
+      profitStatsBody.month = monthScope.month;
+    }
     const jobs = [
-      { key: 'profit', module: 'ops', route: '/api/profit/list', body: { limit: 120 } },
-      { key: 'profit_stats', module: 'ops', route: '/api/profit/stats', body: {} },
+      { key: 'profit', module: 'ops', route: '/api/profit/list', body: profitBody },
+      { key: 'profit_stats', module: 'ops', route: '/api/profit/stats', body: profitStatsBody },
       { key: 'schedule', module: 'schedule', route: '/api/schedule/load', body: {} },
       { key: 'daily_hot', module: 'dailyhot', route: '/api/daily-hot/list', body: {} },
       { key: 'account_monitor', module: 'accountmonitor', route: '/api/account-monitor/list', body: { limit: 120, days: 7 } },
@@ -3542,7 +4412,6 @@ module.exports = function createAgentRoutes(deps) {
       { key: 'video_publish_jobs', module: 'videopublish', route: '/api/video-publish/jobs', body: { limit: 80, mineOnly: false } },
       { key: 'video_publish_accounts', module: 'videopublish', route: '/api/video-publish/accounts/list', body: {} },
       { key: 'imagegen_history', module: 'imagegen', route: '/api/imagegen/history', body: { page: 1, limit: 20 } },
-      { key: 'feedback', module: 'feedback', route: '/api/feedback/list', body: { limit: 80 } },
       { key: 'vector', module: 'tools', route: '/api/vector/list', body: { limit: 80 } },
       { key: 'bf', module: 'tools', route: '/api/bf/list', body: {} },
       { key: 'cases', module: 'tools', route: '/api/cases/list', body: {} },
@@ -3608,7 +4477,6 @@ module.exports = function createAgentRoutes(deps) {
       video_publish_jobs: ['jobs', 'items'],
       video_publish_accounts: ['accounts', 'items'],
       imagegen_history: ['list', 'items'],
-      feedback: ['items', 'feedback', 'list'],
       vector: ['items', 'list'],
       bf: ['items', 'list'],
       cases: ['items', 'list'],
@@ -3886,14 +4754,67 @@ module.exports = function createAgentRoutes(deps) {
     return String(input || '').replace(/https?:\/\/\S+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 320);
   }
 
-  function uniquePlannedTools(plan, input, auth, agentMode) {
-    const available = new Map(availableAgentTools(auth).map(function(tool) { return [tool.id, tool]; }));
+  function textHasAny(text, words) {
+    const raw = String(text || '').toLowerCase();
+    return words.some(function(word) {
+      return raw.indexOf(String(word || '').toLowerCase()) >= 0;
+    });
+  }
+
+  function detectAgentDataNeeds(input, taskType) {
+    const text = String(input || '');
+    const weeklyLike = taskType === 'weekly_report' || taskType === 'daily_report' || textHasAny(text, [
+      '\u5468\u62a5', '\u65e5\u62a5', '\u5468\u4f1a', '\u672c\u5468\u5de5\u4f5c', '\u4e0a\u5468\u5de5\u4f5c'
+    ]);
+    const finance = weeklyLike || textHasAny(text, [
+      '\u6d41\u6c34', '\u6bdb\u5229', '\u8425\u6536', '\u4e0b\u5355', '\u9501\u6863', '\u4e00\u53e3\u4ef7', '\u975e\u4e00\u53e3\u4ef7',
+      '\u5546\u5355\u6570', '\u540c\u6bd4', '\u73af\u6bd4', '\u76ee\u6807', '\u5229\u6da6', '\u91d1\u989d', '\u94b1'
+    ]);
+    const account = weeklyLike || textHasAny(text, [
+      '\u6570\u636e\u770b\u677f', '\u8d26\u53f7', '\u53d1\u6587', '\u53d1\u5e03\u91cf', '\u64ad\u653e', '\u70b9\u8d5e', '\u7c89\u4e1d',
+      '\u66f4\u65b0\u8ba1\u5212', '\u4e3b\u5e73\u53f0', '\u7206\u6b3e', '\u9690\u85cf\u6761\u6570'
+    ]);
+    const schedule = weeklyLike || taskType === 'project_review' || textHasAny(text, [
+      '\u6392\u671f', '\u5de5\u65f6', '\u4efb\u52a1', '\u4ee3\u529e', '\u5f85\u529e', '\u63a8\u8fdb', '\u540e\u671f', '\u9009\u9898'
+    ]);
+    const hot = textHasAny(text, ['\u70ed\u70b9', '\u6bcf\u65e5\u70ed\u70b9']);
+    const idea = taskType === 'project_review' || textHasAny(text, ['\u521b\u610f', '\u9009\u9898\u5e93', '\u590d\u76d8']);
+    const material = textHasAny(text, ['\u7d20\u6750', '\u7d20\u6750\u5e93', '\u5bb9\u91cf', '\u5b58\u50a8']);
+    const publish = textHasAny(text, ['\u53d1\u5e03\u4efb\u52a1', '\u53d1\u5e03\u961f\u5217', '\u5206\u53d1', '\u4e0a\u4f20\u89c6\u9891']);
+    const logs = textHasAny(text, ['\u64cd\u4f5c\u65e5\u5fd7', '\u8c01\u6539\u4e86', '\u65e5\u5fd7']);
+    const global = asksForPlatformSnapshot(text) || textHasAny(text, [
+      '\u5168\u5e73\u53f0', '\u5168\u7ad9', '\u603b\u89c8', '\u6574\u4f53\u60c5\u51b5', '\u90fd\u6709\u54ea\u4e9b', '\u7cfb\u7edf\u72b6\u6001'
+    ]);
+    return { weeklyLike, finance, account, schedule, hot, idea, material, publish, logs, global };
+  }
+
+  function uniquePlannedTools(plan, input, auth, agentMode, options) {
+    const allowSiteContext = !options || options.allowSiteContext !== false;
+    const available = new Map(availableAgentTools(auth, { allowSiteContext: allowSiteContext }).map(function(tool) { return [tool.id, tool]; }));
+    if (allowSiteContext && canAccess(auth, 'accountData')) {
+      available.set('account_data_dashboard', {
+        id: 'account_data_dashboard',
+        label: '读取数据看板发布明细',
+        module: 'accountData',
+        route: '/api/account-data/dashboard',
+        args: { historyMonth: '2026-06' }
+      });
+    }
     const merged = [];
     const seen = new Set();
     const imageUnderstandingOnly = asksForImageUnderstanding(input) && !asksForImageEdit(input) && !asksForImageGeneration(input);
+    const taskType = plan.task_type || detectTask(input);
+    const groupScope = normalizeGroupScopeValue(plan.group, input);
+    const links = extractLinks(input);
+    const needs = detectAgentDataNeeds(input, taskType);
     function add(id, args) {
       if (id === 'gpt_image2_image2image' && !(Array.isArray(plan.images) && plan.images.length)) id = 'gpt_image2_text2image';
       if (!id || seen.has(id) || !available.has(id)) return;
+      if (!allowSiteContext && isSiteContextToolId(id)) return;
+      if (id === 'platform_snapshot' && !needs.global) return;
+      if (id === 'daily_hot' && !needs.hot && !needs.global) return;
+      if (id === 'ideas_list' && !needs.idea && !needs.global) return;
+      if (id === 'materials_list' && !needs.material && !needs.global && taskType !== 'project_review') return;
       if (imageUnderstandingOnly && (id === 'gpt_image2_text2image' || id === 'gpt_image2_image2image')) return;
       if (id === 'codex_deep_analysis' && agentMode === 'platform') return;
       seen.add(id);
@@ -3901,23 +4822,25 @@ module.exports = function createAgentRoutes(deps) {
     }
     (plan.tools || []).forEach(function(tool) { add(tool.id, tool.args); });
 
-    const taskType = plan.task_type || detectTask(input);
-    const groupScope = normalizeGroupScopeValue(plan.group, input);
-    const links = extractLinks(input);
-    const workLike = taskType === 'weekly_report' || groupScope || asksForWorkSummary(input) || asksForPlatformData(input);
+    const workLike = needs.weeklyLike || groupScope || asksForWorkSummary(input) || asksForPlatformData(input);
     if (links.some(function(link) { return /douyin\.com|v\.douyin\.com/i.test(link); })) add('douyin_transcribe', {});
     if (links.some(function(link) { return /bilibili\.com|b23\.tv/i.test(link); })) add('bilibili_transcribe', {});
     if (links.some(function(link) { return /feishu\.cn|larksuite\.com/i.test(link); })) add('feishu_read', {});
     if (links.length && asksForVideoAnalysis(input)) add('video_analyze', {});
-    if (asksForPlatformSnapshot(input) || taskType === 'weekly_report' || taskType === 'project_review') {
+    if (needs.global) {
       add('platform_snapshot', {});
     }
     if (workLike) {
-      add('profit_list', {});
-      add('profit_stats', {});
-      add('account_monitor', {});
-      add('schedule_load', {});
-      add('daily_hot', {});
+      if (needs.finance) {
+        add('profit_list', {});
+        add('profit_stats', {});
+      }
+      if (needs.account) {
+        add('account_data_dashboard', {});
+        add('account_monitor', {});
+      }
+      if (needs.schedule) add('schedule_load', {});
+      if (needs.hot) add('daily_hot', {});
     }
     const wantsImageOutput = taskType === 'image_generation'
       || (asksForImageGeneration(input) && !(asksForImageUnderstanding(input) && !asksForImageEdit(input)));
@@ -3928,8 +4851,8 @@ module.exports = function createAgentRoutes(deps) {
       add('vision_analyze_image', { question: input });
     }
     if (taskType === 'project_review') {
-      add('ideas_list', {});
-      add('materials_list', {});
+      if (needs.idea) add('ideas_list', {});
+      if (needs.material) add('materials_list', {});
     }
     if (agentMode === 'codex' || (agentMode !== 'platform' && wantsCodexDeepAnalysis(input))) {
       add('codex_deep_analysis', { question: input });
@@ -3972,11 +4895,17 @@ module.exports = function createAgentRoutes(deps) {
     if (toolId === 'profit_list') {
       const body = { limit: Math.max(20, Math.min(Number(args.limit) || 120, 300)) };
       if (groupScope && groupScope !== '全部') body.grp = groupScope;
+      const monthScope = detectMonthScope(input);
+      if (monthScope && monthScope.year) body.year = monthScope.year;
+      if (monthScope && monthScope.month) body.month = monthScope.month;
       return body;
     }
     if (toolId === 'profit_stats') {
       const body = {};
       if (groupScope && groupScope !== '全部') body.grp = groupScope;
+      const monthScope = detectMonthScope(input);
+      if (monthScope && monthScope.year) body.year = monthScope.year;
+      if (monthScope && monthScope.month) body.month = monthScope.month;
       return body;
     }
     if (toolId === 'account_monitor') {
@@ -3997,15 +4926,16 @@ module.exports = function createAgentRoutes(deps) {
     if (toolId === 'imagegen_history') {
       return { page: Math.max(1, Number(args.page) || 1), limit: Math.max(5, Math.min(Number(args.limit) || 20, 50)) };
     }
-    if (toolId === 'feedback_list' || toolId === 'operation_logs' || toolId === 'vector_list') {
+    if (toolId === 'operation_logs' || toolId === 'vector_list') {
       return { limit: Math.max(20, Math.min(Number(args.limit) || 80, 200)) };
     }
     if (toolId === 'gpt_image2_text2image' || toolId === 'gpt_image2_image2image') {
       const prompt = String(args.prompt || args.image_prompt || plan.goal || input || '').trim();
+      const defaultResolution = toolId === 'gpt_image2_text2image' ? '1K' : '2K';
       const body = {
         prompt: prompt,
         ratio: String(args.ratio || args.aspect_ratio || '1:1'),
-        resolution: String(args.resolution || args.resolution_type || '2K'),
+        resolution: String(args.resolution || args.resolution_type || defaultResolution),
         quality: String(args.quality || 'auto')
       };
       if (toolId === 'gpt_image2_image2image') {
@@ -4087,7 +5017,6 @@ module.exports = function createAgentRoutes(deps) {
       video_publish_accounts: '视频发布账号配置',
       video_publish_jobs: '视频发布任务',
       imagegen_history: 'AI生图历史',
-      feedback_list: '意见反馈',
       operation_logs: '操作日志',
       users_list: '成员列表',
       copygen_state: '旧文案工作台状态',
@@ -4103,10 +5032,20 @@ module.exports = function createAgentRoutes(deps) {
     };
   }
 
-  async function gatherContextFromPlan(input, plan, auth, steps, sources, agentMode) {
+  async function gatherContextFromPlan(input, plan, auth, steps, sources, agentMode, options) {
+    const allowSiteContext = !options || options.allowSiteContext !== false;
     const context = [];
-    const available = new Map(availableAgentTools(auth).map(function(tool) { return [tool.id, tool]; }));
-    const planned = uniquePlannedTools(plan, input, auth, agentMode);
+    const available = new Map(availableAgentTools(auth, { allowSiteContext: allowSiteContext }).map(function(tool) { return [tool.id, tool]; }));
+    if (allowSiteContext && canAccess(auth, 'accountData')) {
+      available.set('account_data_dashboard', {
+        id: 'account_data_dashboard',
+        label: '读取数据看板发布明细',
+        module: 'accountData',
+        route: '/api/account-data/dashboard',
+        args: { historyMonth: '2026-06' }
+      });
+    }
+    const planned = uniquePlannedTools(plan, input, auth, agentMode, { allowSiteContext: allowSiteContext });
     const results = {};
 
     for (const plannedTool of planned) {
@@ -4154,10 +5093,12 @@ module.exports = function createAgentRoutes(deps) {
 
     const groupScope = normalizeGroupScopeValue(plan.group, input);
     if (groupScope && (results.profit_list || results.profit_stats || results.account_monitor || results.schedule_load)) {
+      const monthScope = detectMonthScope(input);
       context.unshift({
         title: groupScope + '工作数据汇总',
         text: JSON.stringify({
           group: groupScope,
+          period: monthScope || null,
           plan_reasoning: plan.reasoning || '',
           profit: summarizeGroupProfit(results.profit_list, results.profit_stats, groupScope),
           account_monitor: summarizeGroupMonitor(results.account_monitor, groupScope),
@@ -4193,7 +5134,7 @@ module.exports = function createAgentRoutes(deps) {
       });
     }
 
-    if (!context.length && visibleToolsFor(input, plan.task_type, auth).length) {
+    if (allowSiteContext && !context.length && visibleToolsFor(input, plan.task_type, auth, { allowSiteContext: allowSiteContext }).length) {
       return gatherContext(input, plan.task_type, auth, steps, sources);
     }
     return context.filter(function(item) { return item.text; });
@@ -4286,16 +5227,58 @@ module.exports = function createAgentRoutes(deps) {
       }
       return 0;
     }
+    const byAccount = {};
+    const projects = new Set();
     const totals = records.reduce(function(acc, row) {
-      acc.revenue += pickNumber(row, ['fee', 'amount', 'revenue', 'group_revenue', '流水', '集团流水']);
-      acc.margin += pickNumber(row, ['margin', 'gross_profit', 'profit', '部门毛利', '毛利']);
+      const account = String(row.account || row['账号'] || '未填账号').trim() || '未填账号';
+      const project = String(row.project || row['项目'] || '').trim();
+      const revenue = pickNumber(row, ['revenue', 'fee', 'amount', 'group_revenue', '流水', '集团流水']);
+      const margin = pickNumber(row, ['margin', 'profit', 'gross_profit', 'department_margin', '部门毛利', '毛利']);
+      const orderAmount = pickNumber(row, ['order_amount', 'orderAmount', '下单金额', '锁档金额']);
+      const finalAmount = pickNumber(row, ['final_amount', 'finalAmount', '最终合作价', '最终合作价格']);
+      acc.revenue += revenue;
+      acc.margin += margin;
+      acc.order_amount += orderAmount;
+      acc.final_amount += finalAmount;
+      if (project) projects.add(project);
+      if (!byAccount[account]) byAccount[account] = { count: 0, revenue: 0, margin: 0, order_amount: 0, final_amount: 0 };
+      byAccount[account].count += 1;
+      byAccount[account].revenue += revenue;
+      byAccount[account].margin += margin;
+      byAccount[account].order_amount += orderAmount;
+      byAccount[account].final_amount += finalAmount;
       return acc;
-    }, { revenue: 0, margin: 0 });
+    }, { revenue: 0, margin: 0, order_amount: 0, final_amount: 0 });
+    const statsCount = Number(stats && stats.count);
+    const statsRevenue = Number(stats && stats.total_revenue);
+    const statsMargin = Number(stats && stats.total_margin);
+    const hasStats = Number.isFinite(statsCount) || Number.isFinite(statsRevenue) || Number.isFinite(statsMargin);
     return {
       group: groupScope || '全部',
-      count: records.length,
-      revenue_total: Math.round(totals.revenue),
-      margin_total: Math.round(totals.margin),
+      count: Number.isFinite(statsCount) ? statsCount : records.length,
+      project_count: projects.size,
+      revenue_total: Number.isFinite(statsRevenue) ? Math.round(statsRevenue) : Math.round(totals.revenue),
+      margin_total: Number.isFinite(statsMargin) ? Math.round(statsMargin) : Math.round(totals.margin),
+      order_amount_total: Math.round(totals.order_amount),
+      final_amount_total: Math.round(totals.final_amount),
+      api_stats_revenue: Number.isFinite(statsRevenue) ? Math.round(statsRevenue) : 0,
+      api_stats_margin: Number.isFinite(statsMargin) ? Math.round(statsMargin) : 0,
+      answer_guidance: hasStats
+        ? '回答流水/营收/毛利必须优先使用 revenue_total、margin_total、count；下单情况可补充 order_amount_total、final_amount_total，但不要把订单金额或样本明细加总冒充流水。'
+        : '未拿到流水统计接口时才可参考样本明细，必须说明数据可能不完整。',
+      by_account: Object.keys(byAccount).sort(function(a, b) {
+        return byAccount[b].margin - byAccount[a].margin;
+      }).slice(0, 20).map(function(account) {
+        const item = byAccount[account];
+        return {
+          account: account,
+          count: item.count,
+          revenue: Math.round(item.revenue),
+          margin: Math.round(item.margin),
+          order_amount: Math.round(item.order_amount),
+          final_amount: Math.round(item.final_amount)
+        };
+      }),
       stats: stats || {},
       sample_records: records.slice(0, 80)
     };
@@ -4332,6 +5315,7 @@ module.exports = function createAgentRoutes(deps) {
     const context = [];
     const links = extractLinks(input);
     const groupScope = detectGroupScope(input);
+    const monthScope = detectMonthScope(input);
     for (const link of links.slice(0, 4)) {
       if (/douyin\.com|v\.douyin\.com/i.test(link)) {
         const data = await runTool('/api/douyin/downloader', {
@@ -4366,17 +5350,30 @@ module.exports = function createAgentRoutes(deps) {
     }
 
     if (taskType === 'weekly_report' || taskType === 'daily_report' || (groupScope && (asksForWorkSummary(input) || asksForPlatformData(input)))) {
-      const profit = await runTool('/api/profit/list', { _auth: auth, limit: 120 }, steps, sources, '流水数据', 'ops');
-      const stats = await runTool('/api/profit/stats', { _auth: auth }, steps, sources, '流水统计', 'ops');
+      const profitArgs = { _auth: auth, limit: 120 };
+      const statsArgs = { _auth: auth };
+      if (monthScope && monthScope.year) {
+        profitArgs.year = monthScope.year;
+        statsArgs.year = monthScope.year;
+      }
+      if (monthScope && monthScope.month) {
+        profitArgs.month = monthScope.month;
+        statsArgs.month = monthScope.month;
+      }
+      const profit = await runTool('/api/profit/list', profitArgs, steps, sources, '流水数据', 'ops');
+      const stats = await runTool('/api/profit/stats', statsArgs, steps, sources, '流水统计', 'ops');
       const monitor = await runTool('/api/account-monitor/list', { _auth: auth, limit: 120, days: 7 }, steps, sources, '账号数据', 'accountmonitor');
       const schedule = await runTool('/api/schedule/load', { _auth: auth }, steps, sources, '排期/工时', 'schedule');
       if (groupScope) {
-        const scopedProfit = await runTool('/api/profit/list', { _auth: auth, limit: 120, grp: groupScope }, steps, sources, groupScope + '流水数据', 'ops');
-        const scopedStats = await runTool('/api/profit/stats', { _auth: auth, grp: groupScope }, steps, sources, groupScope + '流水统计', 'ops');
+        const scopedProfitArgs = Object.assign({}, profitArgs, { grp: groupScope });
+        const scopedStatsArgs = Object.assign({}, statsArgs, { grp: groupScope });
+        const scopedProfit = await runTool('/api/profit/list', scopedProfitArgs, steps, sources, groupScope + '流水数据', 'ops');
+        const scopedStats = await runTool('/api/profit/stats', scopedStatsArgs, steps, sources, groupScope + '流水统计', 'ops');
         context.push({
           title: groupScope + '工作数据汇总',
           text: JSON.stringify({
             group: groupScope,
+            period: monthScope || null,
             profit: summarizeGroupProfit(scopedProfit, scopedStats, groupScope),
             account_monitor: summarizeGroupMonitor(monitor, groupScope),
             schedule: summarizeGroupSchedule(schedule, groupScope)
@@ -4384,7 +5381,9 @@ module.exports = function createAgentRoutes(deps) {
           limit: 10000
         });
       }
-      context.push({ title: '本周流水/营收数据', text: JSON.stringify({ profit: profit, stats: stats }, null, 2), limit: 6000 });
+      if (!groupScope) {
+        context.push({ title: '本周流水/营收数据', text: JSON.stringify({ period: monthScope || null, profit: profit, stats: stats }, null, 2), limit: 6000 });
+      }
       context.push({ title: '账号发布与净增粉数据', text: JSON.stringify(monitor, null, 2), limit: 6000 });
       context.push({ title: '排期和工时数据', text: JSON.stringify(schedule, null, 2), limit: 6000 });
     }
@@ -4429,7 +5428,7 @@ module.exports = function createAgentRoutes(deps) {
       read_feishu: '任务：读取并总结飞书文档。输出要保留文档重点、风险和下一步。',
       bf_analysis: '任务：做 BF 分析。关注客户诉求、卖点、目标人群、内容角度、风险、可执行脚本方向。',
       weekly_report: '任务：按内容团队周会/周报格式生成工作评价或周报。用户问“几组本周工作/做得怎么样”时，优先使用“工作数据汇总”、排期、流水、账号监控数据做判断；向量库没命中不等于平台没有数据。结构包含：本月营收/毛利概况、上周账号数据情况、工时/排期情况、本周工作计划、风险与需要协调事项。若数据不足，要明确列出已读到的数据和缺口。',
-      daily_report: '任务：生成内容小组日报草稿。结构固定为：1.当日产出（日常/商单），含昨日或指定数据日账号数据；2.项目执行进度，只写推进状态，不写移交；3.截止当月营收情况，包含锁档、已执行、其他营收、合计和毛利；4.次日工作计划。信息不足时保留“待补充”，不要编造具体数字。',
+      daily_report: '任务：生成精简的内容小组日报草稿。结构固定为：1.当日产出（日常/商单），含昨日或指定数据日账号数据；2.项目执行进度，只写正在执行的商单、素材代做或明确商业项目，禁止写日常、选题和热点，没有商单或商业项目时写“暂无项目执行”；3.截止当月营收情况，包含锁档、已执行、其他营收、合计和毛利；4.次日工作计划。信息不足时保留“待补充”，不要编造具体数字。',
       project_review: '任务：做项目复盘。结构包含：目标、进展、数据表现、问题归因、可复用经验、下周动作。',
       research: '任务：查资料并整理。区分确定事实、平台库参考、创作启发。',
       image_generation: '任务：生成或修改图片。若工具已返回图片链接，直接把图片链接给用户，并简单说明提示词、比例和可继续修改方向；不要假装已经看到未返回的图片。',
@@ -4552,6 +5551,7 @@ module.exports = function createAgentRoutes(deps) {
     const explicitTask = useExplicitTask ? (body.task_type || body.taskType) : null;
     const requestedMode = String(body.agent_mode || body.agentMode || 'auto').toLowerCase();
     const agentMode = requestedMode === 'codex' || requestedMode === 'platform' ? requestedMode : 'auto';
+    const allowSiteContext = useSiteContextEnabled(body);
     let taskType = detectTask(input, explicitTask);
     if (!input) { cb({ error: 'message required' }); return; }
     const steps = [];
@@ -4626,7 +5626,7 @@ module.exports = function createAgentRoutes(deps) {
       }
       const planStep = toolMeta('agent_plan', 'AI 规划工具', 'projectAgent', 'running');
       steps.push(planStep);
-      plan = await planAgentRun(planningInput, modelHistory, auth, explicitTask);
+      plan = await planAgentRun(planningInput, modelHistory, auth, explicitTask, { allowSiteContext: allowSiteContext });
       plan.images = incomingImages;
       taskType = plan.task_type || taskType;
       planStep.status = 'done';
@@ -4638,7 +5638,7 @@ module.exports = function createAgentRoutes(deps) {
       if (agentMode === 'platform') {
         plan.tools = plan.tools.filter(function(tool) { return tool.id !== 'codex_deep_analysis'; });
       }
-      const context = documentContext.concat(await gatherContextFromPlan(input, plan, auth, steps, sources, agentMode));
+      const context = documentContext.concat(await gatherContextFromPlan(input, plan, auth, steps, sources, agentMode, { allowSiteContext: allowSiteContext }));
       steps.push(toolMeta('model_generate', '生成草稿', 'projectAgent', 'running'));
       const output = await generateAnswer(planningInput, taskType, modelHistory, context);
       steps[steps.length - 1].status = 'done';
@@ -4862,13 +5862,14 @@ module.exports = function createAgentRoutes(deps) {
     const explicitTask = useExplicitTask ? (body.task_type || body.taskType) : null;
     const requestedMode = String(body.agent_mode || body.agentMode || 'auto').toLowerCase();
     const agentMode = requestedMode === 'codex' || requestedMode === 'platform' ? requestedMode : 'auto';
+    const allowSiteContext = useSiteContextEnabled(body);
     let taskType = detectTask(input, explicitTask);
     if (!input) {
       writeSse(res, 'error', { error: 'message required' });
       res.end();
       return;
     }
-    if (isWeeklyReportOutputIntent(input, taskType)) {
+    if (allowSiteContext && isWeeklyReportOutputIntent(input, taskType)) {
       await runWeeklyReportStream(body, res, input, auth, taskType);
       return;
     }
@@ -4880,7 +5881,7 @@ module.exports = function createAgentRoutes(deps) {
       await runDailyReportReviseStream(body, res, input, auth);
       return;
     }
-    if (taskType === 'daily_report' && asksForDailyReport(input)) {
+    if (allowSiteContext && taskType === 'daily_report' && asksForDailyReport(input)) {
       await runDailyReportDraftStream(body, res, input, auth, taskType);
       return;
     }
@@ -4910,7 +5911,7 @@ module.exports = function createAgentRoutes(deps) {
       writeSse(res, 'status', { stage: 'planning', message: '正在规划工具' });
       const planStep = toolMeta('agent_plan', 'AI 规划工具', 'projectAgent', 'running');
       steps.push(planStep);
-      plan = await planAgentRun(planningInput, modelHistory, auth, explicitTask);
+      plan = await planAgentRun(planningInput, modelHistory, auth, explicitTask, { allowSiteContext: allowSiteContext });
       plan.images = incomingImages;
       taskType = plan.task_type || taskType;
       planStep.status = 'done';
@@ -4925,7 +5926,7 @@ module.exports = function createAgentRoutes(deps) {
       }
 
       writeSse(res, 'status', { stage: 'context', message: '正在读取上下文' });
-      const context = documentContext.concat(await gatherContextFromPlan(input, plan, auth, steps, sources, agentMode));
+      const context = documentContext.concat(await gatherContextFromPlan(input, plan, auth, steps, sources, agentMode, { allowSiteContext: allowSiteContext }));
       writeSse(res, 'context', { tools: steps, sources: sources });
 
       steps.push(toolMeta('model_generate', '生成草稿', 'projectAgent', 'running'));
@@ -5029,12 +6030,13 @@ module.exports = function createAgentRoutes(deps) {
       const explicitTask = body.force_task ? (body.task_type || body.taskType) : null;
       const requestedMode = String(body.agent_mode || body.agentMode || 'auto').toLowerCase();
       const agentMode = requestedMode === 'codex' || requestedMode === 'platform' ? requestedMode : 'auto';
+      const allowSiteContext = useSiteContextEnabled(body);
       const incomingImages = normalizeAgentImages(body.images).slice(0, 4);
       const incomingDocuments = normalizeAgentDocuments(body.documents);
       const planningInput = input
         + (incomingImages.length ? '\n\n[用户本轮附带了图片，可作为本轮视觉输入。]' : '')
         + (incomingDocuments.length ? '\n\n[用户本轮上传了文件，正式发送时可交给后端解析。]' : '');
-      planAgentRun(planningInput, body.history || [], auth, explicitTask).then(function(plan) {
+      planAgentRun(planningInput, body.history || [], auth, explicitTask, { allowSiteContext: allowSiteContext }).then(function(plan) {
         plan.images = incomingImages;
         plan.documents = incomingDocuments.map(function(doc) {
           return { filename: doc.filename, size: doc.size, mime: doc.mime };
@@ -5045,15 +6047,15 @@ module.exports = function createAgentRoutes(deps) {
         if (agentMode === 'platform') {
           plan.tools = plan.tools.filter(function(tool) { return tool.id !== 'codex_deep_analysis'; });
         }
-        const defs = availableAgentTools(auth);
-        const tools = uniquePlannedTools(plan, input, auth, agentMode).map(function(item) {
+        const defs = availableAgentTools(auth, { allowSiteContext: allowSiteContext });
+        const tools = uniquePlannedTools(plan, input, auth, agentMode, { allowSiteContext: allowSiteContext }).map(function(item) {
           const def = defs.find(function(tool) { return tool.id === item.id; });
           return toolMeta(item.id, def ? def.label : item.id, def ? def.module : '', 'pending');
         });
         cb({ ok: true, task_type: plan.task_type, agent_mode: agentMode, plan: plan, tools: tools });
       }).catch(function(e) {
         const taskType = detectTask(input, body.task_type || body.taskType);
-        cb({ ok: true, task_type: taskType, error: e.message || String(e), tools: visibleToolsFor(input, taskType, auth) });
+        cb({ ok: true, task_type: taskType, error: e.message || String(e), tools: visibleToolsFor(input, taskType, auth, { allowSiteContext: allowSiteContext }) });
       });
     },
 

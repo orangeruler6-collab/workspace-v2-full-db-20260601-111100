@@ -50,6 +50,14 @@ function findCommand(command, extra) {
   return pathCandidates(command, extra).find(isExecutableFile) || '';
 }
 
+function bilibiliCookiesFile() {
+  const candidates = [
+    process.env.BILIBILI_COOKIES_FILE,
+    process.env.APPDATA && path.join(process.env.APPDATA, 'ChangWanContentBoard', 'auth', 'bilibili-cookies.txt')
+  ];
+  return candidates.find(isExecutableFile) || '';
+}
+
 function runCommand(command, args, options) {
   return new Promise(resolve => {
     const useCmd = isWindows() && /\.cmd$/i.test(command);
@@ -132,8 +140,15 @@ function detectTools(root) {
     opencli: findCommand(process.env.USAGI_OPENCLI_PATH || openCliDefault, [
       openCliDefault
     ]),
-    ffmpeg: findCommand('ffmpeg', [])
+    ffmpeg: findCommand('ffmpeg', []),
+    ffprobe: findCommand('ffprobe', [])
   };
+}
+
+function profileIsConnected(output, alias) {
+  return String(output || '').split(/\r?\n/).some(line =>
+    line.includes(alias) && /connected/i.test(line) && !/not connected|disconnected/i.test(line)
+  );
 }
 
 function normalizeLog(text) {
@@ -149,7 +164,29 @@ function safeFilename(value) {
     .replace(/^_+|_+$/g, '') || 'bilibili-video';
 }
 
-function downloadUrlForBvid(bvid, fallbackUrl) {
+function parseBilibiliPage(input) {
+  const source = input && typeof input === 'object' ? input : { url: input };
+  const directPage = Number(source.page || source.p || 0);
+  const directCid = Number(source.cid || 0);
+  const result = {
+    page: Number.isFinite(directPage) && directPage > 0 ? Math.floor(directPage) : 0,
+    cid: Number.isFinite(directCid) && directCid > 0 ? Math.floor(directCid) : 0
+  };
+  const rawUrl = String(source.url || '');
+  try {
+    const parsed = new URL(rawUrl);
+    const urlPage = Number(parsed.searchParams.get('p') || parsed.searchParams.get('page') || 0);
+    const urlCid = Number(parsed.searchParams.get('cid') || 0);
+    if (!result.page && Number.isFinite(urlPage) && urlPage > 0) result.page = Math.floor(urlPage);
+    if (!result.cid && Number.isFinite(urlCid) && urlCid > 0) result.cid = Math.floor(urlCid);
+  } catch(e) {}
+  return result;
+}
+
+function downloadUrlForBvid(bvid, fallbackUrl, page) {
+  const rawUrl = String(fallbackUrl || '');
+  if (bvid && rawUrl && rawUrl.toLowerCase().includes(String(bvid).toLowerCase())) return rawUrl;
+  if (bvid && Number(page) > 1) return 'https://www.bilibili.com/video/' + bvid + '?p=' + Math.floor(Number(page));
   if (bvid) return 'https://www.bilibili.com/video/' + bvid;
   return String(fallbackUrl || '');
 }
@@ -214,9 +251,71 @@ function qualityNumber(value) {
   return 64;
 }
 
+function requestedVideoHeight(value) {
+  const text = String(value || '').toLowerCase();
+  if (text.includes('1080')) return 1080;
+  if (text.includes('720')) return 720;
+  if (text.includes('480')) return 480;
+  return 0;
+}
+
+async function probeVideoResolution(ffprobe, filePath) {
+  if (!ffprobe || !filePath || !fs.existsSync(filePath)) return null;
+  const result = await runCommand(ffprobe, [
+    '-v', 'error',
+    '-select_streams', 'v:0',
+    '-show_entries', 'stream=width,height',
+    '-of', 'json',
+    filePath
+  ], { timeout: 30000 });
+  if (!result.ok) return null;
+  try {
+    const stream = (JSON.parse(result.stdout).streams || [])[0] || {};
+    const width = Number(stream.width || 0);
+    const height = Number(stream.height || 0);
+    return width > 0 && height > 0 ? { width, height } : null;
+  } catch(e) {
+    return null;
+  }
+}
+
+function resolutionMeetsQuality(resolution, requestedHeight) {
+  if (!resolution || !requestedHeight) return true;
+  const shortEdge = Math.min(resolution.width, resolution.height);
+  const longEdge = Math.max(resolution.width, resolution.height);
+  return shortEdge >= requestedHeight && longEdge >= Math.round(requestedHeight * 16 / 9);
+}
+
+async function verifyDownloadedQuality(result, tools, input) {
+  if (!result.ok || !Array.isArray(result.files) || !result.files.length) return result;
+  const requestedHeight = requestedVideoHeight(input.quality);
+  const resolutions = [];
+  for (const file of result.files) {
+    if (getMediaKind(file) !== 'video') continue;
+    const resolution = await probeVideoResolution(tools.ffprobe, file);
+    if (resolution) resolutions.push(Object.assign({ file }, resolution));
+  }
+  result.resolutions = resolutions;
+  if (!requestedHeight || !resolutions.length) return result;
+
+  const accepted = resolutions.filter(item => resolutionMeetsQuality(item, requestedHeight));
+  if (accepted.length) {
+    result.files = result.files.filter(file => accepted.some(item => item.file === file) || getMediaKind(file) !== 'video');
+    return result;
+  }
+
+  const best = resolutions.sort((a, b) => (b.width * b.height) - (a.width * a.height))[0];
+  result.ok = false;
+  result.error = result.tool + ' 实际只下载到 ' + best.width + 'x' + best.height
+    + '，未达到 ' + requestedHeight + 'P；继续尝试其他高画质下载方式';
+  return result;
+}
+
 async function tryBilibiliPlayurl(input) {
   if (!input.bvid) return { ok: false, skipped: true, tool: 'BiliPlayurl', error: 'BVID required' };
-  const pageUrl = downloadUrlForBvid(input.bvid, input.url);
+  const pageInfo = parseBilibiliPage(input);
+  const requestedPage = pageInfo.page || 1;
+  const pageUrl = downloadUrlForBvid(input.bvid, input.url, requestedPage);
   const headers = {
     'User-Agent': BILI_UA,
     'Referer': 'https://www.bilibili.com/'
@@ -225,7 +324,12 @@ async function tryBilibiliPlayurl(input) {
   if (!view.ok) return { ok: false, tool: 'BiliPlayurl', files: [], error: 'view api failed: ' + view.error };
   const data = view.data && view.data.data || {};
   const aid = data.aid;
-  const cid = data.cid;
+  const pages = Array.isArray(data.pages) ? data.pages : [];
+  const selectedPage = pages.find(item => Number(item && item.page) === requestedPage) || pages[requestedPage - 1] || null;
+  if (requestedPage > 1 && !selectedPage && !pageInfo.cid) {
+    return { ok: false, tool: 'BiliPlayurl', files: [], error: 'requested Bilibili page P' + requestedPage + ' was not found' };
+  }
+  const cid = pageInfo.cid || selectedPage && selectedPage.cid || data.cid;
   if (!aid || !cid) return { ok: false, tool: 'BiliPlayurl', files: [], error: 'view api missing aid/cid' };
 
   const qn = qualityNumber(input.quality);
@@ -240,7 +344,8 @@ async function tryBilibiliPlayurl(input) {
   const mediaUrl = durl && (durl.url || durl.backup_url && durl.backup_url[0] || durl.backupUrl && durl.backupUrl[0]);
   if (!mediaUrl) return { ok: false, tool: 'BiliPlayurl', files: [], error: 'playurl api returned no progressive mp4 url' };
 
-  const name = safeFilename((data.title || input.bvid) + '_' + input.bvid) + '.mp4';
+  const pagePart = selectedPage && selectedPage.part ? '_P' + requestedPage + '_' + selectedPage.part : (requestedPage > 1 ? '_P' + requestedPage : '');
+  const name = safeFilename((data.title || input.bvid) + pagePart + '_' + input.bvid) + '.mp4';
   const filePath = path.join(input.outputDir, name);
   const downloaded = await downloadHttpFile(mediaUrl, filePath, {
     'User-Agent': BILI_UA,
@@ -252,7 +357,7 @@ async function tryBilibiliPlayurl(input) {
     ok: files.length > 0,
     tool: 'BiliPlayurl',
     files,
-    stdout: 'Downloaded from Bilibili playurl API, quality=' + (playData.quality || qn),
+    stdout: 'Downloaded from Bilibili playurl API, page=P' + requestedPage + ', cid=' + cid + ', quality=' + (playData.quality || qn),
     stderr: '',
     error: files.length ? '' : (downloaded.error || 'BiliPlayurl finished but no media file was produced')
   };
@@ -260,14 +365,16 @@ async function tryBilibiliPlayurl(input) {
 
 async function tryBBDown(tool, input) {
   if (!tool) return { ok: false, skipped: true, tool: 'BBDown', error: 'BBDown not installed' };
-  const url = downloadUrlForBvid(input.bvid, input.url);
+  const pageInfo = parseBilibiliPage(input);
+  const url = downloadUrlForBvid(input.bvid, input.url, pageInfo.page);
+  const filePattern = pageInfo.page ? '<videoTitle>_P' + pageInfo.page + '_<pageTitle>_<bvid>' : '<videoTitle>_<bvid>';
   const before = new Set(walkFiles(input.outputDir));
   const args = [
     url,
     '--work-dir',
     input.outputDir,
     '--file-pattern',
-    '<videoTitle>_<bvid>',
+    filePattern,
     '--dfn-priority',
     input.quality || '8K 超高清, 4K 超清, HDR 真彩, 杜比视界, 1080P 高码率, 1080P 高清, 720P 高清'
   ];
@@ -286,9 +393,11 @@ async function tryBBDown(tool, input) {
 
 async function tryYtDlp(tool, input) {
   if (!tool) return { ok: false, skipped: true, tool: 'yt-dlp', error: 'yt-dlp not installed or shim is invalid' };
-  const url = downloadUrlForBvid(input.bvid, input.url);
+  const pageInfo = parseBilibiliPage(input);
+  const url = downloadUrlForBvid(input.bvid, input.url, pageInfo.page);
   const before = new Set(walkFiles(input.outputDir));
-  const outPattern = path.join(input.outputDir, '%(title).120B_%(id)s.%(ext)s');
+  const outPattern = path.join(input.outputDir, '%(title).100B_' + (pageInfo.page ? 'P' + pageInfo.page + '_' : '') + '%(id)s.%(ext)s');
+  const cookiesFile = bilibiliCookiesFile();
   const args = [
     '-f',
     'bv*+ba/bestvideo+bestaudio/best',
@@ -297,9 +406,10 @@ async function tryYtDlp(tool, input) {
     '--no-playlist',
     '--restrict-filenames',
     '-o',
-    outPattern,
-    url
+    outPattern
   ];
+  if (cookiesFile) args.push('--cookies', cookiesFile);
+  args.push(url);
   const result = await runCommand(tool, args, { timeout: input.timeout || 15 * 60 * 1000 });
   const files = newMediaFiles(input.outputDir, before);
   return {
@@ -316,8 +426,16 @@ async function tryYtDlp(tool, input) {
 async function tryOpenCli(tool, input) {
   if (!tool) return { ok: false, skipped: true, tool: 'OpenCLI', error: 'OpenCLI not installed' };
   if (!input.bvid) return { ok: false, skipped: true, tool: 'OpenCLI', error: 'OpenCLI Bilibili download requires BV id' };
+  const profileAlias = String(process.env.BILIBILI_DOWNLOAD_OPENCLI_PROFILE || '').trim();
+  if (!profileAlias) {
+    return { ok: false, skipped: true, tool: 'OpenCLI', error: '未配置 B站下载专用 Profile' };
+  }
+  const listed = await runCommand(tool, ['profile', 'list'], { timeout: 8000 });
+  if (!profileIsConnected(listed.stdout + '\n' + listed.stderr, profileAlias)) {
+    return { ok: false, skipped: true, tool: 'OpenCLI', error: 'B站下载专用 Profile 当前未连接' };
+  }
   const before = new Set(walkFiles(input.outputDir));
-  const args = ['bilibili', 'download', input.bvid, '--output', input.outputDir, '--quality', '1080p', '-f', 'json'];
+  const args = ['--profile', profileAlias, 'bilibili', 'download', input.bvid, '--output', input.outputDir, '--quality', '1080p', '-f', 'json'];
   const result = await runCommand(tool, args, { timeout: input.timeout || 15 * 60 * 1000 });
   const files = newMediaFiles(input.outputDir, before);
   return {
@@ -341,12 +459,12 @@ async function downloadBilibili(input) {
   const order = [
     () => tryBBDown(tools.bbdown, input),
     () => tryYtDlp(tools.ytdlp, input),
-    () => tryBilibiliPlayurl(input),
-    () => tryOpenCli(tools.opencli, input)
+    () => tryOpenCli(tools.opencli, input),
+    () => tryBilibiliPlayurl(input)
   ];
 
   for (const run of order) {
-    const result = await run();
+    const result = await verifyDownloadedQuality(await run(), tools, input);
     attempts.push(result);
     if (result.ok) {
       return {
@@ -360,14 +478,17 @@ async function downloadBilibili(input) {
     }
   }
 
+  const details = attempts.filter(item => !item.skipped).map(item => item.tool + ': ' + (item.error || 'failed')).join(' | ');
+  const requestedHeight = requestedVideoHeight(input.quality);
   return {
     ok: false,
     platform: 'bilibili',
     files: [],
     attempts,
     tools,
-    error: attempts.filter(item => !item.skipped).map(item => item.tool + ': ' + (item.error || 'failed')).join(' | ')
-      || 'No available downloader. Install BBDown or a real yt-dlp executable.'
+    error: requestedHeight >= 1080
+      ? '未取得真实 1080P 文件。B站登录 Cookie 可能已过期，请用桌面的“数据收集专用”快捷方式重新登录并刷新 Cookie。' + (details ? ' ' + details : '')
+      : details || 'No available downloader. Install BBDown or a real yt-dlp executable.'
   };
 }
 

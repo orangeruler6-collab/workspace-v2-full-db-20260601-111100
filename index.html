@@ -8,6 +8,26 @@
 </head>
 <body>
   <div id="app"></div>
+  <script>
+    (() => {
+      const failedResources = []
+      window.addEventListener('error', (event) => {
+        const target = event.target
+        const resource = target && (target.src || target.href)
+        if (resource) failedResources.push(resource)
+      }, true)
+
+      window.setTimeout(() => {
+        const app = document.getElementById('app')
+        if (!app || app.hasAttribute('data-v-app') || app.childElementCount > 0) return
+        const resource = failedResources.at(-1)
+        const detail = resource
+          ? `Failed resource: ${resource}`
+          : 'The page script did not finish loading.'
+        app.innerHTML = `<main style="max-width:680px;margin:12vh auto;padding:28px;font-family:sans-serif;color:#27231f;background:#fff;border:1px solid #e7ddd2;border-radius:18px;box-shadow:0 18px 55px rgba(52,42,32,.12)"><h1 style="font-size:22px;margin:0 0 12px">Page loading failed</h1><p style="line-height:1.7;word-break:break-all">${detail}</p><button onclick="window.location.reload()" style="padding:10px 18px;border:0;border-radius:10px;background:#202020;color:#fff;cursor:pointer">Reload</button></main>`
+      }, 6000)
+    })()
+  </script>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>
