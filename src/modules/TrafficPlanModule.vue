@@ -96,8 +96,8 @@
               :style="projectAccentStyle(project)"
               @click="selectArchivedProject(project)">
               <div>
-                <strong>{{ project.projectName }}</strong>
-                <span>{{ projectCardSubtitle(project) }} · {{ projectAccountCountText(project) }}</span>
+                <strong :title="project.projectName">{{ project.projectName }}</strong>
+                <span :title="`${projectCardSubtitle(project)} · ${projectAccountCountText(project)}`">{{ projectCardSubtitle(project) }} · {{ projectAccountCountText(project) }}</span>
               </div>
               <div class="traffic-archive-actions">
                 <button class="btn btn-ghost btn-sm" type="button" @click.stop="selectArchivedProject(project)">查看</button>
@@ -3968,6 +3968,9 @@ function toast(tone, message) {
 
 .traffic-project-rail {
   background: var(--panel-bg);
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding-bottom: max(18px, env(safe-area-inset-bottom));
 }
 
 .traffic-rail-head,
@@ -4027,11 +4030,18 @@ function toast(tone, message) {
   align-content: start;
 }
 
+.traffic-project-list {
+  flex: 1 1 0;
+}
+
 .traffic-archive-pool {
+  flex: 0 0 auto;
   display: grid;
   gap: 8px;
   min-height: 0;
+  max-height: min(42vh, 360px);
   padding-top: 8px;
+  padding-bottom: 10px;
   border-top: 1px solid var(--traffic-line);
 }
 
@@ -4057,9 +4067,11 @@ function toast(tone, message) {
 .traffic-archive-list {
   display: grid;
   gap: 6px;
-  max-height: 188px;
+  max-height: min(34vh, 300px);
   overflow: auto;
   align-content: start;
+  padding-right: 3px;
+  padding-bottom: 10px;
 }
 
 .traffic-archive-item {
@@ -4081,7 +4093,7 @@ function toast(tone, message) {
 
 .traffic-archive-item > div {
   display: grid;
-  gap: 2px;
+  gap: 4px;
   min-width: 0;
 }
 
@@ -4089,17 +4101,24 @@ function toast(tone, message) {
 .traffic-archive-item span {
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .traffic-archive-item strong {
   color: var(--text);
   font-size: 12px;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.35;
 }
 
 .traffic-archive-item span {
   color: var(--text-muted);
   font-size: 11px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  white-space: normal;
+  line-height: 1.35;
 }
 
 .traffic-archive-actions {
