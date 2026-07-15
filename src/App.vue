@@ -92,14 +92,12 @@
         </button>
         <div class="login-title">&#x4e4c;&#x8428;&#x5947;&#x5de5;&#x4f5c;&#x5e73;&#x53f0;</div>
         <div class="login-subtitle">&#x8bf7;&#x4f7f;&#x7528;&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;&#xff0c;&#x6210;&#x529f;&#x540e;&#x4f1a;&#x81ea;&#x52a8;&#x8fdb;&#x5165;&#x7cfb;&#x7edf;</div>
-        <section class="erp-qr-panel" aria-label="&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;">
-          <div class="erp-qr-head">
-            <strong>&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;</strong>
-            <span>&#x767b;&#x5f55;&#x6001;&#x4fdd;&#x6301; 30 &#x5929;</span>
+        <section class="erp-qr-panel erp-qr-only" aria-label="&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;">
+          <div class="erp-qr-crop">
+            <iframe class="erp-login-frame" :src="erpLoginFrameUrl" title="&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;" loading="eager"></iframe>
           </div>
-          <iframe class="erp-login-frame" :src="erpLoginFrameUrl" title="&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;" loading="eager"></iframe>
-          <button class="btn btn-ghost erp-open-btn" type="button" :disabled="loggingIn" @click="doErpLogin">
-            &#x626b;&#x7801;&#x533a;&#x6253;&#x4e0d;&#x5f00;&#xff1f;&#x70b9;&#x8fd9;&#x91cc;&#x8df3;&#x8f6c; ERP &#x767b;&#x5f55;
+          <button class="erp-open-link" type="button" :disabled="loggingIn" @click="doErpLogin">
+            &#x4e8c;&#x7ef4;&#x7801;&#x6ca1;&#x51fa;&#x6765;&#xff1f;&#x6253;&#x5f00;&#x5b8c;&#x6574;&#x767b;&#x5f55;&#x9875;
           </button>
         </section>
         <div v-if="loginError" class="login-error">{{ loginError }}</div>

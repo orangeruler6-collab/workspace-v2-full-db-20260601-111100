@@ -2183,13 +2183,17 @@ textarea.inp {
   text-shadow: var(--brand-shadow);
 }
 .erp-qr-panel {
-  margin: 18px 0 14px;
-  padding: 14px;
+  margin: 16px auto 12px;
+  padding: 12px;
   border: 1px solid color-mix(in srgb, var(--border) 74%, var(--usagi-yellow));
   border-radius: 18px;
   background:
     radial-gradient(circle at 18% 0%, color-mix(in srgb, var(--usagi-yellow) 14%, transparent), transparent 34%),
     color-mix(in srgb, var(--surface2) 86%, transparent);
+}
+.erp-qr-only {
+  width: min(308px, 100%);
+  box-shadow: 0 16px 36px color-mix(in srgb, var(--usagi-yellow) 13%, rgba(0,0,0,0.24));
 }
 .erp-qr-head {
   display: flex;
@@ -2204,19 +2208,52 @@ textarea.inp {
   color: var(--text-muted, #9d98b0);
   font-size: 12px;
 }
-.erp-login-frame {
-  display: block;
-  width: 100%;
-  height: 390px;
-  border: 0;
+.erp-qr-crop {
+  position: relative;
+  width: 280px;
+  max-width: 100%;
+  height: 280px;
+  margin: 0 auto;
+  overflow: hidden;
   border-radius: 14px;
   background: #fff;
   box-shadow: inset 0 0 0 1px rgba(0,0,0,0.08);
+}
+.erp-login-frame {
+  display: block;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 520px;
+  height: 520px;
+  border: 0;
+  background: #fff;
+  transform: translate(-50%, -50%) scale(1.12);
+  transform-origin: center;
 }
 .erp-open-btn {
   width: 100%;
   margin-top: 10px;
   border-radius: 12px;
+}
+.erp-open-link {
+  margin: 10px 0 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted, #9d98b0);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.erp-open-link:hover {
+  color: var(--primary-light, #c4b5fd);
+}
+.erp-open-link:disabled {
+  cursor: wait;
+  opacity: 0.6;
 }
 .password-login-panel {
   margin-top: 14px;
