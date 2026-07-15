@@ -47,6 +47,27 @@ module.exports = function createScheduleRoutes(deps) {
   }, {});
 
   let db = null;
+  const scheduleSaveQueue = [];
+  let scheduleSaveRunning = false;
+
+  function enqueueScheduleSave(run) {
+    scheduleSaveQueue.push(run);
+    drainScheduleSaveQueue();
+  }
+
+  function drainScheduleSaveQueue() {
+    if (scheduleSaveRunning || !scheduleSaveQueue.length) return;
+    scheduleSaveRunning = true;
+    const run = scheduleSaveQueue.shift();
+    let released = false;
+    run(function release() {
+      if (released) return;
+      released = true;
+      scheduleSaveRunning = false;
+      drainScheduleSaveQueue();
+    });
+  }
+
   function getDb() {
     if (!db) {
       db = new sqlite3.Database(dbPath);
@@ -725,79 +746,92 @@ module.exports = function createScheduleRoutes(deps) {
     },
 
     '/api/schedule/save': function(body, cb) {
-      const database = getDb();
-      const { tasks, members } = body;
-
-      if (!tasks || !Array.isArray(tasks)) {
-        cb({ ok: false, error: 'invalid tasks' });
-        return;
-      }
-
-      const auth = body._auth || {};
-      const allowedGroups = allowedGroupNames(auth);
-      if (!allowedGroups.length) {
-        cb({ ok: false, error: 'no schedule group permission' });
-        return;
-      }
-      const allowedSet = new Set(allowedGroups);
-      const fallbackGroup = allowedGroups.length === 1 ? allowedGroups[0] : '';
-      const normalizedTasks = tasks
-        .map(function(task) { return normalizeTask(task, fallbackGroup); })
-        .filter(function(task) { return allowedSet.has(task.group_name); });
-      const groupsToReplace = Array.from(new Set(
-        normalizedTasks
-          .map(function(task) { return task.group_name; })
-          .filter(function(groupName) { return allowedSet.has(groupName); })
-      ));
-
-      if (!groupsToReplace.length) {
-        cb({ ok: true, count: 0 });
-        return;
-      }
-
-      const hasBaseRevision = body.revision !== undefined && body.revision !== null
-        || body.baseRevision !== undefined && body.baseRevision !== null;
-      const baseRevision = Number(body.revision || body.baseRevision || 0) || 0;
-      readScheduleRevision(database, function(revisionErr, currentMeta) {
-        if (revisionErr) {
-          cb({ ok: false, error: revisionErr.message });
-          return;
+      enqueueScheduleSave(function(release) {
+        let responded = false;
+        function respond(result) {
+          if (responded) return;
+          responded = true;
+          try {
+            cb(result);
+          } finally {
+            release();
+          }
         }
-        if (hasBaseRevision && baseRevision !== currentMeta.revision) {
-          cb({
-            ok: false,
-            code: 'schedule_conflict',
-            error: '排期已被其他人更新，请同步最新版本后重试',
-            revision: currentMeta.revision,
-            updated_at: currentMeta.updated_at
-          });
+
+        const database = getDb();
+        const { tasks } = body;
+
+        if (!tasks || !Array.isArray(tasks)) {
+          respond({ ok: false, error: 'invalid tasks' });
           return;
         }
 
-        database.serialize(function() {
-          const scopedDelete = buildScopedDelete(auth, groupsToReplace);
-          database.all(scopedDelete.sql.replace(/^DELETE FROM schedules WHERE /, 'SELECT * FROM schedules WHERE '), scopedDelete.params, function(readErr, oldRows) {
-            if (readErr) {
-              cb({ ok: false, error: readErr.message });
-              return;
-            }
-            database.run(scopedDelete.sql, scopedDelete.params, function(err) {
-              if (err) {
-                cb({ ok: false, error: err.message });
+        const auth = body._auth || {};
+        const allowedGroups = allowedGroupNames(auth);
+        if (!allowedGroups.length) {
+          respond({ ok: false, error: 'no schedule group permission' });
+          return;
+        }
+        const allowedSet = new Set(allowedGroups);
+        const fallbackGroup = allowedGroups.length === 1 ? allowedGroups[0] : '';
+        const normalizedTasks = tasks
+          .map(function(task) { return normalizeTask(task, fallbackGroup); })
+          .filter(function(task) { return allowedSet.has(task.group_name); });
+        const groupsToReplace = Array.from(new Set(
+          normalizedTasks
+            .map(function(task) { return task.group_name; })
+            .filter(function(groupName) { return allowedSet.has(groupName); })
+        ));
+
+        if (!groupsToReplace.length) {
+          respond({ ok: true, count: 0 });
+          return;
+        }
+
+        const hasBaseRevision = body.revision !== undefined && body.revision !== null
+          || body.baseRevision !== undefined && body.baseRevision !== null;
+        const baseRevision = Number(body.revision || body.baseRevision || 0) || 0;
+        readScheduleRevision(database, function(revisionErr, currentMeta) {
+          if (revisionErr) {
+            respond({ ok: false, error: revisionErr.message });
+            return;
+          }
+          if (hasBaseRevision && baseRevision !== currentMeta.revision) {
+            respond({
+              ok: false,
+              code: 'schedule_conflict',
+              error: '排期已被其他人更新，请同步最新版本后重试',
+              revision: currentMeta.revision,
+              updated_at: currentMeta.updated_at
+            });
+            return;
+          }
+
+          database.serialize(function() {
+            const scopedDelete = buildScopedDelete(auth, groupsToReplace);
+            database.all(scopedDelete.sql.replace(/^DELETE FROM schedules WHERE /, 'SELECT * FROM schedules WHERE '), scopedDelete.params, function(readErr, oldRows) {
+              if (readErr) {
+                respond({ ok: false, error: readErr.message });
                 return;
               }
-              persistTasks(database, normalizedTasks, function(result) {
-                if (!result || result.ok === false) {
-                  cb(result || { ok: false, error: 'save schedule failed' });
+              database.run(scopedDelete.sql, scopedDelete.params, function(err) {
+                if (err) {
+                  respond({ ok: false, error: err.message });
                   return;
                 }
-                bumpScheduleRevision(database, function(bumpErr, nextMeta) {
-                  if (bumpErr) {
-                    cb({ ok: false, error: bumpErr.message });
+                persistTasks(database, normalizedTasks, function(result) {
+                  if (!result || result.ok === false) {
+                    respond(result || { ok: false, error: 'save schedule failed' });
                     return;
                   }
-                  logScheduleTaskDiff(body, oldRows || [], normalizedTasks);
-                  cb(Object.assign({}, result, { revision: nextMeta.revision, updated_at: nextMeta.updated_at }));
+                  bumpScheduleRevision(database, function(bumpErr, nextMeta) {
+                    if (bumpErr) {
+                      respond({ ok: false, error: bumpErr.message });
+                      return;
+                    }
+                    logScheduleTaskDiff(body, oldRows || [], normalizedTasks);
+                    respond(Object.assign({}, result, { revision: nextMeta.revision, updated_at: nextMeta.updated_at }));
+                  });
                 });
               });
             });
