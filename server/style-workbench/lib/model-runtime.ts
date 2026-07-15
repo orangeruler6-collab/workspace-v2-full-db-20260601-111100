@@ -114,16 +114,16 @@ export function getChatConfig() {
   return {
     role: "primary" as const,
     enabled: process.env.CHAT_ENABLED !== "0",
-    apiKey: process.env.CHAT_API_KEY || process.env.OPENAI_API_KEY || "",
-    baseUrl: normalizeBaseUrl(process.env.CHAT_BASE_URL || process.env.OPENAI_BASE_URL || ""),
+    apiKey: process.env.CHAT_API_KEY || process.env.OPENAI_API_KEY || process.env.FHL_API_KEY || "",
+    baseUrl: normalizeBaseUrl(process.env.CHAT_BASE_URL || process.env.OPENAI_BASE_URL || process.env.FHL_BASE_URL || ""),
     responsesUrl: process.env.CHAT_RESPONSES_URL || "",
     chatCompletionsUrl: process.env.CHAT_COMPLETIONS_URL || "",
-    model: process.env.CHAT_MODEL || process.env.OPENAI_MODEL || "",
+    model: process.env.CHAT_MODEL || process.env.OPENAI_MODEL || process.env.FHL_DEFAULT_MODEL || "",
     wireApi: normalizeWireApi(process.env.CHAT_WIRE_API || "auto"),
     reasoningEffort: normalizeReasoningEffort(chatReasoningEffort),
     chatCompletionReasoningEffort: chatReasoningEffort ? normalizeReasoningEffort(chatReasoningEffort) : "none",
     serviceTier: normalizeServiceTier(process.env.CHAT_SERVICE_TIER),
-    proxyUrl: process.env.CHAT_PROXY_URL || ""
+    proxyUrl: process.env.CHAT_PROXY_URL || process.env.FHL_PROXY_URL || process.env.MODEL_PROXY_URL || ""
   } satisfies ChatRuntimeConfig;
 }
 
@@ -133,15 +133,15 @@ export function getChatFallbackConfig() {
     role: "fallback" as const,
     enabled: process.env.CHAT_FALLBACK_ENABLED !== "0",
     apiKey: process.env.CHAT_FALLBACK_API_KEY || process.env.FHL_API_KEY || "",
-    baseUrl: normalizeBaseUrl(process.env.CHAT_FALLBACK_BASE_URL || DEFAULT_FALLBACK_CHAT_BASE_URL),
+    baseUrl: normalizeBaseUrl(process.env.CHAT_FALLBACK_BASE_URL || process.env.FHL_BASE_URL || DEFAULT_FALLBACK_CHAT_BASE_URL),
     responsesUrl: process.env.CHAT_FALLBACK_RESPONSES_URL || "",
     chatCompletionsUrl: process.env.CHAT_FALLBACK_COMPLETIONS_URL || "",
-    model: process.env.CHAT_FALLBACK_MODEL || DEFAULT_FALLBACK_CHAT_MODEL,
-    wireApi: normalizeWireApi(process.env.CHAT_FALLBACK_WIRE_API || "responses"),
+    model: process.env.CHAT_FALLBACK_MODEL || process.env.FHL_DEFAULT_MODEL || DEFAULT_FALLBACK_CHAT_MODEL,
+    wireApi: normalizeWireApi(process.env.CHAT_FALLBACK_WIRE_API || process.env.CHAT_WIRE_API || "responses"),
     reasoningEffort: normalizeReasoningEffort(chatReasoningEffort),
     chatCompletionReasoningEffort: chatReasoningEffort ? normalizeReasoningEffort(chatReasoningEffort) : "none",
     serviceTier: normalizeServiceTier(process.env.CHAT_FALLBACK_SERVICE_TIER),
-    proxyUrl: process.env.CHAT_FALLBACK_PROXY_URL || process.env.CHAT_PROXY_URL || ""
+    proxyUrl: process.env.CHAT_FALLBACK_PROXY_URL || process.env.CHAT_PROXY_URL || process.env.FHL_PROXY_URL || process.env.MODEL_PROXY_URL || ""
   } satisfies ChatRuntimeConfig;
 }
 
