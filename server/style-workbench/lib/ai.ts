@@ -3153,22 +3153,85 @@ function buildFallbackCopy(
   style: string,
   input: { mode: Draft["mode"]; prompt: string; sourceText?: string }
 ) {
-  const task = input.mode === "topic" ? input.prompt : input.sourceText || input.prompt;
-  return `标题：${task.slice(0, 26)}
+  const material = resolveFallbackCopyMaterial(input);
+  const accountLabel = accountName.trim() || "参考账号";
+  const styleHint = firstUsefulStyleHint(style);
+  const opening = material.topic
+    ? `先别急着把${material.topic}讲成说明书。`
+    : "先别急着把这条内容写成说明书。";
+  const scene = material.detail
+    ? `观众真正会停下来的，不是你把卖点一条条摆出来，而是他能不能在一句话里听懂：这件事和我有什么关系。比如${material.detail}，不要上来就堆功能，先把使用场景讲清楚，再把卖点自然带出来。`
+    : "观众真正会停下来的，不是你把卖点一条条摆出来，而是他能不能在一句话里听懂：这件事和我有什么关系。先给一个具体场景，再把卖点自然带出来，听感会比硬介绍顺很多。";
+  const styleLine = styleHint
+    ? `写法可以参考「${accountLabel}」的节奏：先抛判断，再补场景，最后落到一个很具体的行动。${styleHint}`
+    : `写法可以参考「${accountLabel}」的节奏：先抛判断，再补场景，最后落到一个很具体的行动。`;
 
-开头：
-你可能也遇到过这个问题：${task}
+  return [
+    opening,
+    scene,
+    styleLine,
+    "所以这条不要写得太满，也别急着把每个优势都解释完。先让观众觉得“这说的是我”，再告诉他为什么这个点值得试，最后用一句轻一点的互动收住：如果换成你，你会先看场景，还是先看价格？"
+  ].join("\n\n");
+}
 
-正文：
-先别急着下结论。真正影响结果的，往往不是表面那个动作，而是背后的判断方式。
+const FALLBACK_INSTRUCTION_TERMS = [
+  "帮忙", "请", "按我", "产出", "生成", "写一篇", "脚本", "文案",
+  "左右", "要有噱头", "有趣", "有网感", "不能过于ai", "不能过于AI",
+  "通俗易懂", "不要分点", "不要断开", "接地气", "场景化", "卖点"
+];
 
-第一，把问题拆小。先看它到底卡在目标、素材、表达，还是执行节奏。
-第二，找到一个可复用的参照。像「${accountName}」这类账号，核心不是某一句话术，而是它每次都能快速建立场景、给出判断，再把观众带到一个具体行动。
-第三，落到一个明确动作。不要泛泛地说“提升质量”，而是直接写出下一步要做什么。
+function resolveFallbackCopyMaterial(input: { mode: Draft["mode"]; prompt: string; sourceText?: string }) {
+  const prompt = cleanFallbackText(input.prompt);
+  const source = cleanFallbackText(input.sourceText || "");
+  const sourceTopic = extractFallbackTopic(source);
+  const promptTopic = extractFallbackTopic(prompt);
+  const topic = input.mode === "topic" ? promptTopic || sourceTopic : sourceTopic || promptTopic;
 
-结尾：
-如果你也在做类似内容，可以先从这个角度改一版，效果通常会更清楚。
+  return {
+    topic: topic || "这件事",
+    detail: extractFallbackDetail(source || prompt, topic)
+  };
+}
 
-参考风格摘要：
-${style.slice(0, 500)}`;
+function cleanFallbackText(value: string) {
+  return String(value || "").replace(/\r/g, "\n").replace(/\s+/g, " ").trim();
+}
+
+function extractFallbackTopic(value: string) {
+  const text = stripFallbackInstructionWords(value);
+  if (!text) return "";
+  return (text.split(/[。，；：！？,.;:!?]/).map((item) => item.trim()).find(Boolean) || "")
+    .slice(0, 32)
+    .trim();
+}
+
+function extractFallbackDetail(value: string, topic: string) {
+  const sentences = cleanFallbackText(value)
+    .split(/[。！？!?；;]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const picked = sentences.find((item) => item !== topic && !isFallbackInstructionSentence(item));
+  return stripFallbackInstructionWords(picked || "").slice(0, 80).trim();
+}
+
+function stripFallbackInstructionWords(value: string) {
+  let text = cleanFallbackText(value);
+  for (const term of FALLBACK_INSTRUCTION_TERMS) text = text.split(term).join("");
+  return text
+    .replace(/\d+\s*[字个]\s*/g, "")
+    .replace(/[。，；：！？,.;:!?]+$/g, "")
+    .trim();
+}
+
+function isFallbackInstructionSentence(value: string) {
+  return FALLBACK_INSTRUCTION_TERMS.some((term) => value.includes(term)) || /\d+\s*[字个]/.test(value);
+}
+
+function firstUsefulStyleHint(style: string) {
+  const headings = ["风格卡", "内容定位", "开头方式", "句式", "节奏", "结尾", "禁忌"];
+  const line = String(style || "")
+    .split(/\r?\n/)
+    .map((item) => item.replace(/^#+\s*/, "").trim())
+    .find((item) => item && !headings.some((heading) => item.includes(heading)));
+  return line ? `记住这个味道：${line.slice(0, 70)}。` : "";
 }
