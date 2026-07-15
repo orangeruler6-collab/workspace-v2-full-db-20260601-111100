@@ -48,6 +48,7 @@ const MAX_REFRESH_LIMIT = 120;
 const MAX_WINDOW_DAYS = 14;
 const DEFAULT_REFRESH_CONCURRENCY = 5;
 const MAX_REFRESH_CONCURRENCY = 5;
+const HOTLIST_READ_CONCURRENCY = 4;
 const LIKE_HEAT_WEIGHT = 22;
 const COMMENT_HEAT_WEIGHT = 80;
 const FAVORITE_HEAT_WEIGHT = 70;
@@ -80,11 +81,13 @@ export async function getDouyinHotlist(options: { windowDays?: number; windowKey
   const window = resolveHotlistWindow(options.windowKey || options.windowDays);
   const watchlist = await readDouyinHotlistWatchlist();
   const resolved = await resolveWatchlistAccounts(watchlist.accountIds);
-  const accountVideos = await Promise.all(
-    resolved.accounts.map(async (account) => ({
+  const accountVideos = await mapWithConcurrency(
+    resolved.accounts,
+    HOTLIST_READ_CONCURRENCY,
+    async (account) => ({
       account,
       videos: await getDouyinHotlistAccountVideos(account)
-    }))
+    })
   );
 
   const accounts: DouyinHotlistAccount[] = accountVideos.map(({ account, videos }) => {
@@ -377,8 +380,21 @@ async function resolveWatchlistAccounts(accountIds: string[]) {
     }))
   );
 
+  const invalidPlatformIds = entries
+    .filter((entry) => entry.account && entry.account.platform !== "douyin")
+    .map((entry) => entry.accountId);
+
+  // Old portable builds could put Bilibili accounts under this directory. Remove
+  // those references lazily so a migrated watchlist cannot pollute or overload the
+  // Douyin-only board on every request.
+  if (invalidPlatformIds.length) {
+    await removeDouyinHotlistAccountRefs(invalidPlatformIds);
+  }
+
   return {
-    accounts: entries.map((entry) => entry.account).filter((account): account is Account => Boolean(account)),
+    accounts: entries
+      .map((entry) => entry.account)
+      .filter((account): account is Account => Boolean(account) && account.platform === "douyin"),
     staleAccountIds: entries.filter((entry) => !entry.account).map((entry) => entry.accountId)
   };
 }

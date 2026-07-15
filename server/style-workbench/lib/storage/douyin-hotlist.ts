@@ -9,6 +9,7 @@ import { readJsonFile, writeJsonFile } from "./fs";
 const HOTLIST_DIR = "douyin-hotlist";
 const ACCOUNTS_DIR = "accounts";
 const WATCHLIST_FILE = "watchlist.json";
+const VIDEO_READ_CONCURRENCY = 12;
 
 type DouyinHotlistWatchlist = {
   version: 1;
@@ -187,11 +188,10 @@ export async function getDouyinHotlistAccountVideos(account: Account) {
     await migrateLegacyAccountVideos(account);
     files = await fs.readdir(hotlistVideosPath(account.slug)).catch(() => []);
   }
+  const videoFiles = files.filter((file) => file.endsWith(".json"));
   const videos = (
-    await Promise.all(
-      files
-        .filter((file) => file.endsWith(".json"))
-        .map((file) => readJsonFile<Video>(path.join(hotlistVideosPath(account.slug), file)))
+    await mapWithConcurrency(videoFiles, VIDEO_READ_CONCURRENCY, (file) =>
+      readJsonFile<Video>(path.join(hotlistVideosPath(account.slug), file))
     )
   ).filter(Boolean) as Video[];
 
@@ -381,14 +381,28 @@ async function readLegacyDouyinAccount(accountId: string) {
 async function migrateLegacyAccountVideos(account: Account) {
   const legacyVideosPath = path.join(libraryRoot(), "douyin", account.slug, "videos");
   const files = await fs.readdir(legacyVideosPath).catch(() => []);
+  const videoFiles = files.filter((file) => file.endsWith(".json"));
   const videos = (
-    await Promise.all(
-      files
-        .filter((file) => file.endsWith(".json"))
-        .map((file) => readJsonFile<Video>(path.join(legacyVideosPath, file)))
+    await mapWithConcurrency(videoFiles, VIDEO_READ_CONCURRENCY, (file) =>
+      readJsonFile<Video>(path.join(legacyVideosPath, file))
     )
   ).filter(Boolean) as Video[];
 
   if (!videos.length) return;
   await saveDouyinHotlistVideos(account, videos);
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T) => Promise<R>) {
+  const results = new Array<R>(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: Math.min(Math.max(concurrency, 1), items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await mapper(items[index]);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }
