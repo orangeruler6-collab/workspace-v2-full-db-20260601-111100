@@ -24,6 +24,8 @@ const DEFAULT_MEMBER_PERMISSIONS = [
   'trafficPlan',
   'trafficApply',
   'dailyhot',
+  'hotspotRadar',
+  'importedDouyinHotlist',
   'accountmonitor',
   'styleCollect',
   'styleLibrary',
@@ -563,8 +565,47 @@ function createAuthStore(options) {
     return get('SELECT * FROM users WHERE id=?', [result.lastID]);
   }
 
+  function decodeErpTokenCandidate(token) {
+    const normalized = String(token || '').replace(/!/g, '+').replace(/\./g, '/').replace(/:/g, '=');
+    try {
+      return Buffer.from(normalized, 'base64').toString('utf8').trim();
+    } catch(e) {
+      return '';
+    }
+  }
+
+  function buildErpTokenCandidates(input) {
+    const rawList = Array.isArray(input) ? input : [input];
+    const candidates = [];
+    rawList.forEach(function(item) {
+      const token = String(item || '').trim();
+      if (!token) return;
+      candidates.push(token);
+      try {
+        candidates.push(decodeURIComponent(token));
+      } catch(e) {}
+      const decoded = decodeErpTokenCandidate(token);
+      if (decoded) candidates.push(decoded);
+    });
+    return Array.from(new Set(candidates.map(function(token) {
+      return String(token || '').trim();
+    }).filter(Boolean)));
+  }
+
   async function erpLogin(authToken, req) {
-    const info = normalizeErpUserInfo(await callErpAuthApi('getuserinfo', String(authToken || '').trim()));
+    const tokens = buildErpTokenCandidates(authToken);
+    if (!tokens.length) throw new Error('缺少 ERP auth_token');
+    let info = null;
+    let lastError = null;
+    for (const token of tokens) {
+      try {
+        info = normalizeErpUserInfo(await callErpAuthApi('getuserinfo', token));
+        break;
+      } catch(e) {
+        lastError = e;
+      }
+    }
+    if (!info) throw lastError || new Error('ERP token 无效或已过期');
     const user = await upsertErpUser(info);
     const result = await createSessionForUser(user, req, 'erp_login.success', 'ERP 登录成功：' + (user.username || info.name || info.user));
     return Object.assign({}, result, {

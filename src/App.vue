@@ -78,61 +78,66 @@
     </div>
 
     <div v-else-if="!isLoggedIn" class="login-overlay">
-      <div class="login-box">
+      <div v-if="isErpEmbedFrame" class="login-box erp-embed-callback">
         <div class="login-logo">
           <img :src="loginUsagiImage" alt="" />
         </div>
-        <div class="login-title">乌萨奇工作平台</div>
-        <button class="btn btn-primary login-btn erp-login-btn" :disabled="loggingIn" @click="doErpLogin">
-          {{ loggingIn ? '正在进入 ERP 登录...' : '使用 ERP 系统登录' }}
-        </button>
-        <div class="login-sso-hint">ERP 登录成功后，本系统登录态会保持 30 天。</div>
-        <div class="auth-tabs" role="tablist" aria-label="账号入口">
-          <button
-            type="button"
-            class="auth-tab"
-            :class="{ active: authMode === 'login' }"
-            @click="setAuthMode('login')">
-            登录
-          </button>
-          <button
-            type="button"
-            class="auth-tab"
-            :class="{ active: authMode === 'register' }"
-            @click="setAuthMode('register')">
-            注册
-          </button>
-        </div>
-        <div class="login-subtitle">{{ authMode === 'login' ? '请输入用户名和密码登录' : '使用中文真名和邀请码注册' }}</div>
-        <div class="login-field">
-          <label>真实姓名</label>
-          <input class="inp" v-model="loginUser" placeholder="例如：张三" @keyup.enter="submitAuth" />
-        </div>
-        <div class="login-field">
-          <label>密码</label>
-          <input class="inp" type="password" v-model="loginPass" placeholder="至少 6 位" @keyup.enter="submitAuth" />
-        </div>
-        <div v-if="authMode === 'register'" class="login-field">
-          <label>所属组别</label>
-          <select class="inp" v-model="registerGroup">
-            <option value="">请选择组别</option>
-            <option value="内容一部">内容一部</option>
-            <option value="内容二组">内容二组</option>
-            <option value="内容三组">内容三组</option>
-            <option value="内容四组">内容四组</option>
-            <option value="内容五组">内容五组</option>
-            <option value="内容六组">内容六组</option>
-            <option value="MCN经纪组">MCN经纪组</option>
-          </select>
-        </div>
-        <div v-if="authMode === 'register'" class="login-field">
-          <label>邀请码</label>
-          <input class="inp" v-model="registerInvite" placeholder="???" @keyup.enter="submitAuth" />
-        </div>
+        <div class="login-title">&#x6b63;&#x5728;&#x5b8c;&#x6210;&#x767b;&#x5f55;</div>
+        <div class="login-subtitle">&#x4f01;&#x5fae;&#x5df2;&#x786e;&#x8ba4;&#xff0c;&#x6b63;&#x5728;&#x628a;&#x767b;&#x5f55;&#x6001;&#x540c;&#x6b65;&#x56de;&#x5de5;&#x4f5c;&#x5e73;&#x53f0;...</div>
         <div v-if="loginError" class="login-error">{{ loginError }}</div>
-        <button class="btn btn-primary login-btn" :disabled="loggingIn" @click="submitAuth">
-          {{ loggingIn ? (authMode === 'login' ? '登录中' : '注册中') : (authMode === 'login' ? '登录' : '注册并进入') }}
+      </div>
+      <div v-else class="login-box login-box-wide">
+        <button class="login-logo login-logo-button" type="button" title="&#x8d26;&#x53f7;&#x5bc6;&#x7801;&#x9690;&#x85cf;&#x5165;&#x53e3;" @click="togglePasswordLogin">
+          <img :src="loginUsagiImage" alt="" />
         </button>
+        <div class="login-title">&#x4e4c;&#x8428;&#x5947;&#x5de5;&#x4f5c;&#x5e73;&#x53f0;</div>
+        <div class="login-subtitle">&#x8bf7;&#x4f7f;&#x7528;&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;&#xff0c;&#x6210;&#x529f;&#x540e;&#x4f1a;&#x81ea;&#x52a8;&#x8fdb;&#x5165;&#x7cfb;&#x7edf;</div>
+        <section class="erp-qr-panel" aria-label="&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;">
+          <div class="erp-qr-head">
+            <strong>&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;</strong>
+            <span>&#x767b;&#x5f55;&#x6001;&#x4fdd;&#x6301; 30 &#x5929;</span>
+          </div>
+          <iframe class="erp-login-frame" :src="erpLoginFrameUrl" title="&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;" loading="eager"></iframe>
+          <button class="btn btn-ghost erp-open-btn" type="button" :disabled="loggingIn" @click="doErpLogin">
+            &#x626b;&#x7801;&#x533a;&#x6253;&#x4e0d;&#x5f00;&#xff1f;&#x70b9;&#x8fd9;&#x91cc;&#x8df3;&#x8f6c; ERP &#x767b;&#x5f55;
+          </button>
+        </section>
+        <div v-if="loginError" class="login-error">{{ loginError }}</div>
+        <section v-if="showPasswordLogin" class="password-login-panel">
+          <div class="auth-tabs" role="tablist" aria-label="&#x8d26;&#x53f7;&#x5165;&#x53e3;">
+            <button type="button" class="auth-tab" :class="{ active: authMode === 'login' }" @click="setAuthMode('login')">&#x767b;&#x5f55;</button>
+            <button type="button" class="auth-tab" :class="{ active: authMode === 'register' }" @click="setAuthMode('register')">&#x6ce8;&#x518c;</button>
+          </div>
+          <div class="login-subtitle">{{ authMode === 'login' ? '\u8bf7\u8f93\u5165\u7528\u6237\u540d\u548c\u5bc6\u7801\u767b\u5f55' : '\u4f7f\u7528\u4e2d\u6587\u771f\u540d\u548c\u9080\u8bf7\u7801\u6ce8\u518c' }}</div>
+          <div class="login-field">
+            <label>&#x771f;&#x5b9e;&#x59d3;&#x540d;</label>
+            <input class="inp" v-model="loginUser" placeholder="&#x4f8b;&#x5982;&#xff1a;&#x5f20;&#x4e09;" @keyup.enter="submitAuth" />
+          </div>
+          <div class="login-field">
+            <label>&#x5bc6;&#x7801;</label>
+            <input class="inp" type="password" v-model="loginPass" placeholder="&#x81f3;&#x5c11; 6 &#x4f4d;" @keyup.enter="submitAuth" />
+          </div>
+          <div v-if="authMode === 'register'" class="login-field">
+            <label>&#x6240;&#x5c5e;&#x7ec4;&#x522b;</label>
+            <select class="inp" v-model="registerGroup">
+              <option value="">&#x8bf7;&#x9009;&#x62e9;&#x7ec4;&#x522b;</option>
+              <option value="&#x5185;&#x5bb9;&#x4e00;&#x90e8;">&#x5185;&#x5bb9;&#x4e00;&#x90e8;</option>
+              <option value="&#x5185;&#x5bb9;&#x4e8c;&#x7ec4;">&#x5185;&#x5bb9;&#x4e8c;&#x7ec4;</option>
+              <option value="&#x5185;&#x5bb9;&#x4e09;&#x7ec4;">&#x5185;&#x5bb9;&#x4e09;&#x7ec4;</option>
+              <option value="&#x5185;&#x5bb9;&#x56db;&#x7ec4;">&#x5185;&#x5bb9;&#x56db;&#x7ec4;</option>
+              <option value="&#x5185;&#x5bb9;&#x4e94;&#x7ec4;">&#x5185;&#x5bb9;&#x4e94;&#x7ec4;</option>
+              <option value="&#x5185;&#x5bb9;&#x516d;&#x7ec4;">&#x5185;&#x5bb9;&#x516d;&#x7ec4;</option>
+              <option value="MCN&#x7ecf;&#x7eaa;&#x7ec4;">MCN&#x7ecf;&#x7eaa;&#x7ec4;</option>
+            </select>
+          </div>
+          <div v-if="authMode === 'register'" class="login-field">
+            <label>&#x9080;&#x8bf7;&#x7801;</label>
+            <input class="inp" v-model="registerInvite" placeholder="***" @keyup.enter="submitAuth" />
+          </div>
+          <button class="btn btn-primary login-btn" :disabled="loggingIn" @click="submitAuth">
+            {{ loggingIn ? (authMode === 'login' ? '\u767b\u5f55\u4e2d' : '\u6ce8\u518c\u4e2d') : (authMode === 'login' ? '\u767b\u5f55' : '\u6ce8\u518c\u5e76\u8fdb\u5165') }}
+          </button>
+        </section>
       </div>
     </div>
 
@@ -265,8 +270,8 @@ import { provideToast } from './composables/useToast'
 import { useNavigation, useModuleMap } from './composables/useNavigation'
 import { useClock } from './composables/useClock'
 import { canAccessModule, isAdminLike, MEMBER_MODULES } from './permissions'
-import { erpLogin, getMe, login, logout, redirectToErpLogin, register, takeErpTokenFromHash } from './api/auth'
-import { clearAuthSession, getAuthToken } from './api/client'
+import { erpLogin, getErpLoginUrl, getMe, login, logout, redirectToErpLogin, register, takeErpTokenFromHash } from './api/auth'
+import { clearAuthSession, getAuthToken, setAuthSession } from './api/client'
 import { clearAccountDataDashboardCache, preloadAccountDataDashboard } from './api/accountData'
 import { loadUnreadScheduleNotifications, markScheduleNotificationsRead } from './api/schedule'
 import usagiIdleImage from './assets/usagi-pet-states/idle.png'
@@ -306,6 +311,8 @@ const StyleProjectWorkbenchModule = defineAsyncComponent(() => import('./modules
 const StyleWriterModule = defineAsyncComponent(() => import('./modules/StyleWriterModule.vue'))
 const StyleAssetsModule = defineAsyncComponent(() => import('./modules/StyleAssetsModule.vue'))
 const DouyinHotlistModule = defineAsyncComponent(() => import('./modules/DouyinHotlistModule.vue'))
+const HotspotRadarModule = defineAsyncComponent(() => import('./modules/HotspotRadarModule.vue'))
+const ImportedDouyinHotlistModule = defineAsyncComponent(() => import('./modules/ImportedDouyinHotlistModule.vue'))
 
 const { confirmState, confirmAccept, confirmCancel } = provideConfirm()
 const { toast, showToast: showGlobalToast } = provideToast()
@@ -405,6 +412,8 @@ const { getActiveModuleComponent, getActiveModuleKey, isValidModule } = useModul
   StyleWriterModule,
   StyleAssetsModule,
   DouyinHotlistModule,
+  HotspotRadarModule,
+  ImportedDouyinHotlistModule,
   AccountStyleModule,
   OpsModule,
   ScheduleModule,
@@ -457,6 +466,7 @@ const authMode = ref('login')
 const loginUser = ref('')
 const loginPass = ref('')
 const loginError = ref('')
+const showPasswordLogin = ref(false)
 const registerInvite = ref('')
 const registerGroup = ref('')
 const accountName = computed(() => authUser.value?.display_name || authUser.value?.username || '未登录')
@@ -465,6 +475,13 @@ const brandUsagiImage = usagiHappyImage
 const loginUsagiImage = usagiLoginImage
 const accountUsagiImage = usagiIdleImage
 const statusUsagiImage = computed(() => isLoggedIn.value ? usagiSignImage : usagiSleepImage)
+const isErpEmbedFrame = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('erp_embed') === '1'
+const erpLoginFrameUrl = computed(() => {
+  const redirect = new URL(window.location.href)
+  redirect.hash = ''
+  redirect.searchParams.set('erp_embed', '1')
+  return getErpLoginUrl(redirect.toString())
+})
 
 let notificationPollTimer = null
 let notificationPolling = false
@@ -592,6 +609,32 @@ function setAuthMode(mode) {
   loginError.value = ''
 }
 
+function togglePasswordLogin() {
+  showPasswordLogin.value = !showPasswordLogin.value
+  loginError.value = ''
+}
+
+function notifyParentErpLogin(type, payload = {}) {
+  if (window.parent === window) return
+  window.parent.postMessage({ type, ...payload }, window.location.origin)
+}
+
+function handleErpLoginMessage(event) {
+  if (event.origin !== window.location.origin) return
+  const data = event.data || {}
+  if (data.type === 'usagi-erp-login-success' && data.token && data.user) {
+    setAuthSession(data.token, data.user)
+    authUser.value = data.user
+    loginError.value = ''
+    authReady.value = true
+    syncInitialModuleSelection()
+    return
+  }
+  if (data.type === 'usagi-erp-login-error') {
+    loginError.value = data.message || 'ERP 登录失败，请重试'
+  }
+}
+
 async function doLogin() {
   const username = loginUser.value.trim()
   if (!username || !loginPass.value) {
@@ -674,17 +717,19 @@ async function restoreSession() {
     syncInitialModuleSelection()
     return
   }
-  const erpToken = takeErpTokenFromHash()
-  if (erpToken) {
+  const erpTokens = takeErpTokenFromHash()
+  if (erpTokens.length) {
     loggingIn.value = true
     loginError.value = ''
     try {
-      const data = await erpLogin(erpToken)
+      const data = await erpLogin(erpTokens)
       authUser.value = data.user
       syncInitialModuleSelection()
+      notifyParentErpLogin('usagi-erp-login-success', { token: data.token, user: data.user })
     } catch (e) {
       clearAuthSession()
       loginError.value = e.message || 'ERP 登录失败，请重试'
+      notifyParentErpLogin('usagi-erp-login-error', { message: loginError.value })
     } finally {
       loggingIn.value = false
       authReady.value = true
@@ -851,6 +896,7 @@ function scrollNavItemIntoView(moduleId) {
 
 onMounted(() => {
   restoreSession()
+  window.addEventListener('message', handleErpLoginMessage)
   window.addEventListener('usagi:navigate', handleModuleNavigate)
   window.addEventListener('usagi:auth-expired', handleAuthExpired)
 })
@@ -858,6 +904,7 @@ onMounted(() => {
 onUnmounted(() => {
   stopScheduleNotificationPolling()
   cancelAccountDataPreload()
+  window.removeEventListener('message', handleErpLoginMessage)
   window.removeEventListener('usagi:navigate', handleModuleNavigate)
   window.removeEventListener('usagi:auth-expired', handleAuthExpired)
 })

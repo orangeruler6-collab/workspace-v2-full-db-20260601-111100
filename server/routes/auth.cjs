@@ -9,7 +9,7 @@ module.exports = function createAuthRoutes(deps) {
     },
 
     '/api/auth/erp-login': function(body, cb) {
-      authStore.erpLogin(body.auth_token || body.token || '', body._req).then(cb).catch(function(e) {
+      authStore.erpLogin(body.auth_tokens || body.auth_token || body.token || '', body._req).then(cb).catch(function(e) {
         cb({ error: e.message });
       });
     },

@@ -31,31 +31,44 @@ export function decodeErpToken(encoded) {
 export function takeErpTokenFromHash() {
   const hash = window.location.hash || ''
   const match = hash.match(/(?:^#|[&#])(?:token|auth_token)=([^&]+)/)
-  if (!match) return ''
+  if (!match) return []
+  const raw = match[1] || ''
+  const decodedURIComponent = (() => {
+    try { return decodeURIComponent(raw) } catch (e) { return raw }
+  })()
+  const candidates = [raw, decodedURIComponent]
   try {
-    const token = decodeErpToken(decodeURIComponent(match[1]))
-    window.history.replaceState(null, '', window.location.pathname + window.location.search)
-    return token
-  } catch (e) {
-    window.history.replaceState(null, '', window.location.pathname + window.location.search)
-    return ''
-  }
+    candidates.push(decodeErpToken(decodedURIComponent))
+  } catch (e) {}
+  try {
+    candidates.push(decodeErpToken(raw))
+  } catch (e) {}
+  window.history.replaceState(null, '', window.location.pathname + window.location.search)
+  return Array.from(new Set(candidates.map((token) => String(token || '').trim()).filter(Boolean)))
+}
+
+export function getErpLoginUrl(redirectUrl) {
+  const url = new URL(ERP_AUTH_BASE)
+  url.searchParams.set('m', 'login|api|module')
+  url.searchParams.set('a', 'getAuthToken')
+  url.searchParams.set('redirect_url', redirectUrl)
+  return url.toString()
 }
 
 export function redirectToErpLogin() {
   const currentUrl = new URL(window.location.href)
   currentUrl.hash = ''
-  const url = new URL(ERP_AUTH_BASE)
-  url.searchParams.set('m', 'login|api|module')
-  url.searchParams.set('a', 'getAuthToken')
-  url.searchParams.set('redirect_url', currentUrl.toString())
-  window.location.href = url.toString()
+  window.location.href = getErpLoginUrl(currentUrl.toString())
 }
 
 export async function erpLogin(authToken) {
+  const tokens = Array.isArray(authToken) ? authToken : [authToken]
   const data = await withAuthTimeout((signal) => request('/api/auth/erp-login', {
     method: 'POST',
-    body: { auth_token: authToken },
+    body: {
+      auth_token: tokens[0] || '',
+      auth_tokens: tokens
+    },
     signal
   }))
   setAuthSession(data.token, data.user)
