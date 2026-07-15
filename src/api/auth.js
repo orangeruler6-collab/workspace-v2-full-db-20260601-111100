@@ -1,6 +1,7 @@
 import { clearAuthSession, request, setAuthSession } from './client'
 
 const AUTH_REQUEST_TIMEOUT_MS = 10000
+const ERP_AUTH_BASE = import.meta.env.VITE_ERP_AUTH_BASE || 'https://erp.changwankeji.com/api.php'
 
 function withAuthTimeout(fn, timeoutMs = AUTH_REQUEST_TIMEOUT_MS) {
   const controller = new AbortController()
@@ -17,6 +18,44 @@ export async function login(username, password) {
   const data = await withAuthTimeout((signal) => request('/api/auth/login', {
     method: 'POST',
     body: { username, password },
+    signal
+  }))
+  setAuthSession(data.token, data.user)
+  return data
+}
+
+export function decodeErpToken(encoded) {
+  return window.atob(String(encoded || '').replace(/!/g, '+').replace(/\./g, '/').replace(/:/g, '='))
+}
+
+export function takeErpTokenFromHash() {
+  const hash = window.location.hash || ''
+  const match = hash.match(/(?:^#|[&#])(?:token|auth_token)=([^&]+)/)
+  if (!match) return ''
+  try {
+    const token = decodeErpToken(decodeURIComponent(match[1]))
+    window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    return token
+  } catch (e) {
+    window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    return ''
+  }
+}
+
+export function redirectToErpLogin() {
+  const currentUrl = new URL(window.location.href)
+  currentUrl.hash = ''
+  const url = new URL(ERP_AUTH_BASE)
+  url.searchParams.set('m', 'login|api|module')
+  url.searchParams.set('a', 'getAuthToken')
+  url.searchParams.set('redirect_url', currentUrl.toString())
+  window.location.href = url.toString()
+}
+
+export async function erpLogin(authToken) {
+  const data = await withAuthTimeout((signal) => request('/api/auth/erp-login', {
+    method: 'POST',
+    body: { auth_token: authToken },
     signal
   }))
   setAuthSession(data.token, data.user)

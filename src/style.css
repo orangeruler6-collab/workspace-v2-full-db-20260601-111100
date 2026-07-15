@@ -2199,6 +2199,8 @@ textarea.inp {
   box-shadow: 0 2px 10px var(--primary-shadow);
 }
 .login-subtitle { font-size: 13px; color: var(--text-dim, #9d98b0); margin-bottom: 32px; }
+.erp-login-btn { margin: 0 0 10px; }
+.login-sso-hint { margin: 0 0 16px; color: var(--text-muted, #9d98b0); font-size: 12px; line-height: 1.5; }
 .login-field { text-align: left; margin-bottom: 16px; }
 .login-field label { display: block; font-size: 12px; font-weight: 600; color: var(--primary-light, #c4b5fd); margin-bottom: 6px; }
 .login-field .inp { width: 100%; background: var(--surface2, #201d38); border: 1px solid var(--border, rgba(124,58,237,0.15)); border-radius: 8px; padding: 10px 14px; color: var(--text, #f0eef5); font-size: 14px; outline: none; font-family: inherit; }

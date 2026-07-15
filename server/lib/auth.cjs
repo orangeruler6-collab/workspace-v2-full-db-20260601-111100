@@ -3,10 +3,20 @@ const path = require('path');
 const crypto = require('crypto');
 const sqlite3 = require('sqlite3');
 const createLogger = require('./logger.cjs');
+let ProxyAgent = null;
+try {
+  ProxyAgent = require('undici').ProxyAgent;
+} catch(e) {
+  ProxyAgent = null;
+}
 
 const logger = createLogger('auth');
 
 const SESSION_DAYS = 30;
+const ERP_API_BASE = String(process.env.ERP_API_BASE || 'https://erp.changwankeji.com/api.php').trim();
+const ERP_AUTH_PROXY = String(process.env.ERP_AUTH_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '').trim();
+const ERP_FETCH_DISPATCHER = ERP_AUTH_PROXY && ProxyAgent ? new ProxyAgent(ERP_AUTH_PROXY) : undefined;
+const ERP_REQUEST_TIMEOUT_MS = Number(process.env.ERP_AUTH_TIMEOUT_MS) || 10000;
 const HASH_ITERATIONS = 120000;
 const HASH_BYTES = 64;
 const DEFAULT_MEMBER_PERMISSIONS = [
@@ -176,6 +186,23 @@ function publicUser(row) {
   };
 }
 
+function cleanExternalText(value, limit) {
+  return String(value || '').trim().slice(0, limit || 120);
+}
+
+function normalizeErpUserInfo(data) {
+  const source = data && data.data && typeof data.data === 'object' ? data.data : data || {};
+  return {
+    uid: cleanExternalText(source.uid, 64),
+    name: cleanExternalText(source.name, 80),
+    user: cleanExternalText(source.user, 80),
+    centerid: cleanExternalText(source.centerid, 64),
+    centername: cleanExternalText(source.centername, 120),
+    deptid: cleanExternalText(source.deptid, 64),
+    deptname: cleanExternalText(source.deptname, 120)
+  };
+}
+
 function createAuthStore(options) {
   const root = options.root || path.join(__dirname, '..', '..');
   const dataDir = path.join(root, 'data');
@@ -255,6 +282,18 @@ function createAuthStore(options) {
     } catch(e) {}
     try {
       await run(`ALTER TABLE users ADD COLUMN password_salt TEXT DEFAULT ''`);
+    } catch(e) {}
+    try {
+      await run(`ALTER TABLE users ADD COLUMN erp_uid TEXT DEFAULT ''`);
+    } catch(e) {}
+    try {
+      await run(`ALTER TABLE users ADD COLUMN erp_user TEXT DEFAULT ''`);
+    } catch(e) {}
+    try {
+      await run(`ALTER TABLE users ADD COLUMN erp_deptname TEXT DEFAULT ''`);
+    } catch(e) {}
+    try {
+      await run(`ALTER TABLE users ADD COLUMN erp_centername TEXT DEFAULT ''`);
     } catch(e) {}
     await run("UPDATE users SET pending=0 WHERE active=1 AND length(coalesce(password_hash,''))>0");
     await run(`CREATE TABLE IF NOT EXISTS auth_migrations (
@@ -410,6 +449,134 @@ function createAuthStore(options) {
       req: req
     });
     return { token: token, user: publicUser(freshUser) };
+  }
+
+  async function callErpAuthApi(action, authToken) {
+    if (!ERP_API_BASE) throw new Error('ERP 登录接口未配置');
+    if (!authToken) throw new Error('缺少 ERP auth_token');
+    const controller = new AbortController();
+    const timer = setTimeout(function() { controller.abort(); }, ERP_REQUEST_TIMEOUT_MS);
+    try {
+      const url = new URL(ERP_API_BASE);
+      url.searchParams.set('m', 'openexternapi');
+      url.searchParams.set('a', action);
+      url.searchParams.set('auth_token', authToken);
+      const fetchOptions = { method: action === 'refreshtoken' ? 'POST' : 'GET', signal: controller.signal };
+      if (ERP_FETCH_DISPATCHER) fetchOptions.dispatcher = ERP_FETCH_DISPATCHER;
+      const response = await fetch(url.toString(), fetchOptions);
+      const data = await response.json().catch(async function() {
+        const text = await response.text().catch(function() { return ''; });
+        throw new Error(text || 'ERP 登录接口返回异常');
+      });
+      if (!response.ok) throw new Error(data.msg || data.error || ('ERP HTTP ' + response.status));
+      if (Number(data.code) !== 200) throw new Error(data.msg || data.error || 'ERP token 无效或已过期');
+      return data;
+    } catch(e) {
+      if (e.name === 'AbortError') throw new Error('ERP 登录接口响应超时');
+      if (e.cause && e.cause.code) throw new Error('无法连接 ERP 登录服务：' + e.cause.code);
+      if (/fetch failed/i.test(e.message || '')) throw new Error('无法连接 ERP 登录服务');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function findUserForErp(erp) {
+    const names = Array.from(new Set([erp.name, erp.user].filter(Boolean)));
+    const uid = String(erp.uid || '');
+    if (uid) {
+      const byUid = await get('SELECT * FROM users WHERE erp_uid=?', [uid]);
+      if (byUid) return byUid;
+    }
+    if (erp.user) {
+      const byErpUser = await get('SELECT * FROM users WHERE erp_user=? OR username=?', [erp.user, erp.user]);
+      if (byErpUser) return byErpUser;
+    }
+    for (const name of names) {
+      const row = await get('SELECT * FROM users WHERE username=? OR real_name=? OR display_name=?', [name, name, name]);
+      if (row) return row;
+    }
+    return null;
+  }
+
+  async function upsertErpUser(erp) {
+    const ts = now();
+    const username = erp.name || erp.user;
+    if (!username) throw new Error('ERP 未返回用户姓名');
+    const existing = await findUserForErp(erp);
+    if (existing) {
+      if (Number(existing.active) !== 1) throw new Error('当前账号已停用，请联系管理员');
+      if (Number(existing.is_on_job) !== 1) throw new Error('当前账号已离职，无法登录');
+      await run(
+        `UPDATE users SET
+          display_name=?,
+          real_name=?,
+          group_name=CASE WHEN trim(coalesce(group_name,''))='' THEN ? ELSE group_name END,
+          erp_uid=?,
+          erp_user=?,
+          erp_deptname=?,
+          erp_centername=?,
+          pending=0,
+          updated_at=?
+         WHERE id=?`,
+        [
+          existing.display_name || erp.name || existing.username,
+          existing.real_name || erp.name || existing.username,
+          erp.deptname || '',
+          erp.uid || '',
+          erp.user || '',
+          erp.deptname || '',
+          erp.centername || '',
+          ts,
+          existing.id
+        ]
+      );
+      return get('SELECT * FROM users WHERE id=?', [existing.id]);
+    }
+
+    const result = await run(
+      `INSERT INTO users (
+        username,display_name,real_name,group_name,employee_type,role,permissions,
+        password_hash,password_salt,active,pending,is_on_job,erp_uid,erp_user,erp_deptname,erp_centername,created_at,updated_at
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        username,
+        erp.name || username,
+        erp.name || username,
+        erp.deptname || '',
+        '正式员工',
+        'member',
+        JSON.stringify(DEFAULT_MEMBER_PERMISSIONS),
+        '',
+        '',
+        1,
+        0,
+        1,
+        erp.uid || '',
+        erp.user || '',
+        erp.deptname || '',
+        erp.centername || '',
+        ts,
+        ts
+      ]
+    );
+    return get('SELECT * FROM users WHERE id=?', [result.lastID]);
+  }
+
+  async function erpLogin(authToken, req) {
+    const info = normalizeErpUserInfo(await callErpAuthApi('getuserinfo', String(authToken || '').trim()));
+    const user = await upsertErpUser(info);
+    const result = await createSessionForUser(user, req, 'erp_login.success', 'ERP 登录成功：' + (user.username || info.name || info.user));
+    return Object.assign({}, result, {
+      erp: {
+        uid: info.uid,
+        name: info.name,
+        user: info.user,
+        deptname: info.deptname,
+        centername: info.centername
+      },
+      session_days: SESSION_DAYS
+    });
   }
 
   async function register(data, req) {
@@ -683,6 +850,7 @@ function createAuthStore(options) {
     canAccess,
     createUser,
     deleteUser,
+    erpLogin,
     init,
     listLogs,
     listUsers,

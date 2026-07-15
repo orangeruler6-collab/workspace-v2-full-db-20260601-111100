@@ -248,6 +248,7 @@ function extractToken(req, body) {
 
 function isPublicRoute(routePath) {
   return routePath === '/api/auth/login' ||
+    routePath === '/api/auth/erp-login' ||
     routePath === '/api/auth/register' ||
     routePath === '/api/workflow/styles' ||
     routePath === '/api/imagegen/history';

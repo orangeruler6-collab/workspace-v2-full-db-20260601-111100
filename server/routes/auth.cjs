@@ -8,6 +8,12 @@ module.exports = function createAuthRoutes(deps) {
       });
     },
 
+    '/api/auth/erp-login': function(body, cb) {
+      authStore.erpLogin(body.auth_token || body.token || '', body._req).then(cb).catch(function(e) {
+        cb({ error: e.message });
+      });
+    },
+
     '/api/auth/register': function(body, cb) {
       authStore.register(body, body._req).then(cb).catch(function(e) {
         cb({ error: e.message });

@@ -83,6 +83,10 @@
           <img :src="loginUsagiImage" alt="" />
         </div>
         <div class="login-title">乌萨奇工作平台</div>
+        <button class="btn btn-primary login-btn erp-login-btn" :disabled="loggingIn" @click="doErpLogin">
+          {{ loggingIn ? '正在进入 ERP 登录...' : '使用 ERP 系统登录' }}
+        </button>
+        <div class="login-sso-hint">ERP 登录成功后，本系统登录态会保持 30 天。</div>
         <div class="auth-tabs" role="tablist" aria-label="账号入口">
           <button
             type="button"
@@ -261,7 +265,7 @@ import { provideToast } from './composables/useToast'
 import { useNavigation, useModuleMap } from './composables/useNavigation'
 import { useClock } from './composables/useClock'
 import { canAccessModule, isAdminLike, MEMBER_MODULES } from './permissions'
-import { getMe, login, logout, register } from './api/auth'
+import { erpLogin, getMe, login, logout, redirectToErpLogin, register, takeErpTokenFromHash } from './api/auth'
 import { clearAuthSession, getAuthToken } from './api/client'
 import { clearAccountDataDashboardCache, preloadAccountDataDashboard } from './api/accountData'
 import { loadUnreadScheduleNotifications, markScheduleNotificationsRead } from './api/schedule'
@@ -608,6 +612,13 @@ async function doLogin() {
   }
 }
 
+function doErpLogin() {
+  if (AUTH_DISABLED || loggingIn.value) return
+  loggingIn.value = true
+  loginError.value = ''
+  redirectToErpLogin()
+}
+
 async function doRegister() {
   const username = loginUser.value.trim()
   const chineseName = /^[一-龥]{2,12}$/
@@ -661,6 +672,23 @@ async function restoreSession() {
     authUser.value = AUTH_DISABLED_USER
     authReady.value = true
     syncInitialModuleSelection()
+    return
+  }
+  const erpToken = takeErpTokenFromHash()
+  if (erpToken) {
+    loggingIn.value = true
+    loginError.value = ''
+    try {
+      const data = await erpLogin(erpToken)
+      authUser.value = data.user
+      syncInitialModuleSelection()
+    } catch (e) {
+      clearAuthSession()
+      loginError.value = e.message || 'ERP 登录失败，请重试'
+    } finally {
+      loggingIn.value = false
+      authReady.value = true
+    }
     return
   }
   if (!getAuthToken()) {
