@@ -1,7 +1,7 @@
 import { clearAuthSession, request, setAuthSession } from './client'
 
 const AUTH_REQUEST_TIMEOUT_MS = 10000
-const ERP_AUTH_BASE = import.meta.env.VITE_ERP_AUTH_BASE || 'https://erp.changwankeji.com/api.php'
+const ERP_AUTH_BASE = import.meta.env.VITE_ERP_AUTH_BASE || 'https://erp.changwankeji.com:8188/api.php'
 
 function withAuthTimeout(fn, timeoutMs = AUTH_REQUEST_TIMEOUT_MS) {
   const controller = new AbortController()

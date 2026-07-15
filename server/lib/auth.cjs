@@ -13,7 +13,7 @@ try {
 const logger = createLogger('auth');
 
 const SESSION_DAYS = 30;
-const ERP_API_BASE = String(process.env.ERP_API_BASE || 'https://erp.changwankeji.com/api.php').trim();
+const ERP_API_BASE = String(process.env.ERP_API_BASE || 'https://erp.changwankeji.com:8188/api.php').trim();
 const ERP_AUTH_PROXY = String(process.env.ERP_AUTH_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || '').trim();
 const ERP_FETCH_DISPATCHER = ERP_AUTH_PROXY && ProxyAgent ? new ProxyAgent(ERP_AUTH_PROXY) : undefined;
 const ERP_REQUEST_TIMEOUT_MS = Number(process.env.ERP_AUTH_TIMEOUT_MS) || 10000;
