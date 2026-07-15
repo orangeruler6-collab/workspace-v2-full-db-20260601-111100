@@ -1,5 +1,8 @@
 import { execFile } from "child_process";
+import { existsSync } from "fs";
+import path from "path";
 import { promisify } from "util";
+import { buildRuntimeProxyEnv } from "./runtime-network";
 
 const execFileAsync = promisify(execFile);
 const HIDDEN_CHILD_PROCESS_OPTIONS = { windowsHide: true };
@@ -33,7 +36,7 @@ export function opencliBin() {
 
 export function resolveOpenCliCommand() {
   const configured = opencliBin().trim() || "opencli";
-  const scriptPath = process.env.OPENCLI_SCRIPT?.trim() || "";
+  const scriptPath = process.env.OPENCLI_SCRIPT?.trim() || resolveWindowsOpenCliScript(configured);
   const nodeBin = process.env.OPENCLI_NODE_BIN?.trim() || process.execPath;
 
   if (scriptPath) {
@@ -49,19 +52,34 @@ export function resolveOpenCliCommand() {
   };
 }
 
+function resolveWindowsOpenCliScript(configured: string) {
+  if (process.platform !== "win32" || configured.toLowerCase() !== "opencli") return "";
+  const npmRoot = process.env.APPDATA ? path.join(process.env.APPDATA, "npm") : "";
+  if (!npmRoot) return "";
+  const candidate = path.join(npmRoot, "node_modules", "@jackwener", "opencli", "dist", "src", "main.js");
+  return existsSync(candidate) ? candidate : "";
+}
+
 export async function runOpenCli(args: string[], options: RunOpenCliOptions = {}) {
   let stdout: string;
   let stderr: string;
   const runtime = resolveOpenCliCommand();
+  const profile = process.env.OPENCLI_PROFILE?.trim() || "";
+  const commandArgs = [
+    ...runtime.argsPrefix,
+    ...(profile ? ["--profile", profile] : []),
+    ...args
+  ];
   const startedAt = Date.now();
   let timingRecorded = false;
 
   try {
-    const result = await execFileAsync(runtime.command, [...runtime.argsPrefix, ...args], {
+    const result = await execFileAsync(runtime.command, commandArgs, {
       ...HIDDEN_CHILD_PROCESS_OPTIONS,
       maxBuffer: 1024 * 1024 * 20,
       timeout: options.timeout,
-      signal: options.signal
+      signal: options.signal,
+      env: buildRuntimeProxyEnv()
     });
     stdout = result.stdout;
     stderr = result.stderr;

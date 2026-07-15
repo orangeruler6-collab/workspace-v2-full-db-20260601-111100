@@ -46,11 +46,29 @@ export async function writeFileAtomic(target: string, value: string | Uint8Array
     } else {
       await fs.writeFile(temp, value);
     }
-    await fs.rename(temp, target);
+    await renameWithRetry(temp, target);
   } catch (error) {
     await fs.rm(temp, { force: true }).catch(() => undefined);
     throw error;
   }
+}
+
+async function renameWithRetry(source: string, target: string) {
+  const maxAttempts = process.platform === "win32" ? 8 : 1;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await fs.rename(source, target);
+      return;
+    } catch (error) {
+      if (attempt === maxAttempts || !isRetryableRenameError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 40 * attempt));
+    }
+  }
+}
+
+function isRetryableRenameError(error: unknown) {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  return ["EPERM", "EACCES", "EBUSY"].includes(String(error.code));
 }
 
 function isMissingFileError(error: unknown) {
