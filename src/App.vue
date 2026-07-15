@@ -94,7 +94,7 @@
         <div class="login-subtitle">&#x8bf7;&#x4f7f;&#x7528;&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;&#xff0c;&#x6210;&#x529f;&#x540e;&#x4f1a;&#x81ea;&#x52a8;&#x8fdb;&#x5165;&#x7cfb;&#x7edf;</div>
         <section class="erp-qr-panel erp-qr-only" aria-label="&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;">
           <div class="erp-qr-crop">
-            <iframe class="erp-login-frame" :src="erpLoginFrameUrl" title="&#x4f01;&#x5fae;&#x626b;&#x7801;&#x767b;&#x5f55;" loading="eager"></iframe>
+            <div id="usagiErpQrMount" class="erp-login-frame" aria-label="&#x4f01;&#x5fae;&#x4e8c;&#x7ef4;&#x7801;"></div>
           </div>
           <button class="erp-open-link" type="button" :disabled="loggingIn" @click="doErpLogin">
             &#x4e8c;&#x7ef4;&#x7801;&#x6ca1;&#x51fa;&#x6765;&#xff1f;&#x6253;&#x5f00;&#x5b8c;&#x6574;&#x767b;&#x5f55;&#x9875;
@@ -474,12 +474,14 @@ const loginUsagiImage = usagiLoginImage
 const accountUsagiImage = usagiIdleImage
 const statusUsagiImage = computed(() => isLoggedIn.value ? usagiSignImage : usagiSleepImage)
 const isErpEmbedFrame = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('erp_embed') === '1'
-const erpLoginFrameUrl = computed(() => {
-  const redirect = new URL(window.location.href)
-  redirect.hash = ''
-  redirect.searchParams.set('erp_embed', '1')
-  return getErpLoginUrl(redirect.toString())
-})
+const ERP_LOGIN_ORIGIN = 'https://erp.changwankeji.com:8188'
+const ERP_QR_SCRIPT_URL = `${ERP_LOGIN_ORIGIN}/js/wwLogin-1.2.7.js`
+const ERP_QR_STYLE_URL = `${ERP_LOGIN_ORIGIN}/webmain/login/custom-qywx-login.css`
+const ERP_WECOM_APP_ID = 'ww37075684a99a7f33'
+const ERP_WECOM_AGENT_ID = '1000050'
+
+let erpQrScriptPromise = null
+let erpQrMounted = false
 
 let notificationPollTimer = null
 let notificationPolling = false
@@ -612,6 +614,72 @@ function togglePasswordLogin() {
   loginError.value = ''
 }
 
+function encodeErpBackUrl(value) {
+  const bytes = new TextEncoder().encode(value)
+  let binary = ''
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte)
+  })
+  return window.btoa(binary).replace(/\+/g, '!').replace(/\//g, '.').replace(/=/g, ':')
+}
+
+function getCleanAppRedirectUrl() {
+  const redirect = new URL(window.location.href)
+  redirect.hash = ''
+  redirect.searchParams.delete('erp_embed')
+  return redirect.toString()
+}
+
+function getErpQywxRedirectUri() {
+  const authUrl = getErpLoginUrl(getCleanAppRedirectUrl())
+  const erpCallbackUrl = `${ERP_LOGIN_ORIGIN}?m=login&backurl=${encodeErpBackUrl(authUrl)}`
+  return encodeURIComponent(erpCallbackUrl)
+}
+
+function loadErpQrScript() {
+  if (window.WwLogin) return Promise.resolve()
+  if (erpQrScriptPromise) return erpQrScriptPromise
+  erpQrScriptPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector(`script[src="${ERP_QR_SCRIPT_URL}"]`)
+    if (existing) {
+      existing.addEventListener('load', resolve, { once: true })
+      existing.addEventListener('error', reject, { once: true })
+      return
+    }
+    const script = document.createElement('script')
+    script.src = ERP_QR_SCRIPT_URL
+    script.async = true
+    script.onload = resolve
+    script.onerror = () => reject(new Error('ERP QR script load failed'))
+    document.head.appendChild(script)
+  })
+  return erpQrScriptPromise
+}
+
+async function mountErpQrLogin() {
+  if (AUTH_DISABLED || isLoggedIn.value || isErpEmbedFrame || erpQrMounted) return
+  await nextTick()
+  const mount = document.getElementById('usagiErpQrMount')
+  if (!mount || erpQrMounted) return
+  try {
+    await loadErpQrScript()
+    mount.innerHTML = ''
+    new window.WwLogin({
+      id: 'usagiErpQrMount',
+      appid: ERP_WECOM_APP_ID,
+      agentid: ERP_WECOM_AGENT_ID,
+      redirect_uri: getErpQywxRedirectUri(),
+      state: 'qwLoginBack',
+      href: ERP_QR_STYLE_URL,
+      lang: 'zh'
+    })
+    erpQrMounted = true
+  } catch (e) {
+    mount.innerHTML = '<div class="erp-qr-fallback">企微二维码加载失败，请打开完整登录页</div>'
+    loginError.value = '企微二维码加载失败，请打开完整登录页'
+  }
+}
+
 function notifyParentErpLogin(type, payload = {}) {
   if (window.parent === window) return
   window.parent.postMessage({ type, ...payload }, window.location.origin)
@@ -731,11 +799,13 @@ async function restoreSession() {
     } finally {
       loggingIn.value = false
       authReady.value = true
+      if (!authUser.value) mountErpQrLogin()
     }
     return
   }
   if (!getAuthToken()) {
     authReady.value = true
+    mountErpQrLogin()
     return
   }
   try {
@@ -746,6 +816,7 @@ async function restoreSession() {
     clearAuthSession()
   } finally {
     authReady.value = true
+    if (!authUser.value) mountErpQrLogin()
   }
 }
 
@@ -835,10 +906,12 @@ watch(isLoggedIn, (loggedIn) => {
       scheduleAccountDataPreload()
     })
   } else {
+    erpQrMounted = false
     stopScheduleNotificationPolling()
     showUpdateAnnouncement.value = false
     cancelAccountDataPreload()
     clearAccountDataDashboardCache()
+    mountErpQrLogin()
   }
 }, { immediate: true })
 

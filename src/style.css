@@ -2192,7 +2192,7 @@ textarea.inp {
     color-mix(in srgb, var(--surface2) 86%, transparent);
 }
 .erp-qr-only {
-  width: min(308px, 100%);
+  width: min(332px, 100%);
   box-shadow: 0 16px 36px color-mix(in srgb, var(--usagi-yellow) 13%, rgba(0,0,0,0.24));
 }
 .erp-qr-head {
@@ -2210,9 +2210,9 @@ textarea.inp {
 }
 .erp-qr-crop {
   position: relative;
-  width: 280px;
+  width: 300px;
   max-width: 100%;
-  height: 280px;
+  height: 330px;
   margin: 0 auto;
   overflow: hidden;
   border-radius: 14px;
@@ -2221,15 +2221,28 @@ textarea.inp {
 }
 .erp-login-frame {
   display: block;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 520px;
-  height: 520px;
-  border: 0;
+  width: 300px;
+  max-width: 100%;
+  height: 330px;
+  margin: 0 auto;
   background: #fff;
-  transform: translate(-50%, -50%) scale(1.12);
-  transform-origin: center;
+}
+.erp-login-frame iframe {
+  display: block;
+  width: 300px !important;
+  height: 400px !important;
+  border: 0;
+  transform: translateY(-16px);
+}
+.erp-qr-fallback {
+  display: grid;
+  min-height: 220px;
+  place-items: center;
+  padding: 18px;
+  color: #7a5b00;
+  font-size: 13px;
+  line-height: 1.6;
+  text-align: center;
 }
 .erp-open-btn {
   width: 100%;
