@@ -737,11 +737,15 @@
             <span>统一目标 CPM</span>
             <input v-model="createCpm" class="inp" inputmode="decimal" @input="syncParsedProjectCpm" />
           </label>
+          <label>
+            <span>统一目标播放量（万）</span>
+            <input v-model="createTargetPlayWan" class="inp" inputmode="decimal" placeholder="留空按账号预设" @input="syncParsedProjectPlay" />
+          </label>
           <button class="btn btn-ghost btn-sm" type="button" @click="parseProject">解析</button>
           <button class="btn btn-primary btn-sm" type="button" :disabled="!parsedProject.accounts?.length" @click="createProject">创建项目</button>
         </div>
         <div v-if="parsedProject.accounts?.length" class="traffic-parse-preview">
-          <strong>{{ parsedProject.projectName }} · {{ platformLabel(parsedProject.platform) }} · CPM {{ parsedProject.targetCpm }}</strong>
+          <strong>{{ parsedProject.projectName }} · {{ platformLabel(parsedProject.platform) }} · CPM {{ parsedProject.targetCpm }} · 总目标 {{ formatWan(parsedProjectTotalTargetPlay()) }}</strong>
           <div v-for="account in parsedProject.accounts" :key="account.accountName">
             <span>{{ account.accountName }}</span>
             <em>{{ account.accountGroup }} · 折前 {{ formatMoney(account.originalPrice) }} · 折扣 {{ formatNumber(account.discountRate) }}% · 折后 {{ formatMoney(account.discountedPrice) }} · 目标 {{ formatWan(account.targetPlay) }}</em>
@@ -920,6 +924,7 @@ const crmLoginOpen = ref(false)
 const crmLoginShot = ref({})
 const createText = ref('')
 const createCpm = ref('30')
+const createTargetPlayWan = ref('')
 const parsedProject = ref({})
 const SETTINGS_SERVICE_OPTIONS = {
   douyin: [
@@ -1486,6 +1491,10 @@ const crmRefreshTitle = computed(() => {
   const parts = []
   if (crmRefreshSummary.value) parts.push(`上次成功刷新：${crmRefreshSummary.value}`)
   if (result.csvUpdatedRange?.max) parts.push(`CSV 最新业务时间：${displayCrmTime(result.csvUpdatedRange.max)}`)
+  if (result.matched !== undefined) parts.push(`匹配 ${toNumber(result.matched)} 条`)
+  if (result.pending !== undefined) parts.push(`CRM 待入库 ${toNumber(result.pending)} 条`)
+  if (result.conflicts) parts.push(`冲突 ${toNumber(result.conflicts)} 条`)
+  if (result.ignored) parts.push(`已忽略脏行 ${toNumber(result.ignored)} 条`)
   if (result.file?.name) parts.push(`文件：${result.file.name}`)
   return parts.join(' · ')
 })
@@ -1529,13 +1538,19 @@ async function refreshCrmData() {
   crmRefreshing.value = true
   try {
     const data = await refreshTrafficPlanV2CrmCsv(monitorViewMode.value === 'group' ? { groupName: currentGroup.value } : { allGroups: true })
-    if (!data.ok) throw new Error(data.error || 'CRM CSV 更新失败')
+    if (!data.ok) {
+      if (data.busy) throw new Error('CRM 同步正在进行，请稍后查看结果，不需要重复点击')
+      throw new Error(data.error || 'CRM CSV 更新失败')
+    }
     applyState(data)
     crmStatus.value = { lastResult: data }
     const fileName = data.file?.name ? ` · ${data.file.name}` : ''
     const csvRows = data.csvRows ? ` · CSV ${data.csvRows} 行` : ''
     const csvFresh = data.csvUpdatedRange?.max ? ` · CSV最新 ${displayCrmTime(data.csvUpdatedRange.max)}` : ''
-    toast('success', `后台数据已更新：匹配 ${data.matched || 0} 条，未匹配 ${data.unmatched || 0} 条${csvRows}${csvFresh}${fileName}`)
+    const pending = ` · CRM待入库 ${toNumber(data.pending)} 条`
+    const conflicts = data.conflicts ? ` · 冲突 ${toNumber(data.conflicts)} 条` : ''
+    const ignored = data.ignored ? ` · 已忽略脏行 ${toNumber(data.ignored)} 条` : ''
+    toast('success', `后台数据已更新：匹配 ${data.matched || 0} 条${pending}${conflicts}${ignored}${csvRows}${csvFresh}${fileName}`)
   } catch (error) {
     const message = error.message || String(error)
     if (/需要登录|needLogin|登录/.test(message)) {
@@ -1607,6 +1622,9 @@ async function parseProject() {
       targetCpm: parsedProject.value.targetCpm,
       targetPlay: parsedAccountTargetPlay(account, parsedProject.value.targetCpm)
     }))
+    if (toNumber(createTargetPlayWan.value) > 0) {
+      parsedProject.value = projectWithCreateCpm()
+    }
     toast('success', `已解析 ${parsedProject.value.accounts?.length || 0} 个账号`)
   } catch (error) {
     toast('error', '解析失败：' + (error.message || error))
@@ -1615,15 +1633,53 @@ async function parseProject() {
 
 function projectWithCreateCpm() {
   const targetCpm = toNumber(createCpm.value) || toNumber(parsedProject.value.targetCpm) || 30
+  const customTargetPlay = Math.max(0, Math.round(toNumber(createTargetPlayWan.value) * 10000))
+  const accounts = uniqueParsedAccounts(parsedProject.value.accounts).map(account => ({
+    ...account,
+    targetCpm,
+    targetPlay: parsedAccountTargetPlay(account, targetCpm)
+  }))
+  const allocatedAccounts = customTargetPlay
+    ? allocateParsedTargetPlay(accounts, customTargetPlay)
+    : accounts
   return {
     ...parsedProject.value,
     targetCpm,
-    accounts: uniqueParsedAccounts(parsedProject.value.accounts).map(account => ({
-      ...account,
-      targetCpm,
-      targetPlay: parsedAccountTargetPlay(account, targetCpm)
-    }))
+    targetPlay: customTargetPlay || accounts.reduce((sum, account) => sum + toNumber(account.targetPlay), 0),
+    targetMetrics: {
+      ...(parsedProject.value.targetMetrics || {}),
+      play: customTargetPlay || accounts.reduce((sum, account) => sum + toNumber(account.targetPlay), 0)
+    },
+    accounts: allocatedAccounts
   }
+}
+
+function allocateParsedTargetPlay(accounts, totalTargetPlay) {
+  const total = Math.max(0, Math.round(toNumber(totalTargetPlay)))
+  if (!accounts.length || !total) return accounts
+  const targetWeightTotal = accounts.reduce((sum, account) => sum + toNumber(account.targetPlay), 0)
+  const budgetWeightTotal = accounts.reduce((sum, account) => sum + toNumber(account.discountedPrice), 0)
+  let allocated = 0
+  return accounts.map((account, index) => {
+    const weight = targetWeightTotal
+      ? toNumber(account.targetPlay) / targetWeightTotal
+      : budgetWeightTotal
+        ? toNumber(account.discountedPrice) / budgetWeightTotal
+        : 1 / accounts.length
+    const targetPlay = index === accounts.length - 1
+      ? Math.max(0, total - allocated)
+      : Math.min(Math.max(0, total - allocated), Math.round(total * weight))
+    allocated += targetPlay
+    return {
+      ...account,
+      targetPlay,
+      targetMetrics: { ...(account.targetMetrics || {}), play: targetPlay }
+    }
+  })
+}
+
+function parsedProjectTotalTargetPlay() {
+  return (parsedProject.value.accounts || []).reduce((sum, account) => sum + toNumber(account.targetPlay), 0)
 }
 
 function accountStandardTargetPlay(account) {
@@ -1653,6 +1709,22 @@ function uniqueParsedAccounts(accounts) {
 
 function syncParsedProjectCpm() {
   if (!parsedProject.value?.accounts?.length) return
+  const customTargetPlay = toNumber(createTargetPlayWan.value) * 10000
+  const budget = parsedProject.value.accounts.reduce((sum, account) => sum + toNumber(account.discountedPrice), 0)
+  const targetCpm = toNumber(createCpm.value)
+  if (customTargetPlay && budget && targetCpm) {
+    createTargetPlayWan.value = stripZeros((budget / targetCpm / 10).toFixed(2))
+  }
+  parsedProject.value = projectWithCreateCpm()
+}
+
+function syncParsedProjectPlay() {
+  if (!parsedProject.value?.accounts?.length) return
+  const targetPlay = Math.max(0, Math.round(toNumber(createTargetPlayWan.value) * 10000))
+  const budget = parsedProject.value.accounts.reduce((sum, account) => sum + toNumber(account.discountedPrice), 0)
+  if (targetPlay && budget) {
+    createCpm.value = stripZeros((budget / targetPlay * 1000).toFixed(2))
+  }
   parsedProject.value = projectWithCreateCpm()
 }
 
@@ -1669,6 +1741,7 @@ async function createProject() {
     await refresh()
     showCreate.value = false
     createText.value = ''
+    createTargetPlayWan.value = ''
     parsedProject.value = {}
     toast('success', '项目已创建')
   } catch (error) {
